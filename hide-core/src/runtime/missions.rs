@@ -327,13 +327,12 @@ pub struct NodeView {
     pub own_met_at_unix_ms: Option<u64>,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
-    /// A push is asked of it (`MissionNode::asks_push`), the node whose
-    /// quiet can warn: `hide mission show` says `push 없음` before its first.
-    pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
-    /// Why and until when its Conductor holds it (`MissionNode::hold`).
-    pub hold: Option<crate::missions::NodeHold>,
+    /// What it waits on that its Conductor set (`Mission::wait_of`): its
+    /// own hold or the mission's delay, why and until when; the map's and
+    /// the phone's `기다리는 중 · 이유 · 언제까지`.
+    pub wait: Option<crate::missions::NodeWait>,
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
@@ -1353,11 +1352,6 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                         ),
                     )
                 }
-                (Some(WarningKind::NoPush), _, Some(warning)) => (
-                    format!("has worked {} minutes with no push", minutes(warning)),
-                    "judge whether its worker needs another approach or the node a fresh worker"
-                        .to_owned(),
-                ),
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
                     use crate::missions::StopCause;
                     let why = match &warning.cause {
@@ -1808,6 +1802,20 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
 /// (with-hide/hide#2518) may hold one on a mission its Conductor closed,
 /// where nothing could take it off: it is settled now, as that close
 /// settles it today.
+/// A delay a build from before `Mission::delay_until_unix_ms` kept has no
+/// end: it is given one `DELAY_LIMIT_MINUTES` from `now`, when the book is
+/// read, before any view, watch or warning reads the wait (`Mission::wait_of`),
+/// so a delayed node is a waiting node from the first judgment (PRD
+/// letters-missions-simplify B22). It is written with the mission's next save.
+pub(super) fn settle_endless_delays(book: &mut crate::missions::MissionBook, now: u64) {
+    let limit = u64::from(crate::missions::DELAY_LIMIT_MINUTES) * 60_000;
+    for mission in &mut book.missions {
+        if mission.delay.is_some() && mission.delay_until_unix_ms.is_none() {
+            mission.delay_until_unix_ms = Some(now + limit);
+        }
+    }
+}
+
 fn settle_closed_refusals(book: &mut crate::missions::MissionBook) {
     for mission in &mut book.missions {
         if !matches!(
@@ -1834,6 +1842,7 @@ impl Runtime {
                 // cell again (`runtime::status_cells`).
                 // A standing cell from before cells counts its time from now.
                 let now = super::unix_milliseconds();
+                settle_endless_delays(&mut book, now);
                 for mission in &mut book.missions {
                     super::mission_health::ensure_raise_cells(mission);
                     for wake in &mut mission.wakes {
@@ -2676,7 +2685,7 @@ impl Runtime {
                 // A hold set or lifted is the Conductor's move on the node:
                 // whatever stood before it is counted again from now.
                 if patch.hold.is_some() {
-                    self.restart_stall_clock(&id, Some(&node));
+                    self.wait_moved(&id, Some(&node));
                 }
                 // What the Conductor just did may follow a pull request it
                 // pushed: its project is read again within the read's own
@@ -3012,7 +3021,7 @@ impl Runtime {
         target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
-            self.restart_stall_clock(&id, None);
+            self.wait_moved(&id, None);
             self.save_missions();
         }
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
@@ -4904,9 +4913,8 @@ impl Runtime {
                     worked_at_unix_ms: node.worked_at_unix_ms,
                     own_met_at_unix_ms: node.own_met_at_unix_ms,
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
-                    asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
-                    hold: node.hold.clone(),
+                    wait: mission.wait_of(node),
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),

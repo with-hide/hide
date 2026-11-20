@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -1141,19 +1141,18 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
 }
 
 /**
- * A Conductor's hold on a node that has not started
- * (`hide mission node --hold`): the card's grey pause line and the list's
- * `⏸N`. None once the node started or left the plan, or for a mission that
- * ended; the core lifts an expired hold within a minute.
+ * What a node waits on that its Conductor set, as the core decides it
+ * (`Mission::wait_of`): its own hold or the mission's delay, the card's grey
+ * pause line `기다리는 중 · <why> · <time>`. None while nothing holds it; the
+ * core lifts an expired wait within a minute.
  */
-export function nodeHold(mission: Mission, node: MissionNode): MissionNodeHold | null {
-  if (mission.status === "done" || mission.status === "cancelled" || node.status !== "planned") return null;
-  return node.hold ?? null;
+export function nodeWait(node: MissionNode): MissionNodeWait | null {
+  return node.wait ?? null;
 }
 
-/** How many of a mission's nodes its Conductor holds back now (`nodeHold`). */
+/** How many of a mission's nodes its Conductor holds back on their own now (the list's `보류 N`); a mission's delay is its pill's to say. */
 export function heldNodes(mission: Mission): number {
-  return mission.nodes.filter((node) => nodeHold(mission, node) !== null).length;
+  return mission.nodes.filter((node) => node.wait != null && !node.wait.mission).length;
 }
 
 /**
@@ -1176,8 +1175,6 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
     switch (warning.kind) {
       case "review_fails":
         return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
-      case "no_push":
-        return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
       case "stopped":
         return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
     }

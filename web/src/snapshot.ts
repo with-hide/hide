@@ -1451,7 +1451,7 @@ export type MissionBlocked = "upstream_dropped";
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
-export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_no_push", "warning_stopped"] as const;
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1735,8 +1735,6 @@ export type MissionNode = {
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
-  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
-  asks_push?: boolean;
   /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
   waiting_on?: MissionWaitingOn | null;
   /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
@@ -1745,12 +1743,12 @@ export type MissionNode = {
   gate?: MissionGate;
   /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
   merge?: MissionNodeMerge;
-  /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
-  hold?: MissionNodeHold | null;
+  /** What it waits on that its Conductor set (`Mission::wait_of`): its own hold (`hide mission node --hold`) or the mission's delay (`hide mission delay`, `mission` true), why and until when; no warning or stall rises on it until then. Null while nothing holds it, absent from an older core. */
+  wait?: MissionNodeWait | null;
 };
 
-/** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
-export type MissionNodeHold = { why: string; until_unix_ms: number };
+/** A node's wait as the core decides it (`NodeWait`): the map's and the phone's `기다리는 중 · <why> · <time>`. */
+export type MissionNodeWait = { why: string; until_unix_ms: number; mission: boolean };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
 export type MissionNodeWork =
@@ -1780,8 +1778,8 @@ export type MissionWaitingOn =
 /** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
 export type MissionReviewRounds = { line: string; rounds: number; limit: number };
 
-/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, a long quiet with no push, or its worker stopped. */
-export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, or its worker stopped. */
+export type MissionWarningKind = "review_fails" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
@@ -1860,7 +1858,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;

@@ -377,7 +377,7 @@ test("at the largest Interface text a working change's branch line stays inside 
     await mission(conductor, ["mission", "node", "marked", "--pr", "3116"]);
     await mission(conductor, ["mission", "node", "tiny", "--status", "working", "--branch", "fix/copy"]);
     await mission(conductor, ["mission", "node", "lone", "--status", "working", "--branch", "fix/button"]);
-    // Two marks at the line's right end, as the core keeps them: no push for two hours (⚠) and a reason raised to the operator (내 차례), with the operator's merge before the destination.
+    // Two marks at the line's right end, as the core keeps them: a review failed at its limit (⚠) and a reason raised to the operator (내 차례), with the operator's merge before the destination.
     daemon = await daemon!.restart((state) => {
       const file = fs.readdirSync(path.join(state, "missions")).filter((name) => name.endsWith(".json")).map((name) => path.join(state, "missions", name)).find((one) => fs.readFileSync(one, "utf8").includes('"marked"'))!;
       const book = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -392,11 +392,9 @@ test("at the largest Interface text a working change's branch line stays inside 
         one.warnings = [{ kind: "review_fails", from_unix_ms: now - 7_200_000, since_unix_ms: now, told_unix_ms: now }];
       };
       for (const key of ["draft", "tiny", "hotfix"]) find(key).attention = turn;
-      for (const key of ["lone", "hotfix"]) reviewFails(find(key));
+      for (const key of ["lone", "hotfix", "marked"]) reviewFails(find(key));
       Object.assign(node, {
         worked_at_unix_ms: now - 7_200_000,
-        pushed_at_unix_ms: now - 7_200_000,
-        warnings: [{ kind: "no_push", from_unix_ms: now - 7_200_000, since_unix_ms: now, told_unix_ms: now }],
         attention: { reason: "conductor_failed", key: 1, since_unix_ms: now },
         operator_merge: "전체 이름 확인",
       });

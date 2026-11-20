@@ -216,16 +216,24 @@ fn span_words(ms: u64) -> String {
     }
 }
 
-/// Its last push, or that a change at work has none yet, marked when the
-/// quiet warns.
+/// Its last push as a fact, when Hide read one: `push 12분 전`.
 fn push_words(node: &Value, now: u64) -> Option<String> {
-    let quiet = warning(node, "no_push");
-    let words = match node["pushed_at_unix_ms"].as_u64() {
-        Some(at) => format!("push {}", minutes_ago(now, at)),
-        None if quiet.is_some() || node["asks_push"] == true => "push 없음".to_owned(),
-        None => return None,
-    };
-    Some(marked(quiet.is_some(), words))
+    let at = node["pushed_at_unix_ms"].as_u64()?;
+    Some(format!("push {}", minutes_ago(now, at)))
+}
+
+/// What the node waits on that its Conductor set (`Mission::wait_of`), as
+/// the map says it: `기다리는 중 · <why> · <left> 남음`, the time gone once
+/// its end has passed and Hide has not lifted it yet.
+fn wait_words(node: &Value, now: u64) -> Option<String> {
+    let wait = node["wait"].as_object()?;
+    let why = wait.get("why")?.as_str()?;
+    let until = wait.get("until_unix_ms")?.as_u64()?;
+    Some(if until > now {
+        format!("기다리는 중 · {why} · {} 남음", span_words(until - now))
+    } else {
+        format!("기다리는 중 · {why}")
+    })
 }
 
 /// Why a stopped worker stopped (`StopCause`): a usage limit or an API
@@ -257,8 +265,7 @@ fn stop_words(node: &Value, now: u64) -> Option<String> {
     ))
 }
 
-/// How long ago `at` was in minutes up to a day, so the quiet that warns
-/// at ninety minutes reads as such.
+/// How long ago `at` was in minutes up to a day.
 fn minutes_ago(now: u64, at: u64) -> String {
     match now.saturating_sub(at) / 60_000 {
         0 => "방금".to_owned(),
@@ -426,6 +433,7 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         fields.extend(time_words(node, now));
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
+        fields.extend(wait_words(node, now));
         fields.extend(stop_words(node, now));
         fields.extend(pr_words(node));
         fields.extend(merge_words(node).map(str::to_owned));
@@ -628,6 +636,9 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(push) = push_words(node, now) {
         let _ = writeln!(out, "{push}");
     }
+    if let Some(wait) = wait_words(node, now) {
+        let _ = writeln!(out, "{wait}");
+    }
     if let Some(stop) = stop_words(node, now) {
         let _ = writeln!(out, "{stop}");
     }
@@ -636,10 +647,6 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
             Some("review_fails") => format!(
                 "{} · 한도 도달, 보통 이하는 후속 이슈로",
                 rounds_words(node).unwrap_or_else(|| "리뷰".to_owned())
-            ),
-            Some("no_push") => format!(
-                "push 없이 {}분",
-                now.saturating_sub(warning["from_unix_ms"].as_u64().unwrap_or(now)) / 60_000
             ),
             Some("stopped") => format!(
                 "멈춘 지 {}분 · {}",
@@ -743,19 +750,18 @@ mod tests {
              "pr_state": "failed", "review_rounds": {"line": "review", "rounds": 3, "limit": 3},
              "ready_at_unix_ms": NOW - 780 * MINUTE, "started_at_unix_ms": NOW - 600 * MINUTE,
              "own_met_at_unix_ms": NOW - 510 * MINUTE, "pushed_at_unix_ms": NOW - 95 * MINUTE,
-             "asks_push": true, "waiting_on": {"kind": "worker"},
+             "waiting_on": {"kind": "worker"},
              "criteria": [
                 {"key": "c1", "kind": "own", "state": "pass"},
                 {"key": "review", "kind": "review", "state": "fail", "rounds": 3},
                 {"key": "ci", "kind": "ci", "state": "fail"}],
              "warnings": [
                 {"kind": "review_fails", "from_unix_ms": NOW - 20 * MINUTE, "since_unix_ms": NOW - 20 * MINUTE,
-                 "told_unix_ms": NOW - 20 * MINUTE},
-                {"kind": "no_push", "from_unix_ms": NOW - 95 * MINUTE, "since_unix_ms": NOW - 5 * MINUTE}]},
+                 "told_unix_ms": NOW - 20 * MINUTE}]},
             {"key": "ci", "kind": "change", "delivery": "pr", "status": "working",
              "pr": 8, "prs": [{"number": 8, "state": "pending"}], "pr_state": "pending",
              "pushed_at_unix_ms": NOW - 12 * MINUTE, "warnings": [],
-             "asks_push": true, "waiting_on": {"kind": "decision"},
+             "waiting_on": {"kind": "decision"},
              "criteria": [{"key": "c1", "kind": "own", "state": "pass"},
                           {"key": "review", "kind": "review", "state": "open"},
                           {"key": "ci", "kind": "ci", "state": "pass"}]},
@@ -765,6 +771,7 @@ mod tests {
              "criteria": [{"key": "ci", "kind": "ci", "state": "pass"}]},
             {"key": "later", "kind": "general", "preset": "research", "status": "planned", "depends_on": ["show", "docs"],
              "waiting_on": {"kind": "nodes", "keys": ["show"]},
+             "wait": {"why": "disk", "until_unix_ms": NOW + 40 * MINUTE, "mission": false},
              "warnings": [], "criteria": []},
             {"key": "old", "kind": "change", "delivery": "pr", "status": "dropped",
              "warnings": [], "criteria": []},
@@ -775,19 +782,19 @@ mod tests {
     /// how many nodes finished of those left in the plan, the open decision
     /// and the warnings; each node is one line with its state, where its
     /// time went (mission-82), its review rounds of the limit, last push,
-    /// pull request and CI, what it waits on, and `⚠` on the line and on
+    /// the wait its Conductor set, pull request and CI, what it waits on, and `⚠` on the line and on
     /// each fact that warns. A done node of a book from before the time's
     /// stamp says no time rather than an empty one.
     #[test]
     fn a_mission_reads_as_its_head_and_one_line_per_node() {
         assert_eq!(
             draw(&mission(), NOW).unwrap(),
-            "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 2\n\
+            "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 1\n\
              결정 · Merge order?\n\
-             ⚠ show · 작업 중 · 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h · ⚠리뷰 3/3라운드 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
+             ⚠ show · 작업 중 · 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h · ⚠리뷰 3/3라운드 · push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
              \x20 ci · 작업 중 · push 12분 전 · #8 대기 · CI 통과 · 기다림 운영자 결정\n\
              \x20 docs · 끝 · #6 머지됨 외 1\n\
-             \x20 later · 계획 · 기다림 show\n\
+             \x20 later · 계획 · 기다리는 중 · disk · 40m 남음 · 기다림 show\n\
              \x20 old · 빠짐\n"
         );
     }
@@ -875,8 +882,8 @@ mod tests {
     }
 
     /// Each line says what the core decided its node waits on, in words for
-    /// every kind the core decides, and a change a push is asked of with no
-    /// push Hide has read says so.
+    /// every kind the core decides, and the wait its Conductor set loses its
+    /// time once its end passed.
     #[test]
     fn a_node_line_says_what_the_core_decided_it_waits_on() {
         for (waiting, words) in [
@@ -921,19 +928,19 @@ mod tests {
             "{text}"
         );
         let mut value = mission();
-        let node = &mut value["mission"]["nodes"][1];
-        node["pushed_at_unix_ms"] = Value::Null;
-        node["pr"] = Value::Null;
+        value["mission"]["nodes"][3]["wait"]["until_unix_ms"] = json!(NOW - MINUTE);
         let text = draw(&value, NOW).unwrap();
         assert!(
-            text.contains("  ci · 작업 중 · push 없음 · 기다림 운영자 결정\n"),
+            text.contains("  later · 계획 · 기다리는 중 · disk · 기다림 show\n"),
             "{text}"
         );
-        value["mission"]["nodes"][1]["asks_push"] = json!(false);
+        // A node Hide read no push of says nothing of pushes: there is no
+        // missing-push mark (D-32).
+        value["mission"]["nodes"][1]["pushed_at_unix_ms"] = Value::Null;
+        let text = draw(&value, NOW).unwrap();
         assert!(
-            draw(&value, NOW)
-                .unwrap()
-                .contains("  ci · 작업 중 · 기다림 운영자 결정\n")
+            text.contains("  ci · 작업 중 · #8 대기 · CI 통과 · 기다림 운영자 결정\n"),
+            "{text}"
         );
     }
 
@@ -986,7 +993,7 @@ mod tests {
     }
 
     /// with-hide/hide-private#552 c1: one node in full: its state, worker,
-    /// pull requests, push, warnings, every line with its evidence and each
+    /// pull requests, last push, warnings, every line with its evidence and each
     /// checker's answer, its worker's newest letters, and the letters its
     /// checkers wrote to the Conductor, each with the id `hide request show`
     /// reads it by (with-hide/hide-private#668).
@@ -1020,9 +1027,8 @@ mod tests {
              PR #7 실패 · https://github.com/acme/hide/pull/7\n\
              브랜치 feat/show\n\
              시간 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h\n\
-             ⚠push 95분 전\n\
+             push 95분 전\n\
              경고 ⚠ 리뷰 3/3라운드 · 한도 도달, 보통 이하는 후속 이슈로 · 지휘자에게 알림 20분 전\n\
-             경고 ⚠ push 없이 95분 · 지휘자에게 알릴 차례\n\
              완료 줄 1/3\n\
              \x20 c1 통과 · show reads as text · 근거 unit test · w 30분 전\n\
              \x20 review 실패 · 3라운드\n\

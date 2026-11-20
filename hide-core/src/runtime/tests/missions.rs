@@ -9885,8 +9885,6 @@ fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
     )
     .unwrap();
     assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
-    assert!(node_view(&runtime, "fix").asks_push);
-    assert!(!node_view(&runtime, "docs").asks_push);
     command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
     command(
         &mut runtime,
@@ -10360,6 +10358,14 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
     let worked = crate::runtime::unix_milliseconds() - 120 * minute;
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission.nodes[0].worked_at_unix_ms = Some(worked);
+    // Its review failed at the round limit.
+    let review = mission.nodes[0]
+        .criteria
+        .iter_mut()
+        .find(|line| line.key == "review")
+        .unwrap();
+    review.rounds = 3;
+    review.state = crate::mission_criteria::CriterionState::Fail;
     mission.wakes = (0..PENDING_WAKE_LIMIT)
         .map(|at| PendingWake {
             seq: at as u64 + 1,
@@ -10381,7 +10387,10 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
-    assert_eq!(warnings_of(&runtime), (vec![WarningKind::NoPush], vec![]));
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![WarningKind::ReviewFails], vec![])
+    );
     let fix = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
     assert_eq!(fix(&runtime).warnings[0].told_unix_ms, None);
     runtime
@@ -10410,22 +10419,14 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
     assert_eq!(warnings_of(&runtime).1, Vec::<String>::new(), "told once");
 }
 
-/// with-hide/hide-private#552 c2: a change at work with no push for ninety
-/// minutes warns its Conductor at the minute decision, once, and the next
-/// push GitHub shows takes the warning away.
+/// PRD letters-missions-simplify D-32, B32: a change at work that GitHub
+/// shows no push of for hours warns its Conductor nothing, and its letters
+/// say nothing of pushes.
 #[test]
-fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
-    use crate::missions::WarningKind;
+fn a_change_without_a_push_for_hours_warns_nothing() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", criteria_plan()).unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    running_criteria_mission(&mut runtime);
     command(
         &mut runtime,
         "sender",
@@ -10433,37 +10434,11 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
     )
     .unwrap();
     let minute = 60_000;
-    // It went to work two hours ago, so a push read now is after it.
-    let worked = crate::runtime::unix_milliseconds() - 120 * minute;
+    let worked = crate::runtime::unix_milliseconds() - 600 * minute;
     runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms = Some(worked);
-    // No worker is bound here: the first judgment times the node as one no
-    // worker stands for, which the map draws from then, and warns nothing.
-    assert!(runtime.warn_missions(worked));
-    assert_eq!(warnings_of(&runtime).0, []);
-    assert!(!runtime.warn_missions(worked + 89 * minute));
-    assert!(runtime.warn_missions(worked + 90 * minute));
-    let (kinds, letters) = warnings_of(&runtime);
-    assert_eq!(kinds, [WarningKind::NoPush]);
-    assert_eq!(letters.len(), 1);
-    assert!(!runtime.warn_missions(worked + 120 * minute));
-    let mission = runtime.missions.book.get("mission-1").unwrap();
-    let wake = mission
-        .wakes
-        .iter()
-        .find(|wake| wake.event == crate::missions::WakeEvent::Warning)
-        .unwrap();
-    let body = super::super::missions::wake_body(mission, wake);
-    assert!(body.contains("worked 90 minutes with no push"), "{body}");
-    // The worker opens its pull request: the head GitHub shows is a push.
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
-    )
-    .unwrap();
-    let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
-    runtime.note_mission_pulls(crate::node::TEST_NODE, &pushed);
-    assert!(runtime.warn_missions(crate::runtime::unix_milliseconds()));
+    runtime.warn_missions(worked);
+    runtime.warn_missions(worked + 90 * minute);
+    runtime.warn_missions(worked + 600 * minute);
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
 }
 
@@ -11231,13 +11206,12 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     );
 }
 
-/// Review of with-hide/hide#2447: a worker that stops while its node warns
-/// of no push, the warning not told yet because the Conductor's queue was
-/// full, hands the node to the stopped rule: the no-push warning goes at
-/// once and is never told, the stop warns alone five minutes on, and once
-/// the worker works again the no-push warning stands again.
+/// PRD letters-missions-simplify D-07, B22: a delay its Conductor sets
+/// takes a stopped worker's warning away and none rises while it holds,
+/// however long the worker stands stopped; once the delay ends, the stop is
+/// timed again from then and warns five minutes on, once.
 #[test]
-fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
+fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
     use crate::missions::WarningKind;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -11248,43 +11222,199 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
     )
     .unwrap();
-    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
-        Some(STOPPED_SINCE - 100 * MINUTE);
     let worker = runtime.delivery_observations["recipient"].actor.clone();
     let mut row = shown_row("recipient", "recipient", "working");
     row.lineage_session = worker.session.clone();
-    runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE - MINUTE));
-    assert_eq!(warnings_of(&runtime).0, [WarningKind::NoPush]);
-    // As a full queue leaves it: standing, untold, no letter queued.
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.nodes[0].warnings[0].told_unix_ms = None;
-    mission
-        .wakes
-        .retain(|wake| wake.event != crate::missions::WakeEvent::Warning);
-
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
-    runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE));
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "usage", "for_minutes": 60}),
+    )
+    .unwrap();
+    // The delay takes the standing warning off at once, before any
+    // judgment (review of with-hide/hide#2750, S2).
     assert_eq!(
         warnings_of(&runtime),
         (vec![], vec![]),
-        "the stop takes the node's quiet"
+        "taken off when set"
     );
-    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    // Its end on the stop's clock, as a delay set then would have it.
+    let until = STOPPED_SINCE + 60 * MINUTE;
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .delay_until_unix_ms = Some(until);
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]), "none rises");
+    runtime.warn_missions(until - MINUTE);
+    assert_eq!(warnings_of(&runtime).0, []);
+
+    assert!(runtime.stall_missions(until));
+    runtime.warn_missions(until);
+    runtime.warn_missions(until + 5 * MINUTE - 1);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "timed from the end of the wait"
+    );
+    assert!(runtime.warn_missions(until + 5 * MINUTE));
     let (kinds, letters) = warnings_of(&runtime);
     assert_eq!(kinds, [WarningKind::Stopped]);
-    assert_eq!(letters.len(), 1, "one letter, the stop's");
-    assert!(letters[0].contains("warn:stopped"), "{letters:?}");
+    assert_eq!(letters.len(), 1, "{letters:?}");
+}
 
-    row.activity = "working".into();
+/// Review of with-hide/hide#2750 (S2): a delay set and cleared between two
+/// warning judgments still counts a worker's stop again from then: the
+/// stop seen before it is not reused, so it warns five minutes after the
+/// second judgment, not at once.
+#[test]
+fn a_delay_set_and_cleared_between_judgments_counts_the_stop_again() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row];
-    assert!(runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
-    let (kinds, letters) = warnings_of(&runtime);
-    assert_eq!(kinds, [WarningKind::NoPush], "the quiet is judged again");
-    assert_eq!(letters.len(), 1);
-    assert!(letters[0].contains("warn:no_push"), "{letters:?}");
+    runtime.warn_missions(STOPPED_SINCE);
+    for line in [
+        json!({"op": "delay", "line": "usage", "for_minutes": 60}),
+        json!({"op": "delay", "line": null}),
+    ] {
+        command(&mut runtime, "sender", line).unwrap();
+    }
+    runtime.warn_missions(STOPPED_SINCE + 2 * MINUTE);
+    runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "not timed from before the wait"
+    );
+    assert!(runtime.warn_missions(STOPPED_SINCE + 7 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+}
+
+/// Review of with-hide/hide#2750 (S2): a hold set and lifted on another
+/// node leaves a worker's stop where it was: only the held node's clocks
+/// start again, so the stop still warns five minutes after it was seen.
+#[test]
+fn a_hold_on_another_node_keeps_a_workers_stop_time() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    for patch in [
+        json!({"hold": {"why": "tonight", "for_minutes": 30}}),
+        json!({"hold": null}),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "docs", "patch": patch}),
+        )
+        .unwrap();
+    }
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+}
+
+/// PRD letters-missions-simplify D-07, B21: a mission's delay and a node's
+/// hold read as one wait on each node they hold, why and until when: the
+/// delay on every node not done or dropped, a node's own hold before it;
+/// a closed mission's nodes wait on nothing.
+#[test]
+fn a_delay_and_a_hold_read_as_one_wait_on_each_node_they_hold() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let wait = |runtime: &Runtime, key: &str| {
+        node_view(runtime, key)
+            .wait
+            .map(|wait| (wait.why, wait.until_unix_ms, wait.mission))
+    };
+    assert_eq!(
+        (wait(&runtime, "fix"), wait(&runtime, "docs")),
+        (None, None)
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"hold": {"why": "tonight", "for_minutes": 30}}}),
+    )
+    .unwrap();
+    let held = runtime.missions.book.get("mission-1").unwrap().nodes[1]
+        .hold
+        .clone()
+        .unwrap()
+        .until_unix_ms;
+    assert_eq!(wait(&runtime, "fix"), None);
+    assert_eq!(
+        wait(&runtime, "docs"),
+        Some(("tonight".into(), held, false))
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 60}),
+    )
+    .unwrap();
+    let until = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .delay_until_unix_ms
+        .unwrap();
+    assert_eq!(wait(&runtime, "fix"), Some(("disk".into(), until, true)));
+    assert_eq!(
+        wait(&runtime, "docs"),
+        Some(("tonight".into(), held, false)),
+        "its own hold says why it waits"
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status =
+        crate::missions::NodeStatus::Done;
+    assert_eq!(wait(&runtime, "fix"), None, "a done node waits on nothing");
+    runtime.missions.book.get_mut("mission-1").unwrap().status =
+        crate::missions::MissionStatus::Cancelled;
+    assert_eq!(wait(&runtime, "docs"), None);
 }
 
 /// mission-60: a stop is timed from the first judgment that saw it, never
@@ -14461,11 +14591,26 @@ fn a_mission_delay_ends_by_itself() {
     assert_eq!(delay(&runtime).0.as_deref(), Some("disk"));
     assert!(runtime.stall_missions(until));
     assert_eq!(delay(&runtime), (None, None));
-    // A delay kept with no end is given a day.
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.delay = Some("usage".into());
-    assert!(runtime.stall_missions(until + minute));
-    assert_eq!(delay(&runtime).1, Some(until + minute + 24 * 60 * minute));
+    // A delay a build before its end kept is given a day when the book is
+    // read, so its nodes wait from the first judgment: a review failed at
+    // its limit warns nothing (review of with-hide/hide#2750, S3).
+    let mut book = runtime.missions.book.clone();
+    let kept = &mut book.missions[0];
+    kept.delay = Some("usage".into());
+    kept.delay_until_unix_ms = None;
+    kept.nodes[0].status = crate::missions::NodeStatus::Working;
+    let review = kept.nodes[0]
+        .criteria
+        .iter_mut()
+        .find(|line| line.key == "review")
+        .unwrap();
+    review.rounds = 3;
+    review.state = crate::mission_criteria::CriterionState::Fail;
+    super::super::missions::settle_endless_delays(&mut book, until);
+    let kept = &book.missions[0];
+    assert_eq!(kept.delay_until_unix_ms, Some(until + 24 * 60 * minute));
+    assert!(kept.wait_of(&kept.nodes[0]).is_some());
+    assert!(crate::mission_health::warn_acts(kept, None, &[], &[], until).is_empty());
     // A delay with no end is refused.
     assert!(
         command(
@@ -17340,7 +17485,16 @@ fn published(mission: &Value) -> Value {
                     .collect(),
             );
             row.insert("gate".into(), field(&node["gate"], "state"));
-            row.insert("hold".into(), field(&node["hold"], "why"));
+            // A release before one wait state published a node's own hold
+            // as `hold`; this build's `wait` that is not the mission's.
+            let own_wait = node["wait"]
+                .as_object()
+                .filter(|wait| wait.get("mission") == Some(&json!(false)))
+                .map(|_| &node["wait"]);
+            row.insert(
+                "hold".into(),
+                field(own_wait.unwrap_or(&node["hold"]), "why"),
+            );
             Value::Object(row)
         })
         .collect();
@@ -17955,10 +18109,10 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
     assert!(stood.contains("shown it in 20 minutes"), "{stood}");
     let review = body(WakeEvent::Warning, None, Some(WarningKind::ReviewFails));
     assert!(!review.contains("raised on the node"), "{review}");
-    let quiet = body(WakeEvent::Warning, None, Some(WarningKind::NoPush));
+    let stop = body(WakeEvent::Warning, None, Some(WarningKind::Stopped));
     assert!(
-        quiet.contains("still stands in 30 minutes it is raised on the node"),
-        "{quiet}"
+        stop.contains("still stands in 30 minutes it is raised on the node"),
+        "{stop}"
     );
 }
 
@@ -18887,7 +19041,7 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
             reason: None,
             why: None,
             action: None,
-            warning: Some(WarningKind::NoPush),
+            warning: Some(WarningKind::Stopped),
             ci: None,
             line: None,
             key: None,
