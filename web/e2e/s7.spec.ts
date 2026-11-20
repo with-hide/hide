@@ -78,7 +78,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 }
 
-/** Drags the lane's edge divider over the agents to `x`, where a minimum stops it, and waits for the release to land (PRD lane-two-columns B17). */
+/** Drags the lane's edge divider to `x`, where a minimum stops it, and waits for the release to land (PRD lane-two-columns B17). */
 async function dragLaneTo(page: Page, x: (body: Box) => number): Promise<void> {
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   const divider = page.locator('[data-lane-divider="lane"]');
@@ -101,7 +101,7 @@ async function narrowLane(page: Page): Promise<void> {
 }
 
 /**
- * Gives the lane the body's width over the agents, so several View areas fit
+ * Gives the lane all the width the agents leave it, so several View areas fit
  * side by side.
  */
 async function widenLane(page: Page): Promise<void> {
@@ -738,7 +738,7 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
 /**
  * Moves the keyboard with Tab or Shift+Tab until `target` has it. An editor
  * keeps Tab for indenting, and the Escape CodeMirror offers to let Tab leave
- * it would also put the lane over the agents away (PRD right-lane B3), so the
+ * it would also put the lane away (PRD right-lane B3), so the
  * keyboard steps out of an editor to the element Tab would reach next.
  */
 async function tabTo(page: Page, target: Locator, key: "Tab" | "Shift+Tab"): Promise<void> {
@@ -1202,7 +1202,7 @@ test("a window too narrow for both columns stacks them with one area and a way t
   await page.setViewportSize({ width: 1920, height: 1080 });
   const stack = await startStack(page, "s7-narrow", { "a.txt": "a\n", "b.txt": "b\n" });
   try {
-    // Two areas in the lane over the agents.
+    // Two areas in the lane.
     await keepOpenInTurn(page, ["a.txt", "b.txt"], (name) => explorerRow(page, stack, name));
     await widenLane(page);
     await tabMenu(page, page, "b.txt", "split_right");

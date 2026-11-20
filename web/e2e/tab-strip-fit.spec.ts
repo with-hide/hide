@@ -222,7 +222,7 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     const tabs = page.locator("[data-view-tab-bar] [role=tab]");
     for (const name of names) await page.locator(`[data-explorer-row="${toPage(root)}/${name}"]`).dblclick();
     await expect(tabs).toHaveCount(names.length);
-    // The lane over the agents has a divider at its edge that widens the column there (PRD lane-two-columns B17; lane-desk-pair-view B16).
+    // The lane has a divider at its edge that widens the column there (PRD lane-two-columns B17; lane-desk-pair-view D-50).
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
     const handle = page.locator('[data-lane-divider="lane"]');
     const divider = await handle.boundingBox();

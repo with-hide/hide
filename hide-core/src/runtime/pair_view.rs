@@ -278,7 +278,6 @@ impl Runtime {
                 view.open = false;
             }
         }
-        store.settle_floating_tray();
     }
 
     /// Ends pair view when a View leaving a desk (closed, or moved away)

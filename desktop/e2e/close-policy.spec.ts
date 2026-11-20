@@ -29,7 +29,7 @@ async function inWorkspace(label: string, body: (session: Session) => Promise<vo
     const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR;
     await enterWorkspace(page);
     // The window is a CI runner's screen wide on every machine; zoomed out,
-    // the lane over the agents leaves both panes in sight.
+    // the lane leaves both panes in sight.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.6));
     if (evidence) fs.writeFileSync(path.join(evidence, `${label}-identity.json`), JSON.stringify({ ...identity, daemonPid: run.daemonPid(), state: run.env.HIDE_STATE_DIR }, null, 2));
     const capture = (name: string) => {

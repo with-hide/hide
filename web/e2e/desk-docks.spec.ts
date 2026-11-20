@@ -153,3 +153,61 @@ test("the Explorer floats over the panes; a file opened from it floats with it, 
     stack.fixture.stop();
   }
 });
+
+test("a press outside the floating desk and Explorer lands on what was pressed before the desk takes its place (D-50) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const stack = await startStack(page, "desk-docks-press");
+  try {
+    const [left] = stack.fixture.panes;
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/a.md"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+
+    // The left pane's zoom button is outside the floating layer; while the
+    // press is held the desk still floats, so the button stays under it.
+    const zoom = page.locator(`[data-pane-view="${left}"] [data-pane-zoom="false"]`);
+    const box = (await zoom.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await quietFor(page, 300, "a desk that stood on the press would have been drawn by now");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await page.mouse.up();
+    // The press zoomed the pane, then the Explorer closed and the desk stood.
+    await expect(page.locator('[data-canvas][data-zoomed="true"]')).toHaveCount(1);
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+  } finally {
+    stack.daemon.stop();
+    stack.fixture.stop();
+  }
+});
+
+test("coming back to a Workspace whose desk stands fits each terminal to its narrowed width only, never to the whole body first (D-50) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const stack = await startStack(page, "desk-docks-return");
+  try {
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/a.md"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await page.locator('[data-lane="explorer"] [data-explorer-tree]').focus();
+    await page.keyboard.press("Escape");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await quietFor(page, 500, "the panes narrowed beside the desk");
+    const standing = await widths(stack);
+
+    await page.locator("[data-sidebar-missions]").click();
+    await expect(page.locator("[data-mission-screen-view]")).toBeVisible();
+    await expect(screen(page)).toHaveCount(0);
+    const before = resizes(stack);
+    await page.locator("nav[data-sidebar] [data-project]").first().locator("[data-project-row], button[data-checkout]").first().click({ position: { x: 12, y: 8 } });
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect.poll(() => widths(stack)).toEqual(standing);
+    await quietFor(page, 500, "every terminal's fit has landed");
+    // Each terminal attaches again with one fit at its narrowed width; a first grid at the whole body would add one each.
+    expect(resizes(stack)).toBe(before + stack.fixture.panes.length);
+  } finally {
+    stack.daemon.stop();
+    stack.fixture.stop();
+  }
+});

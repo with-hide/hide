@@ -166,7 +166,8 @@ pub(super) struct WorkspaceViewStore {
     /// and not the desk, so the desk is drawn beside the tool over the
     /// agents until the tool closes, and then takes its place on the right.
     /// Every other shown desk stands. Runtime only, at most one, and gone
-    /// once the tool, the lane or the desk is (`settle_floating_tray`).
+    /// in the view pass (`settle_workspace_view`) once the lane no longer
+    /// draws both on the front tab.
     pub(super) tray_floats: Option<(WorkspaceKey, String)>,
 }
 
@@ -254,29 +255,17 @@ where
 }
 
 impl WorkspaceViewStore {
-    /// Lets the floating desk (`tray_floats`) take its place once its lane
-    /// no longer draws it beside a tool: the tool closed (its ✕, Escape, a
-    /// press outside), the lane closed, or the desk folded or emptied
-    /// (D-50). Whether it settled.
-    pub(super) fn settle_floating_tray(&mut self) -> bool {
-        let Some((key, tab)) = self.tray_floats.as_ref() else {
-            return false;
-        };
-        let floats = self
-            .views
-            .get(&key.0, &key.1)
-            .is_some_and(|view| view.open && view.tool.is_some() && view.draws_tray(tab));
-        if !floats {
-            self.tray_floats = None;
-        }
-        !floats
-    }
-
-    /// Whether `tab`'s desk of `key` floats with the tool now (D-50).
+    /// Whether `tab`'s desk of `key` floats with the tool now (D-50): a
+    /// View came onto it while the lane drew a tool and not the desk, and
+    /// the lane still draws both. The one reading of the floating desk.
     pub(super) fn tray_floats(&self, key: &WorkspaceKey, tab: &str) -> bool {
         self.tray_floats
             .as_ref()
             .is_some_and(|(at, at_tab)| at == key && at_tab == tab)
+            && self
+                .views
+                .get(&key.0, &key.1)
+                .is_some_and(|view| view.tool.is_some() && view.draws_tray(tab))
     }
 
     /// Numbers a call that opened `key`'s lane and records which column it
@@ -479,9 +468,6 @@ impl Runtime {
             return;
         }
         if std::mem::take(&mut tray.shown) {
-            if let Some(store) = self.workspace_views.as_mut() {
-                store.settle_floating_tray();
-            }
             self.persist_workspace_views();
         }
     }
@@ -522,6 +508,16 @@ impl Runtime {
         let Place::Tray(tab) = place else {
             return;
         };
+        // Whether the operator saw this desk drawn: the view the core last
+        // published, since the View that calls this is already on the desk.
+        let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
+            view.device_id == key.0
+                && view.path == key.1
+                && view.open
+                && view.tray.tab_id == *tab
+                && view.tray.shown
+                && view.tray.count > 0
+        });
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -533,13 +529,11 @@ impl Runtime {
         );
         entry.show_tray(tab);
         let changed = before != (entry.open, entry.tool, true);
-        // A View that comes onto a desk the lane did not show while a tool
-        // stays drawn floats with that tool (D-50); a desk already drawn
-        // keeps standing, or floating, as it was.
-        if entry.tool.is_some() && !(before.0 && before.2) {
+        // A View that comes onto a desk the operator did not see drawn while
+        // a tool stays drawn floats with that tool (D-50); a desk already
+        // drawn keeps standing, or floating, as it was.
+        if entry.tool.is_some() && !drawn {
             store.tray_floats = Some((key.clone(), tab.clone()));
-        } else {
-            store.settle_floating_tray();
         }
         store.call_lane(key, LaneCallSide::View);
         if changed {
@@ -992,14 +986,6 @@ impl Runtime {
             entry.panel_width = Some(workspace_views::clamp_width(width));
         }
         let mut entry_changed = *entry != before;
-        // The desk button and ⌘E stand the desk: it floats only while a View
-        // the operator opens beside a floating tool keeps it there (D-50).
-        let stood = (payload.documents == Some(true) || payload.open == Some(true))
-            && store.tray_floats(&key, &tab);
-        if stood {
-            store.tray_floats = None;
-        }
-        let settled = store.settle_floating_tray();
         if let Some(ratio) = payload.pair_ratio.map(workspace_views::clamp_pair_ratio)
             && store.views.pair.ratio != Some(ratio)
         {
@@ -1035,7 +1021,7 @@ impl Runtime {
         let revealed = payload
             .reveal
             .is_some_and(|path| self.unfold_to(&key, &path));
-        if !entry_changed && !called && !revealed && !width_request_changed && !stood && !settled {
+        if !entry_changed && !called && !revealed && !width_request_changed {
             return false;
         }
         if entry_changed {
@@ -1090,6 +1076,21 @@ impl Runtime {
         // The recent list follows the front checkout wherever the layout
         // store exists or not, and writes only when the front moved.
         self.track_recent_checkouts();
+        let Some(store) = self.workspace_views.as_ref() else {
+            return;
+        };
+        // The floating desk takes its place once its lane no longer draws it
+        // beside a tool on the front tab: the tool closed (its ✕, Escape, a
+        // press outside) or changed, the lane closed, the desk folded or
+        // emptied, or another tab came to the front (D-50).
+        if let Some((key, tab)) = store.tray_floats.clone()
+            && (self.front_tab(&key) != tab || !store.tray_floats(&key, &tab))
+        {
+            self.workspace_views
+                .as_mut()
+                .expect("read above")
+                .tray_floats = None;
+        }
         let Some(store) = self.workspace_views.as_ref() else {
             return;
         };
@@ -1482,7 +1483,7 @@ impl Runtime {
                     },
                     shown: tray.is_some_and(|tray| tray.shown),
                     count: tray_layout.display_count(),
-                    floats: store.tray_floats(key, tab) && view.open && view.tool.is_some(),
+                    floats: store.tray_floats(key, tab),
                     pair,
                 },
                 pair_mode: crate::model::PairModeSnapshot {

@@ -50,6 +50,9 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // closes the tool, and ⌘E or Escape closes the lane (PRD right-lane B4;
 // operator decision 2026-10-23); a drag moves only a guide until it lands.
 
+/** Numbers the page widenings this window asked for, so each is acknowledged by its own request. */
+let pageWidenings = 0;
+
 export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const checkout = useShellStore((s) => frontCheckout(s.rest));
@@ -79,11 +82,21 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // when the lane is open (D-46).
   const pair = drawnPair(view);
   const laneView = pair !== null ? "documents" : laneViewOf(view, hasViews);
+  const front = view ? workspaceKey(view) : null;
+  // A page's widening is drawn from the frame that asks for it until the
+  // core acknowledges that request, so a desk that stands for the page
+  // moves the panes once, not at its saved width and then again (D-50).
+  const [widening, setWidening] = useState<{ front: string; request: string; width: number } | null>(null);
+  const widened = widening !== null && widening.front === front ? widening.width : null;
+  const echoed = view?.width_request_id ?? null;
+  useLayoutEffect(() => {
+    if (widening !== null && (widening.front !== front || echoed === widening.request)) setWidening(null);
+  }, [widening, front, echoed]);
   const input: LaneInput = {
     open: view?.open === true,
     view: laneView,
     tool: (pair === null || view?.open === true ? view?.tool : null) ?? null,
-    documentWidth: view?.document_width ?? null,
+    documentWidth: widened ?? view?.document_width ?? null,
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
     expanded,
@@ -111,15 +124,18 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // a divider landing, and a refusal leaves the page at the width it opened
   // at, with only the log saying so.
   const pageWiden = useUiStore((s) => s.pageWiden);
-  const front = view ? workspaceKey(view) : null;
   const beside = frame.view && frame.tool ? frame.tool.width : null;
   useLayoutEffect(() => {
     if (pageWiden === null || width <= 0) return;
     useUiStore.getState().setPageWiden(null);
     if (pageWiden !== front || expanded || drawnView !== "documents") return;
     const documentWidth = pageLaneWidth({ width: view?.document_width ?? null, beside, body: width, sizes });
-    if (documentWidth !== null && actions.setWorkspaceView({ document_width: documentWidth }) === false) {
+    if (documentWidth === null) return;
+    const request = `page-widen:${++pageWidenings}`;
+    if (actions.setWorkspaceView({ document_width: documentWidth, width_request_id: request }) === false) {
       useShellStore.getState().noteDiagnostic(`document_width: widening for a page refused (${documentWidth})`);
+    } else {
+      setWidening({ front: pageWiden, request, width: documentWidth });
     }
   }, [pageWiden, front, width, expanded, drawnView, view?.document_width, beside, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.
@@ -230,6 +246,17 @@ function useWidth(element: HTMLElement | null): number {
   return width;
 }
 
+/** Calls `done` when the press under way ends with a release; a cancelled press calls nothing. */
+function onRelease(done: () => void): void {
+  const end = (event: PointerEvent) => {
+    window.removeEventListener("pointerup", end, true);
+    window.removeEventListener("pointercancel", end, true);
+    if (event.type === "pointerup") done();
+  };
+  window.addEventListener("pointerup", end, true);
+  window.addEventListener("pointercancel", end, true);
+}
+
 /**
  * The body left of the rail: Agent Views, and the lane. The lane is always
  * placed at the body's right edge, so moving between standing, floating and
@@ -249,9 +276,11 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
   const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
-  // A press outside a floating tool closes it, and a desk floating with it stands (D-50); the press still lands.
+  // A press outside a floating tool closes it once the press ends, so what
+  // was pressed gets the whole press before a desk floating with the tool
+  // stands and narrows the panes under the pointer (D-50).
   const toolFloats = frame.tool !== null && (frame.mode === "overlay" || frame.mode === "docked");
-  const pressOutside = toolFloats ? () => actions.closeTool() : undefined;
+  const pressOutside = toolFloats ? () => onRelease(() => actions.closeTool()) : undefined;
 
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
@@ -259,7 +288,8 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
           divider) draws over the lane; out of reach of the pointer and the
           keyboard while an expanded lane covers it. */}
       <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded"} onPointerDownCapture={pressOutside} data-agent-area="true">
-        <AgentArea checkout={checkout} actions={actions} />
+        {/* The terminals attach once the body is measured, so a standing desk's reserve is in their first grid (D-50). */}
+        {width > 0 ? <AgentArea checkout={checkout} actions={actions} /> : null}
       </div>
       {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (

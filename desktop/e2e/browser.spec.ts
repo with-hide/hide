@@ -333,7 +333,7 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   // the same contents take the desk's slot, with what was typed still in it.
   const screen = page.locator("[data-workspace-screen]");
   if ((await screen.getAttribute("data-lane-mode")) !== "closed") {
-    // The lane over the agents can cover their tab strip (PRD right-lane B2).
+    // A floating tool, or a desk in a narrow body, can cover the agents' tab strip (PRD right-lane B2; D-50).
     await menuClick("toggle_lane");
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
   }
@@ -1226,8 +1226,8 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
 // reloads itself took the keyboard from the terminal the operator typed in.
 test("refresh focus: a page that loads itself again never takes the keyboard from the terminal", { tag: NEEDS_FOCUS }, async () => {
   ({ app } = await launchShell(run.env));
-  // Wide enough that the lane over the agents (the page and the tool column, 768) leaves the focused terminal's left
-  // side uncovered; at WINDOW it covers every pane.
+  // Wide enough that the desk with the page and the tool column (768) leaves the focused terminal's left side in
+  // sight; at WINDOW it covers every pane.
   await fitWindow(app, { ...WINDOW, width: 1440 });
   const page = await shellPage(app);
   await enterWorkspaceWithLane(page, "fixture");
@@ -1411,6 +1411,9 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 test("page width: widening leaves Agent Views 480, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
+  // Every frame from a fresh connection is counted.
+  const sent = countSent(page);
+  await page.reload();
   await enterWorkspace(page, "fixture");
   const body = 1200;
   await bodyWidth(page, body);
@@ -1421,12 +1424,18 @@ test("page width: widening leaves Agent Views 480, never narrows, and leaves an 
 
   // The page waits on the desk with the lane closed until the desk button
   // brings it up, and loads there (PRD lane-desk-pair-view B2).
+  await quietFor(page, 300, "every terminal's first fit has landed");
+  const before = sent.get("terminal_resize") ?? 0;
+  const panes = await page.locator("[data-pane-view]").count();
   const loading = openLoaded(`${origin}/site.html`);
   await showDocuments(page);
   await loading;
-  // The desk stands beside Agent Views, which keeps 480 (D-50).
+  // The desk stands beside Agent Views, which keeps 480, already at the
+  // page's width, so each terminal resizes once (D-50).
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
+  await quietFor(page, 300, "a second widening would have resized the terminals by now");
+  expect((sent.get("terminal_resize") ?? 0) - before).toBe(panes);
 
   // Narrowed to its minimum, the next page widens it only as far again.
   const box = (await divider.boundingBox())!;

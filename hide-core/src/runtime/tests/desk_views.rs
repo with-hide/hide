@@ -2603,3 +2603,21 @@ fn a_file_opened_beside_a_floating_tool_floats_with_it_until_the_tool_closes() {
     assert!(lane_documents(&runtime) && lane_tool(&runtime).is_some());
     assert!(!desk_floats(&runtime));
 }
+
+/// D-50: a desk left shown with no View on it (a back tab's desk emptied,
+/// which `close_emptied_lane` does not fold) is not drawn, so a file opened
+/// beside the floating Explorer floats with it rather than standing while
+/// the operator is still choosing.
+#[test]
+fn a_shown_desk_with_no_view_floats_when_a_file_comes_beside_a_floating_tool() {
+    let (mut runtime, checkout, directory) = setup("desk-floats-empty");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    let key = runtime.front_workspace_key().unwrap();
+    let tab = runtime.front_tab(&key);
+    let store = runtime.workspace_views.as_mut().unwrap();
+    store.views.entry(&key.0, &key.1).tray_entry(&tab).shown = true;
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(lane_documents(&runtime), "the desk is drawn");
+    assert!(desk_floats(&runtime), "and floats with the Explorer");
+}

@@ -254,8 +254,9 @@ function standing(input: LaneInput, view: Want | null, tool: Want | null): LaneF
   const agents = body - width - sizes.divider;
   const desk = { field: view.field, width, min: view.min };
   if (!tool) return { mode: "docked", agents, width, view: desk, tool: null, stacked: false };
+  // A body that stands the desk holds both columns at their minimums; one that did not would float them.
   const fit = fitColumns({ ...view, want: width }, tool, body, sizes.divider);
-  if (!fit) return { mode: "docked", agents, width: Math.min(tool.want, body), view: null, tool: { field: tool.field, width: Math.min(tool.want, body), min: tool.min }, stacked: true };
+  if (!fit) return null;
   return { mode: "docked", agents, width: fit.view + sizes.divider + fit.tool, view: { ...desk, width: fit.view }, tool: { field: tool.field, width: fit.tool, min: tool.min }, stacked: false };
 }
 
