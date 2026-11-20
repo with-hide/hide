@@ -12,7 +12,7 @@ import { IDLE, movePointer, pressTab, relayout, releasePointer, type DragSession
 import { focusFromKeyboard, installFocusModality } from "./areaFocus";
 import { RATIO_MAX, RATIO_MIN, RESIZE_STEP, areasOf, topRightArea, dropTarget, findArea, locateDisplay, ratioAtOffset, revealedScroll, sameTarget, singleAreaGeometry, steppedRatio, tabStripFit, areaGeometry,
   type Area, type AreaItem, type AreaLayout, type AreaNode, type AreaSplit, type AreaWords,
-  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot, type TabStripSizes } from "./areaLayout";
+  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot } from "./areaLayout";
 
 /**
  * `fit` says how the tab draws its contents in its slot (`tabStripFit`): a
@@ -54,22 +54,15 @@ const TAB_SLOT = {
 /**
  * The width the selected tab's whole name takes, for a tab that marks its
  * title (`data-tab-title`): its drawn chrome plus the title's full text, read
- * from the title while it shows and, while its fit hides it, from the text in
- * the title's font beside the tab's marks and close control.
+ * from the title as drawn. A title its fit hides asks nothing: that fit
+ * leaves the selected tab less than a title's room, which no need changes.
  */
-function selectedTabNeed(list: HTMLElement, sizes: TabStripSizes): number | undefined {
+function selectedTabNeed(list: HTMLElement): number | undefined {
   const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
-  if (!tab || !title) return undefined;
-  if (title.offsetParent !== null) return Math.ceil(tab.offsetWidth - title.clientWidth + title.scrollWidth);
-  const context = measuringCanvas()?.getContext("2d");
-  if (!context) return undefined;
-  context.font = getComputedStyle(title).font;
-  return Math.ceil(sizes.icon + sizes.control + context.measureText(title.textContent ?? "").width);
+  if (!tab || !title || title.offsetParent === null) return undefined;
+  return Math.ceil(tab.offsetWidth - title.clientWidth + title.scrollWidth);
 }
-
-let canvas: HTMLCanvasElement | null = null;
-const measuringCanvas = () => (canvas ??= typeof document === "undefined" ? null : document.createElement("canvas"));
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };
 export type AreaAdapter<I extends AreaItem> = {
@@ -511,7 +504,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     if (!node || !list) return;
     const sizes = readTabStripSizes();
     // Fractional bounds, rounded down: the tabs fill the bar to its end and never overflow it by a sliver.
-    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes, selectedTabNeed(list, sizes));
+    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes, selectedTabNeed(list));
     // The widths go straight onto the tab list; only a change of fit renders
     // the bar again, so a resize costs a style write, not a render per pixel.
     // Both land before paint, so the frame never shows tabs overflowing.
