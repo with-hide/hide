@@ -1,9 +1,10 @@
 // The weekly usage chips and popover on an isolated engine and hided
 // (#153). The daemon's PATH carries a `claude` that answers `/usage` with a
 // fixed reading once the test releases it, so its row is first loading and
-// then available with a Fable bucket; this HOME has no Codex login, so that
-// row is unavailable. Along the way the page tells the core when the popover
-// opens and closes and when the page is hidden.
+// then available with a Fable bucket; this HOME has no Codex CLI login and its
+// search finds no `codex`, so that row is unavailable as not installed. Along
+// the way the page tells the core when the popover opens and closes and when
+// the page is hidden.
 
 import { expect, test, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
@@ -45,7 +46,7 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     const hints = sentHints(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 
-    // Claude's read is held open, so its row is still loading; Codex has no login here.
+    // Claude's read is held open, so its row is still loading; the Codex CLI is not installed here.
     const trigger = page.locator('[data-usage-trigger][data-usage-chip="claude"]');
     const claudeChip = page.locator('[data-usage-chip="claude"]');
     const codexChip = page.locator('[data-usage-chip="codex"]');
@@ -67,7 +68,7 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     const codexRow = popover.locator('[data-usage-row="codex"]');
     await expect(claudeRow.locator("[data-usage-value]")).toHaveText("…");
     await expect(codexRow.locator("[data-usage-value]")).toHaveText("Unavailable");
-    await expect(codexRow).toContainText("Signed out · run codex to sign in");
+    await expect(codexRow).toContainText("codex is not installed");
     await expect.poll(() => hints.at(-1)).toEqual({ usage_popover_open: true });
     await screenshot(page, "usage-loading-unavailable");
 
