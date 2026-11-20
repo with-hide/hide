@@ -34,8 +34,10 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
         column: column.to_owned(),
         state,
         reason: None,
+        failure: None,
         changed_at_unix_ms,
         place: None,
+        path: None,
     };
     StoreReport {
         columns: [(

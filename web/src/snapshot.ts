@@ -2433,11 +2433,16 @@ export type StoreFile = { path: string; size: number; executable: boolean };
 /** One agent's cell of an item's row (`store_cell_state`). */
 export type StoreCellState = "on" | "off" | "waiting" | "hand_written" | "failed" | "unsupported" | "agent_off";
 
+/** What kind of failure a failed cell's is (`store_cell_failure`), which the screen words in one line. */
+export type StoreCellFailure = "unreadable" | "unwritable" | "keys" | "pending";
 export type StoreCell = {
   column: string;
   state: StoreCellState;
-  /** The kit's own sentence, for the log and a hover; the screen words the state. */
+  /** The kit's own sentence, for the log; the screen words the state and the failure. */
   reason?: string | null;
+  failure?: StoreCellFailure | null;
+  /** The real path of `place`, the agent's file or folder. */
+  path?: string | null;
   changed_at_unix_ms?: number | null;
   /** The key of the place the state speaks of, which a take-over names (decisions 2026-11-19). */
   place?: string | null;
@@ -2533,6 +2538,8 @@ export type StoreReport = {
   follows?: boolean;
   refused?: string | null;
   refusal?: StorePassRefusal | null;
+  /** The machine's home folder, which the screen spells as `~`. */
+  home?: string | null;
 };
 
 /** Why a change was refused (`store_refusal_cause`). */

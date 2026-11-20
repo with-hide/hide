@@ -721,6 +721,39 @@ pub enum CellState {
     AgentOff,
 }
 
+/// Why a cell failed, for the screen to word in one short line; the
+/// kit's sentence is the cell's `reason` and the log's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellFailure {
+    /// The agent's file or folder is not in a shape Hide reads, so Hide
+    /// left it untouched.
+    Unreadable,
+    /// Writing the copy or taking it out failed.
+    Unwritable,
+    /// The item's keys could not be read for the write.
+    Keys,
+    /// The copy is not yet where its switch says; the next pass tries
+    /// again.
+    Pending,
+}
+
+/// Why a place could not be judged or changed.
+#[derive(Clone, Debug)]
+struct Failure {
+    cause: CellFailure,
+    reason: String,
+}
+
+impl Failure {
+    fn new(cause: CellFailure, reason: impl Into<String>) -> Self {
+        Self {
+            cause,
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     /// The [`Column::id`].
@@ -729,6 +762,9 @@ pub struct Cell {
     /// Why, for a failed, waiting, hand-written or unsupported cell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// What kind of failure a failed cell's is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CellFailure>,
     /// When the column's copy last changed (B17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_at_unix_ms: Option<u64>,
@@ -739,6 +775,10 @@ pub struct Cell {
     /// with no place on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// The real path of `place`, the agent's file or folder, for the
+    /// screen to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// One item's row.
@@ -849,6 +889,10 @@ pub struct StoreReport {
     /// keeps the sentence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<StorePassRefusal>,
+    /// The machine's home folder, for the screen to spell the paths under
+    /// it with `~`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
 
 /// Why a whole pass did not run (`StoreReport::refused`).
@@ -2238,7 +2282,7 @@ enum Held {
 
 /// Why a place could not be judged or changed, by item id and place key.
 #[derive(Default)]
-struct PlaceFailures(BTreeMap<(String, String), String>);
+struct PlaceFailures(BTreeMap<(String, String), Failure>);
 
 /// What a column's switch and agents ask of its places for an item.
 struct Want {
@@ -2277,10 +2321,12 @@ fn reconcile(
     let keys = match applier.keys(item, &ctx.item_files(&item.id)) {
         Ok(keys) => keys_mark(keys.as_ref(), ctx.secret.as_ref()),
         Err(reason) => {
+            log("store.keys_unreadable", Some(&item.id), &reason);
             for place in places {
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason.clone());
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Keys, reason.clone()),
+                );
             }
             return;
         }
@@ -2310,9 +2356,11 @@ fn reconcile(
         let held = match judge(store, applier, place, item, &digest, ctx.secret.as_ref()) {
             Ok(held) => held,
             Err(reason) => {
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason);
+                log("store.place_unreadable", Some(&item.id), &reason);
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Unreadable, reason),
+                );
                 continue;
             }
         };
@@ -2366,9 +2414,10 @@ fn reconcile(
             Ok(false) => {}
             Err(reason) => {
                 log("store.place_failed", Some(&item.id), &reason);
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason);
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Unwritable, reason),
+                );
             }
         }
     }
@@ -2551,6 +2600,7 @@ fn report(
             .collect(),
         diffs: store.diffs.clone(),
         mcp_previews: mcp::previews(ctx, store),
+        home: Some(ctx.home().display().to_string()),
         checked_at_unix_ms: store.checked_at_unix_ms,
         follows: store
             .items
@@ -2571,12 +2621,13 @@ fn item_report(
 ) -> ItemReport {
     let applier = applier(item.kind);
     let digest = item.digest();
-    let held: Vec<(&Place, Result<Held, String>)> = places
+    let held: Vec<(&Place, Result<Held, Failure>)> = places
         .iter()
         .map(|place| {
             let held = match failures.0.get(&(item.id.clone(), place.key.clone())) {
-                Some(reason) => Err(reason.clone()),
-                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref()),
+                Some(failure) => Err(failure.clone()),
+                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref())
+                    .map_err(|reason| Failure::new(CellFailure::Unreadable, reason)),
             };
             (place, held)
         })
@@ -2585,18 +2636,21 @@ fn item_report(
         .columns()
         .iter()
         .map(|column| {
-            let mine: Vec<&(&Place, Result<Held, String>)> = held
+            let mine: Vec<&(&Place, Result<Held, Failure>)> = held
                 .iter()
                 .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
-            let (state, reason, about) = cell_state(ctx, item, applier, column, &mine);
+            let judged = cell_state(ctx, item, applier, column, &mine);
+            let place = judged
+                .about
+                .or_else(|| mine.first().map(|(place, _)| *place));
             Cell {
                 column: column.id.clone(),
-                state,
-                reason,
-                place: about
-                    .or_else(|| mine.first().map(|(place, _)| *place))
-                    .map(|place| place.key.clone()),
+                state: judged.state,
+                reason: judged.reason,
+                failure: judged.failure,
+                place: place.map(|place| place.key.clone()),
+                path: place.map(|place| place.path.display().to_string()),
                 changed_at_unix_ms: store
                     .changed
                     .get(&item.id)
@@ -2631,23 +2685,51 @@ fn item_report(
     }
 }
 
-/// A cell's state, why, and the place that state speaks of when it is one
-/// of the column's places in particular.
+/// A cell as judged: its state, why, the failure's kind for a failed one,
+/// and the place the state speaks of when it is one of the column's places
+/// in particular.
+struct Judged<'p> {
+    state: CellState,
+    reason: Option<String>,
+    failure: Option<CellFailure>,
+    about: Option<&'p Place>,
+}
+
+impl<'p> Judged<'p> {
+    fn plain(state: CellState, reason: Option<String>, about: Option<&'p Place>) -> Self {
+        Self {
+            state,
+            reason,
+            failure: None,
+            about,
+        }
+    }
+
+    fn failed(place: &'p Place, failure: Failure) -> Self {
+        Self {
+            state: CellState::Failed,
+            reason: Some(failure.reason),
+            failure: Some(failure.cause),
+            about: Some(place),
+        }
+    }
+}
+
 fn cell_state<'p>(
     ctx: &Ctx<'_>,
     item: &StoreItem,
     applier: &dyn Applier,
     column: &Column,
-    places: &[&(&'p Place, Result<Held, String>)],
-) -> (CellState, Option<String>, Option<&'p Place>) {
+    places: &[&(&'p Place, Result<Held, Failure>)],
+) -> Judged<'p> {
     let failed = places
         .iter()
-        .find_map(|(place, held)| held.as_ref().err().map(|reason| (*place, reason.clone())));
+        .find_map(|(place, held)| held.as_ref().err().map(|failure| (*place, failure.clone())));
     if let Err(reason) = applier.supports(item, column) {
-        return (CellState::Unsupported, Some(reason), None);
+        return Judged::plain(CellState::Unsupported, Some(reason), None);
     }
     if !column.agents.iter().any(|agent| ctx.enabled(agent)) {
-        return (CellState::AgentOff, None, None);
+        return Judged::plain(CellState::AgentOff, None, None);
     }
     if !item.on_for(&column.id) {
         let still: Vec<&Place> = places
@@ -2664,33 +2746,35 @@ fn cell_state<'p>(
             .map(String::as_str)
             .collect();
         // A copy Hide could not take out is still read: the cell is not off.
-        return match failed {
-            Some((place, reason)) => (CellState::Failed, Some(reason), Some(place)),
-            None if !still.is_empty() && !keeping.is_empty() => (
+        return match (failed, still.first()) {
+            (Some((place, failure)), _) => Judged::failed(place, failure),
+            (None, Some(place)) if !keeping.is_empty() => Judged::plain(
                 CellState::Off,
                 Some(format!(
                     "its folder is also the {} column's, whose switch keeps the {} there",
                     keeping.into_iter().collect::<Vec<_>>().join(", "),
                     item.kind.code()
                 )),
-                still.first().copied(),
+                Some(*place),
             ),
-            None if !still.is_empty() => (
-                CellState::Failed,
-                Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
-                still.first().copied(),
+            (None, Some(place)) => Judged::failed(
+                place,
+                Failure::new(
+                    CellFailure::Pending,
+                    "Hide's copy is still in place; the next pass takes it out",
+                ),
             ),
-            None => (CellState::Off, None, None),
+            (None, None) => Judged::plain(CellState::Off, None, None),
         };
     }
-    if let Some((place, reason)) = failed {
-        return (CellState::Failed, Some(reason), Some(place));
+    if let Some((place, failure)) = failed {
+        return Judged::failed(place, failure);
     }
     if let Some((place, _)) = places
         .iter()
         .find(|(_, held)| matches!(held, Ok(Held::Theirs)))
     {
-        return (
+        return Judged::plain(
             CellState::HandWritten,
             Some(format!(
                 "{} already holds a {} named {} that Hide did not write; Hide left it alone",
@@ -2706,24 +2790,26 @@ fn cell_state<'p>(
         .iter()
         .any(|agent| ctx.enabled(agent) && ctx.installed(agent))
     {
-        return (
+        return Judged::plain(
             CellState::Waiting,
             Some("none of its agents is found on this machine".to_owned()),
             None,
         );
     }
     if let Some((place, _)) = places.iter().find(|(place, _)| place.blocked.is_some()) {
-        return (CellState::Waiting, place.blocked.clone(), Some(*place));
+        return Judged::plain(CellState::Waiting, place.blocked.clone(), Some(*place));
     }
     match places
         .iter()
         .find(|(_, held)| !matches!(held, Ok(Held::Current)))
     {
-        None => (CellState::On, None, None),
-        Some((place, _)) => (
-            CellState::Failed,
-            Some("the copy is not in place yet; the next pass tries again".to_owned()),
-            Some(*place),
+        None => Judged::plain(CellState::On, None, None),
+        Some((place, _)) => Judged::failed(
+            place,
+            Failure::new(
+                CellFailure::Pending,
+                "the copy is not in place yet; the next pass tries again",
+            ),
         ),
     }
 }

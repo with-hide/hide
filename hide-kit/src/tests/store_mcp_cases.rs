@@ -6,7 +6,7 @@
 //! machine and the machine's removal do what the operator sees.
 
 use super::*;
-use crate::store::{McpPreview, PastedPick, Sealed, SentKeys};
+use crate::store::{CellFailure, McpPreview, PastedPick, Sealed, SentKeys};
 use hide_agent_hooks::mcp::{self as files, Keys, McpFile, Reach, Remote, Server};
 
 const KEY: &str = "ghp_s3cr3t-key-value";
@@ -389,6 +389,18 @@ fn a_key_edit_rewrites_every_file_the_server_is_in_and_a_file_that_failed_gets_i
         "ghp_new"
     );
     assert_eq!(cells(&report, "mcp:github")["grok"], CellState::Failed);
+    // The screen words the kind of failure and names the file; the sentence is the log's.
+    let cell = report
+        .items
+        .iter()
+        .find(|item| item.id == "mcp:github")
+        .and_then(|item| item.cells.iter().find(|cell| cell.column == "grok"))
+        .unwrap();
+    assert_eq!(cell.failure, Some(CellFailure::Unreadable));
+    assert_eq!(
+        cell.path.as_deref().map(std::path::Path::new),
+        Some(std::fs::canonicalize(&grok).unwrap().as_path())
+    );
     assert_eq!(
         std::fs::read_to_string(&grok).unwrap(),
         "[mcp_servers.github\n",

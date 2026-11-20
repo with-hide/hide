@@ -11808,7 +11808,8 @@ mod wire_enum_tests {
 
         {
             use hide_kit::store::{
-                CellState, FileChangeKind, ItemKind, StorePassRefusal, StoreRefusalCause,
+                CellFailure, CellState, FileChangeKind, ItemKind, StorePassRefusal,
+                StoreRefusalCause,
             };
             let kinds = [ItemKind::Skill, ItemKind::Mcp];
             for variant in kinds {
@@ -11897,6 +11898,23 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "store_pass_refusal", &refusals);
             checked.insert("store_pass_refusal");
+
+            let failures = [
+                CellFailure::Unreadable,
+                CellFailure::Unwritable,
+                CellFailure::Keys,
+                CellFailure::Pending,
+            ];
+            for variant in failures {
+                match variant {
+                    CellFailure::Unreadable
+                    | CellFailure::Unwritable
+                    | CellFailure::Keys
+                    | CellFailure::Pending => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_failure", &failures);
+            checked.insert("store_cell_failure");
         }
 
         let unchecked = contract
