@@ -202,7 +202,7 @@ impl Runtime {
                 });
             }
             Some(PairContent::Record(session)) => {
-                self.open_card_on(&key, &place, DetailItem::Record { session });
+                self.place_card_on(&key, &place, DetailItem::Record { session });
             }
             None => {}
         }
@@ -274,26 +274,55 @@ impl Runtime {
         true
     }
 
-    /// Ends pair view when it draws `tab` of `key`, whose desk just lost its
-    /// last View (D-46); a desk pair view does not draw changes nothing.
+    /// Ends pair view when it drew `tab` of `key`, whose desk just lost its
+    /// last View (D-46): the pane on the left has something to show. On a
+    /// desk pair view does not draw, such as a shell's, the mode stays on
+    /// (D-45).
     pub(super) fn end_pair_view_of_emptied(&mut self, key: &WorkspaceKey, tab: &str) -> bool {
-        if self.pair_left_of(key, tab).is_none() {
+        if self.pair_showing(key, tab).is_none() {
             return false;
         }
         self.end_pair_view(PairEnd::Emptied)
     }
 
-    /// The pane pair view draws on the left of `tab` while the mode is on:
-    /// the pane the operator last went to there, else, as after a restart,
-    /// the tab's keyboard pane. Whether it has something to show is the
-    /// caller's to ask (`pairable_panes`).
+    /// The pane pair view draws beside `tab`'s desk now (D-45, B19): the
+    /// mode is on, the pane the operator is on there has something to show,
+    /// and the desk has a View. The one rule the snapshot, the desk's
+    /// visibility (`tray_in_view`, `drawn_tray_layout`) and a desk tab
+    /// brought in front (`follow_pair_front`) read, so the core never treats
+    /// as drawn a pair view the screen does not draw.
+    pub(super) fn drawn_pair(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
+        let pane = self.pair_showing(key, tab)?;
+        self.view_layout_at(key, &Place::Tray(tab.to_owned()))
+            .is_some_and(|layout| layout.display_count() > 0)
+            .then_some(pane)
+    }
+
+    /// `drawn_pair` before its desk's count: the pane on the left while it
+    /// has something to show.
+    fn pair_showing(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
+        self.pair_left_of(key, tab).filter(|pane| {
+            self.pair_content(key, pane, &self.live_sessions())
+                .is_some()
+        })
+    }
+
+    /// The pane on the left of `tab` while the mode is on: the pane the
+    /// operator last went to there while it is still in the tab, else, as
+    /// after a restart or once that pane closed, the tab's keyboard pane.
+    /// Whether it has something to show is `drawn_pair`'s to ask.
     pub(super) fn pair_left_of(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
         let store = self.workspace_views.as_ref()?;
         if !store.views.pair.on {
             return None;
         }
         match store.pair_left.as_ref() {
-            Some(left) if left.is_in(key, tab) => Some(left.pane.clone()),
+            Some(left)
+                if left.is_in(key, tab)
+                    && self.pane_tab(key, &left.pane).as_deref() == Some(tab) =>
+            {
+                Some(left.pane.clone())
+            }
             _ => self.tab_keyboard_pane(key, tab),
         }
     }
@@ -343,7 +372,7 @@ impl Runtime {
         let Some(Place::Tray(tab)) = self.view_place(key, display_id) else {
             return;
         };
-        let Some(left) = self.pair_left_of(key, &tab) else {
+        let Some(left) = self.drawn_pair(key, &tab) else {
             return;
         };
         let sessions = self.live_sessions();

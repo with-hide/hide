@@ -3223,7 +3223,7 @@ impl Runtime {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
         let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
-        ((view.draws_tray(&tab) || self.pair_left_of(key, &tab).is_some())
+        ((view.draws_tray(&tab) || self.drawn_pair(key, &tab).is_some())
             && tray.layout.display_count() > 0)
             .then_some(&tray.layout)
     }

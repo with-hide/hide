@@ -1383,21 +1383,15 @@ impl Runtime {
             let layout = self.view_layout_snapshot(key, tray_layout);
             let every = self.every_view_snapshot(key);
             let pairable = self.pairable_panes(key);
-            // Pair view is drawn while the mode is on and the pane the
-            // operator is on here has something to show beside a desk that
-            // has a View (D-45, B19).
-            let pair = self
-                .pair_left_of(key, tab)
-                .filter(|pane| pairable.contains(pane) && tray_layout.display_count() > 0)
-                .map(|pane| {
-                    let mut pair = crate::model::PairViewSnapshot {
-                        tab_id: tab.clone(),
-                        pane_id: pane,
-                        folded: Vec::new(),
-                    };
-                    pair.folded = self.pair_folded(key, &pair, &layout.root);
-                    pair
-                });
+            let pair = self.drawn_pair(key, tab).map(|pane| {
+                let mut pair = crate::model::PairViewSnapshot {
+                    tab_id: tab.clone(),
+                    pane_id: pane,
+                    folded: Vec::new(),
+                };
+                pair.folded = self.pair_folded(key, &pair, &layout.root);
+                pair
+            });
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),

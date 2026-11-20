@@ -936,7 +936,7 @@ impl Runtime {
         self.workspace_views
             .as_ref()
             .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| view.open || self.pair_left_of(key, tab).is_some())
+            .is_some_and(|view| view.open || self.drawn_pair(key, tab).is_some())
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of

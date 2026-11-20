@@ -2301,6 +2301,76 @@ fn a_shell_with_nothing_to_show_draws_its_tab_and_keeps_the_mode_on() {
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
 }
 
+/// D-45 with a shell on screen: the mode is on but nothing is drawn, so the
+/// desk is not in view (its front View stays unseen), a desk tab of another
+/// agent brought in front opens no pair view, and the desk's last View
+/// closing leaves the mode on.
+#[test]
+fn a_mode_on_a_shell_draws_no_pair_view_anywhere_the_core_looks() {
+    let (mut runtime, _checkout, directory) = setup("pair-shell-hidden");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert!(mode_on(&runtime));
+    assert_eq!(drawn_pair(&runtime), None);
+    let key = key(&directory);
+    assert!(
+        runtime.drawn_tray_layout(&key).is_none(),
+        "the desk is not in front of the operator"
+    );
+    assert!(!runtime.tray_in_view(&key, TABS[0]));
+
+    runtime.dispatch_json(&explorer_event(
+        "workspace_view",
+        serde_json::json!({"open": true}),
+    ));
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    assert_eq!(drawn_pair(&runtime), None, "a desk tab opens no pair view");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": a}),
+    );
+    assert!(
+        mode_on(&runtime),
+        "a desk pair view does not draw empties without ending it"
+    );
+}
+
+/// D-44: pair view draws its desk whatever the lane's state, so following
+/// the operator through tabs opens no lane and shows no desk, and leaving
+/// leaves every desk it put a record on folded.
+#[test]
+fn pair_view_opens_no_lane_on_the_desks_it_fills() {
+    let (mut runtime, checkout, directory) = setup("pair-no-lane");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
+    pair_event(&mut runtime, None);
+    let view = runtime
+        .workspace_views
+        .as_ref()
+        .unwrap()
+        .views
+        .get(crate::node::TEST_NODE, &directory.to_string_lossy())
+        .unwrap();
+    assert!(!view.open, "the lane stays closed");
+    for tab in &TABS[..2] {
+        assert!(
+            !view.tray(tab).is_some_and(|tray| tray.shown),
+            "{tab}'s desk is folded"
+        );
+    }
+}
+
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one
 /// waiting in its pane's list is refused with `view_not_in_lane`, and nothing
 /// changes.
