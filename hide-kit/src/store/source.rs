@@ -149,7 +149,9 @@ impl Fetched {
     }
 }
 
-/// Asks every source `changes` names, outside the account lock.
+/// Asks every source `changes` names, outside the account lock. A source or
+/// an update asked twice in one pass is read once, and every change that
+/// asked for it names that one reading.
 pub(crate) fn fetch(
     target: &KitTarget,
     dir: &Path,
@@ -160,6 +162,10 @@ pub(crate) fn fetch(
     let staging = dir.join("staging");
     for change in changes {
         match change {
+            StoreChange::Inspect { source }
+                if fetched.previews.iter().any(|(asked, _)| asked == source) => {}
+            StoreChange::PreviewUpdate { item }
+                if fetched.diffs.iter().any(|(asked, _)| asked == item) => {}
             StoreChange::Inspect { source } => {
                 let preview = inspect(target, &staging, source);
                 // The owner's picture comes with the source it was read with,

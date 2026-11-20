@@ -102,11 +102,13 @@ enum Plan {
 }
 
 enum Stage {
-    /// The source or the update is being read; `ended` once its request
-    /// answered and the report holding it is in.
+    /// The source or the update is being read; `made` is the reading its
+    /// request's answer names (the preview or the diff), which the confirm
+    /// shows once the report holding it is in. Another command's reading of
+    /// the same source never stands in for it.
     Reading {
         request: String,
-        ended: bool,
+        made: Option<String>,
     },
     Confirming(StoreAskSnapshot),
     Applying {
@@ -350,7 +352,7 @@ impl Runtime {
             },
             Plan::Install { .. } | Plan::Update { .. } => Stage::Reading {
                 request: format!("{run_id}-read"),
-                ended: false,
+                made: None,
             },
             Plan::AddMcp { server } => Stage::Confirming(self.store_ask(
                 &run_id,
@@ -446,7 +448,22 @@ impl Runtime {
         };
         match (&mut run.stage, refusal) {
             (_, Some(refusal)) => self.finish_store_run(&run_id, Err(refusal)),
-            (Stage::Reading { ended, .. }, None) => *ended = true,
+            (Stage::Reading { made, .. }, None) => {
+                match answer
+                    .outcomes
+                    .iter()
+                    .find_map(|outcome| outcome.made.clone())
+                {
+                    Some(reading) => *made = Some(reading),
+                    None => self.finish_store_run(
+                        &run_id,
+                        Err(refused(
+                            REFUSED,
+                            "not_found: the store answered without its reading",
+                        )),
+                    ),
+                }
+            }
             (Stage::Applying { .. }, None) => {
                 let item = match &run.plan {
                     Plan::Plain { item, .. } => item.clone(),
@@ -474,7 +491,7 @@ impl Runtime {
             .iter()
             .filter(|(_, run)| {
                 run.device_id == device_id
-                    && matches!(run.stage, Stage::Reading { ended: true, .. })
+                    && matches!(run.stage, Stage::Reading { made: Some(_), .. })
             })
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
@@ -486,13 +503,19 @@ impl Runtime {
             let Some(run) = self.store_runs.runs.get(&run_id) else {
                 continue;
             };
+            let Stage::Reading {
+                made: Some(reading),
+                ..
+            } = &run.stage
+            else {
+                continue;
+            };
             let what = match &run.plan {
-                Plan::Install { source, names } => install_ask(&report, source, names),
+                Plan::Install { names, .. } => install_ask(&report, reading, names),
                 Plan::Update { item } => report
                     .diffs
                     .iter()
-                    .filter(|diff| &diff.item == item)
-                    .max_by_key(|diff| diff.at_unix_ms)
+                    .find(|diff| &diff.id == reading && &diff.item == item)
                     .map(|diff| StoreAskWhat::Update {
                         item: item.clone(),
                         diff: diff.id.clone(),
@@ -719,18 +742,17 @@ fn column_of(report: &StoreReport, kind: ItemKind, agent: &str) -> Option<String
         .map(|column| column.id.clone())
 }
 
-/// The confirm of an install: the newest preview of `source`, with the
+/// The confirm of an install: the preview its own read made, with the
 /// skills named, or every one not in the store yet.
 fn install_ask(
     report: &StoreReport,
-    source: &SourceSpec,
+    reading: &str,
     names: &[String],
 ) -> Result<StoreAskWhat, String> {
     let preview = report
         .previews
         .iter()
-        .filter(|preview| &preview.source == source)
-        .max_by_key(|preview| preview.at_unix_ms)
+        .find(|preview| preview.id == reading)
         .ok_or_else(|| refused(REFUSED, "not_found: the source could not be read"))?;
     let names = if names.is_empty() {
         preview

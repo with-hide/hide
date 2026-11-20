@@ -111,6 +111,7 @@ fn a_store_request_reaches_the_device_and_its_row_carries_items_cells_version_an
     let outcome = ChangeOutcome {
         change: switch_off_agy(),
         refused: None,
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![outcome.clone()],
@@ -221,6 +222,7 @@ fn a_change_the_store_refuses_is_answered_with_its_cause() {
             cause: StoreRefusalCause::NotFound,
             reason: "no item skill:gone".to_owned(),
         }),
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![refused.clone()],
@@ -264,6 +266,7 @@ fn a_github_item_is_checked_daily_and_a_followed_folder_every_few_seconds_withou
         vec![ChangeOutcome {
             change: StoreChange::CheckUpdates,
             refused: None,
+            made: None,
         }],
         Some(two_days_ago + 2 * 24 * 60 * 60 * 1000),
     );
@@ -316,6 +319,7 @@ fn a_daily_check_waits_while_a_request_is_queued_and_the_request_is_answered() {
         vec![ChangeOutcome {
             change: switch_off_agy(),
             refused: None,
+            made: None,
         }],
         Some(two_days_ago),
     ))
@@ -426,6 +430,7 @@ fn a_copy_from_this_mac_reaches_the_device_whole_and_its_answer_holds_no_file_by
     let outcome = ChangeOutcome {
         change: received.redacted(),
         refused: None,
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![outcome.clone()],
@@ -509,6 +514,7 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
         outcomes: vec![ChangeOutcome {
             change: change.redacted(),
             refused: None,
+            made: None,
         }],
         ..StoreReport::default()
     })

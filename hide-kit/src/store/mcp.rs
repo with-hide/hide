@@ -643,7 +643,7 @@ pub(super) fn read_paste(
     ctx: &Ctx<'_>,
     store: &mut StoreRecord,
     text: &Sealed,
-) -> Result<(), StoreRefusal> {
+) -> Result<String, StoreRefusal> {
     if text.len() > PASTE_LIMIT {
         return Err(StoreRefusal::new(
             StoreRefusalCause::TooLarge,
@@ -682,11 +682,11 @@ pub(super) fn read_paste(
         });
     }
     store.mcp_previews.push(McpPreview {
-        id,
+        id: id.clone(),
         servers,
         at_unix_ms: now_unix_ms(),
     });
-    Ok(())
+    Ok(id)
 }
 
 /// Adds the server the operator confirmed (B8-B10, B33): its keys typed on

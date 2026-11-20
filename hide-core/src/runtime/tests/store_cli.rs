@@ -36,31 +36,62 @@ fn found(name: &str, taken: bool) -> FoundSkill {
     }
 }
 
-/// The machine's store after a pass: the source read as two skills, one of
-/// them already in the store, and the outcomes of the pass's changes.
+/// A reading of the source as two skills, one of them already in the store.
+fn reading(id: &str, at_unix_ms: u64) -> Preview {
+    Preview {
+        id: id.to_owned(),
+        source: source(),
+        url: Some(URL.to_owned()),
+        commit: Some("0123456".to_owned()),
+        tag: None,
+        reference: None,
+        skills: vec![found("archify", false), found("notes", true)],
+        agents: vec!["claude-code".to_owned()],
+        at_unix_ms,
+    }
+}
+
+/// The machine's store after a pass: the source read once, and the outcomes
+/// of the pass's changes.
 fn answered(outcomes: Vec<ChangeOutcome>) -> serde_json::Value {
+    answered_with(vec![reading("p1", 1)], outcomes)
+}
+
+fn answered_with(previews: Vec<Preview>, outcomes: Vec<ChangeOutcome>) -> serde_json::Value {
     serde_json::to_value(StoreReport {
-        previews: vec![Preview {
-            id: "p1".to_owned(),
-            source: source(),
-            url: Some(URL.to_owned()),
-            commit: Some("0123456".to_owned()),
-            tag: None,
-            reference: None,
-            skills: vec![found("archify", false), found("notes", true)],
-            agents: vec!["claude-code".to_owned()],
-            at_unix_ms: 1,
-        }],
+        previews,
         outcomes,
         ..StoreReport::default()
     })
     .unwrap()
 }
 
+/// The source's inspect, answered with the reading it made.
+fn inspected(made: Option<&str>) -> ChangeOutcome {
+    ChangeOutcome {
+        made: made.map(str::to_owned),
+        ..done(StoreChange::Inspect { source: source() })
+    }
+}
+
+/// The machine's store read once, as every command's first step.
+fn read_store(helper: &Arc<KitDevice>) -> SharedRuntime {
+    helper.answer_store(Ok(answered(vec![done(StoreChange::CheckUpdates)])));
+    let shared = with_consent(Some(helper.clone()));
+    dispatch(
+        &shared,
+        "kit_store",
+        serde_json::json!({"device_id": DEVICE, "request_id": "read", "changes": [{"op": "check_updates"}]}),
+    );
+    settle(&shared);
+    shared
+}
+
 fn done(change: StoreChange) -> ChangeOutcome {
     ChangeOutcome {
         change,
         refused: None,
+        made: None,
     }
 }
 
@@ -98,6 +129,7 @@ fn requests_merged_into_one_pass_are_each_answered_with_their_own_outcomes() {
                 cause: StoreRefusalCause::NotFound,
                 reason: "no item skill:gone".to_owned(),
             }),
+            made: None,
         },
         done(second.clone()),
     ])));
@@ -155,12 +187,16 @@ fn the_answers_kept_drop_the_oldest_finished_one_past_their_limit() {
 }
 
 fn add(shared: &Mutex<Runtime>) -> crate::store_command::Prepared {
+    add_from(shared, PANE)
+}
+
+fn add_from(shared: &Mutex<Runtime>, pane: &str) -> crate::store_command::Prepared {
     shared
         .lock()
         .unwrap()
         .prepare_store_command(
             DEVICE,
-            PANE,
+            pane,
             StoreCommand::Add {
                 source: source(),
                 names: Vec::new(),
@@ -181,9 +217,7 @@ fn asked(helper: &Arc<KitDevice>) -> (SharedRuntime, crate::store_command::Prepa
         serde_json::json!({"device_id": DEVICE, "request_id": "read", "changes": [{"op": "check_updates"}]}),
     );
     settle(&shared);
-    helper.answer_store(Ok(answered(vec![done(StoreChange::Inspect {
-        source: source(),
-    })])));
+    helper.answer_store(Ok(answered(vec![inspected(Some("p1"))])));
     let prepared = add(&shared);
     settle(&shared);
     let asks = shared.lock().unwrap().snapshot().status.store_asks.clone();
@@ -415,4 +449,60 @@ fn another_command_on_the_same_item_from_the_same_pane_runs_as_its_own_request()
     assert!(waited(on.run()), "on was answered for itself");
     assert!(waited(gone.run()), "remove was answered for itself");
     assert!(waited(again.run()));
+}
+
+/// Two agents read the same source while it changed: each confirm shows the
+/// reading its own command made, though the other one's is newer.
+#[test]
+fn two_agents_adding_the_same_source_each_confirm_their_own_reading() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = read_store(&helper);
+    let both = || vec![reading("first", 1), reading("second", 2)];
+
+    helper.answer_store(Ok(answered_with(both(), vec![inspected(Some("first"))])));
+    let _first = add_from(&shared, PANE);
+    settle(&shared);
+    helper.answer_store(Ok(answered_with(both(), vec![inspected(Some("second"))])));
+    let _second = add_from(&shared, "w1:p2");
+    settle(&shared);
+
+    let asks = shared.lock().unwrap().snapshot().status.store_asks.clone();
+    for (pane, own) in [(PANE, "first"), ("w1:p2", "second")] {
+        let ask = asks
+            .iter()
+            .find(|ask| ask.pane_id == pane)
+            .unwrap_or_else(|| panic!("no confirm for {pane}: {asks:#?}"));
+        assert_eq!(
+            ask.what,
+            StoreAskWhat::Install {
+                preview: own.to_owned(),
+                names: vec!["archify".to_owned()],
+            },
+            "{pane}"
+        );
+    }
+}
+
+/// A read that answered without naming its reading ends the command with a
+/// refusal; no other reading of the source is shown in its place.
+#[test]
+fn a_read_answered_without_its_reading_ends_the_command_refused() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = read_store(&helper);
+    helper.answer_store(Ok(answered(vec![inspected(None)])));
+
+    let prepared = add(&shared);
+    settle(&shared);
+
+    let ended = prepared.run().expect_err("the command ends refused");
+    assert!(ended.contains("without its reading"), "{ended}");
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .snapshot()
+            .status
+            .store_asks
+            .is_empty()
+    );
 }

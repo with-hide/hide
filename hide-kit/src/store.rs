@@ -619,6 +619,11 @@ pub struct ChangeOutcome {
     pub change: StoreChange,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<StoreRefusal>,
+    /// What the change made for its asker to show, found by the request and
+    /// never by time: an inspect's preview, a paste's MCP preview, an update
+    /// preview's diff. Another request's reads never stand in for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1298,13 +1303,17 @@ fn run(
         follow(&ctx, &mut store);
         fetched.keep_into(&ctx, &mut store);
         for change in &scope.store {
-            let refused = change_one(&ctx, &mut store, change, &fetched).err();
-            if let Some(refusal) = &refused {
-                log("store.change_refused", None, &refusal.reason);
-            }
+            let (made, refused) = match change_one(&ctx, &mut store, change, &fetched) {
+                Ok(made) => (made, None),
+                Err(refusal) => {
+                    log("store.change_refused", None, &refusal.reason);
+                    (None, Some(refusal))
+                }
+            };
             outcomes.push(ChangeOutcome {
                 change: change.redacted(),
                 refused,
+                made,
             });
         }
         trim_staging(&ctx, &mut store);
@@ -1644,15 +1653,19 @@ fn failed(reason: String) -> StoreRefusal {
     StoreRefusal::new(StoreRefusalCause::Failed, reason)
 }
 
+/// One change of a pass, and the id of what it made for its asker to show.
 fn change_one(
     ctx: &Ctx<'_>,
     store: &mut StoreRecord,
     change: &StoreChange,
     fetched: &source::Fetched,
-) -> Result<(), StoreRefusal> {
+) -> Result<Option<String>, StoreRefusal> {
+    let nothing = |()| None;
     match change {
-        StoreChange::Inspect { source } => fetched.preview_of(source).map(drop),
-        StoreChange::Install { preview, names } => install(ctx, store, preview, names),
+        StoreChange::Inspect { source } => fetched
+            .preview_of(source)
+            .map(|preview| Some(preview.id.clone())),
+        StoreChange::Install { preview, names } => install(ctx, store, preview, names).map(nothing),
         StoreChange::Set { item, column, on } => {
             let found = store
                 .item_mut(item)
@@ -1664,10 +1677,10 @@ fn change_one(
                 return Err(not_found(format!("no column {column}")));
             }
             set(found, &columns, column.as_deref(), *on);
-            Ok(())
+            Ok(None)
         }
-        StoreChange::Delete { item } => delete(ctx, store, item),
-        StoreChange::Restore { entry } => restore(ctx, store, entry),
+        StoreChange::Delete { item } => delete(ctx, store, item).map(nothing),
+        StoreChange::Restore { entry } => restore(ctx, store, entry).map(nothing),
         StoreChange::Forget { entry } => {
             let index = store
                 .trash
@@ -1676,24 +1689,28 @@ fn change_one(
                 .ok_or_else(|| not_found(format!("no undo entry {entry}")))?;
             let gone = store.trash.remove(index);
             purge(ctx, &gone);
-            Ok(())
+            Ok(None)
         }
-        StoreChange::Adopt { kind, name, from } => adopt(ctx, store, *kind, name, from.as_deref()),
-        StoreChange::CheckUpdates => fetched.checked().map(drop),
+        StoreChange::Adopt { kind, name, from } => {
+            adopt(ctx, store, *kind, name, from.as_deref()).map(nothing)
+        }
+        StoreChange::CheckUpdates => fetched.checked().map(nothing),
         StoreChange::PreviewUpdate { item } => {
             store
                 .item(item)
                 .ok_or_else(|| not_found(format!("no item {item}")))?;
-            fetched.diff_of(item).map(drop)
+            fetched.diff_of(item).map(|diff| Some(diff.id.clone()))
         }
-        StoreChange::Update { item, commit } => update(ctx, store, item, commit),
-        StoreChange::ReadMcp { text } => mcp::read_paste(ctx, store, text),
+        StoreChange::Update { item, commit } => update(ctx, store, item, commit).map(nothing),
+        StoreChange::ReadMcp { text } => mcp::read_paste(ctx, store, text).map(Some),
         StoreChange::AddMcp { server, keys, from } => {
-            mcp::add(ctx, store, server, keys, from.as_ref())
+            mcp::add(ctx, store, server, keys, from.as_ref()).map(nothing)
         }
-        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview),
-        StoreChange::SetMcp { item, server, keys } => mcp::set(ctx, store, item, server, keys),
-        StoreChange::Receive { item } => receive(ctx, store, item),
+        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview).map(nothing),
+        StoreChange::SetMcp { item, server, keys } => {
+            mcp::set(ctx, store, item, server, keys).map(nothing)
+        }
+        StoreChange::Receive { item } => receive(ctx, store, item).map(nothing),
     }
 }
 
