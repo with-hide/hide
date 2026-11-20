@@ -166,6 +166,44 @@ pub(crate) fn droppable_spawns(ledger: &Ledger, holds: &dyn Holds) -> Result<Vec
         .collect())
 }
 
+/// Lets the brief and launch words of each completed spawn whose child
+/// ended go, keeping the brief's digest (`SpawnRecord::shed_brief`): they
+/// were most of what a spawn record weighs (with-hide/hide#2715). Nothing
+/// reads them once the child ended: the brief is typed, confirmed and
+/// carried into its first letter while the child runs, a mission node
+/// keeps its own copy from its worker's binding, and a completed spawn
+/// asked again answers its child before any start, so it only compares the
+/// brief, which the digest does. Bounded by the spawn records, and by the
+/// registrations once one carries anything, since a spawn's child is found
+/// in one pass over them.
+pub(crate) fn shed_finished_briefs(ledger: &mut Ledger) {
+    let carrying: HashSet<&str> = ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.completed && spawn.carries_brief())
+        .filter_map(|spawn| spawn.child.as_deref())
+        .collect();
+    if carrying.is_empty() {
+        return;
+    }
+    let ended: HashMap<&str, bool> = ledger
+        .agents
+        .iter()
+        .filter(|agent| carrying.contains(agent.id.as_str()))
+        .map(|agent| (agent.id.as_str(), agent.ended))
+        .collect();
+    let shed: Vec<usize> = ledger
+        .spawns
+        .iter()
+        .enumerate()
+        .filter(|(_, spawn)| spawn.completed && spawn.carries_brief() && finished(spawn, &ended))
+        .map(|(index, _)| index)
+        .collect();
+    for index in shed {
+        ledger.spawns[index].shed_brief();
+    }
+}
+
 /// The records that stay because something names them, read in one pass.
 struct Named<'a> {
     agents: HashSet<&'a str>,
@@ -875,6 +913,75 @@ mod tests {
         assert!((3000..=3002).all(|n| holds_spawn(&ledger, n)));
         assert!(!holds_spawn(&ledger, 3003));
         assert!(ledger.bytes().unwrap().len() <= FILE_LIMIT);
+    }
+
+    #[test]
+    fn a_completed_spawn_whose_child_ended_lets_its_brief_go_and_still_answers_its_intent() {
+        let brief = "Fix the flaky test, then report.";
+        let mut ledger = Ledger {
+            agents: vec![
+                agent(1, false),
+                AgentRecord {
+                    parent: Some("agent-1".into()),
+                    ..agent(2, true)
+                },
+                AgentRecord {
+                    parent: Some("agent-1".into()),
+                    ..agent(3, false)
+                },
+            ],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        for (n, child) in [(3000, 2), (3001, 3)] {
+            ledger.spawns.push(SpawnRecord {
+                brief: Some(brief.into()),
+                launch_words: vec!["--prompt".into(), brief.into()],
+                ..spawn(n, 1, Some(child))
+            });
+        }
+        let before = ledger.bytes().unwrap().len();
+        shed_finished_briefs(&mut ledger);
+        // The ended child's spawn keeps neither; the running one's keeps both.
+        assert_eq!(ledger.spawns[0].brief, None);
+        assert!(ledger.spawns[0].launch_words.is_empty());
+        assert_eq!(ledger.spawns[1].brief.as_deref(), Some(brief));
+        assert_eq!(ledger.spawns[1].launch_words.len(), 2);
+        assert!(ledger.bytes().unwrap().len() < before);
+        assert_eq!(reloaded(&ledger), ledger);
+        // Asked again with the same brief, it is the same completed spawn;
+        // with another, a conflict.
+        let again = |text: &str| {
+            let mut command = command("intent-3000");
+            if let crate::coordination::Command::Spawn {
+                brief, repo, args, ..
+            } = &mut command
+            {
+                *brief = Some(text.into());
+                *repo = Some("/repo".into());
+                args.clear();
+            }
+            Mutation::Reserve {
+                parent: "agent-1".into(),
+                command,
+            }
+        };
+        let answer =
+            apply_with(&mut ledger, &actor(1), &again(brief), NOW, &Held::default()).unwrap();
+        assert_eq!(answer["id"], "spawn-3000");
+        assert_eq!(answer["completed"], true);
+        assert_eq!(answer["child"], "agent-2");
+        assert_eq!(
+            apply_with(
+                &mut ledger,
+                &actor(1),
+                &again("Another task."),
+                NOW,
+                &Held::default()
+            )
+            .unwrap_err(),
+            "intent_conflict"
+        );
     }
 
     #[test]

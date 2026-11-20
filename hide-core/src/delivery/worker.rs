@@ -1528,6 +1528,7 @@ impl Upkeep {
             .tools
             .as_deref()
             .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now));
+        crate::coordination::shed_finished_briefs(ledger);
         (moved, ended, tools)
     }
 }
