@@ -177,13 +177,17 @@ pub struct Letter {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreStart {
     pub origin: Actor,
-    /// The other machine's device id.
-    pub machine: String,
+    /// The other machine's connection id, which it proved: a device id is
+    /// only what a machine says of itself, and two connections may say the
+    /// same one.
+    pub key: String,
     pub at_unix_ms: u64,
 }
 
-/// The most starts on other cores the ledger remembers; at the cap the
-/// oldest goes, and its machine's report then reaches no one.
+/// The most starts on other cores the ledger remembers. At the cap the
+/// oldest whose asker ended goes, since no report reaches an ended agent;
+/// while every asker still lives a new start is refused before it leaves
+/// (`Ledger::note_core_start`).
 pub const CORE_STARTS: usize = 256;
 
 /// A bell that failed: the doorbell's code for it, and whether the engine
@@ -781,14 +785,9 @@ impl Ledger {
     /// `machine` moves, so an answer that comes twice, or from another
     /// machine, changes nothing. A refusal ends the letter another way
     /// ([`Ledger::fail_undeliverable`]). Returns whether it moved.
-    pub fn settle_core(&mut self, id: &str, machine: &str, name: &str, now: u64) -> bool {
+    pub fn settle_core(&mut self, id: &str, key: &str, name: &str, now: u64) -> bool {
         let Some(letter) = self.letters.iter_mut().find(|letter| {
-            letter.id == id
-                && letter.state == State::Pending
-                && letter
-                    .recipient
-                    .core_address()
-                    .is_some_and(|address| address.device == machine)
+            letter.id == id && letter.state == State::Pending && letter.recipient.core_of(key)
         }) else {
             return false;
         };
@@ -816,48 +815,66 @@ impl Ledger {
         }
     }
 
-    /// Forgets the starts asked of machines not among `machines`, which
+    /// Forgets the starts asked of connections not among `keys`, which
     /// this core is paired with no longer. Returns whether any went.
-    pub fn forget_core_starts(&mut self, machines: &[String]) -> bool {
+    pub fn forget_core_starts(&mut self, keys: &[String]) -> bool {
         let before = self.core_starts.len();
-        self.core_starts
-            .retain(|start| machines.contains(&start.machine));
+        self.core_starts.retain(|start| keys.contains(&start.key));
         self.core_starts.len() != before
     }
 
-    /// Remembers that `origin` asked `machine`'s core for a start
-    /// ([`CoreStart`]). One record per asker and machine, the newest ask's
-    /// time; past [`CORE_STARTS`] the oldest goes. Returns whether the
-    /// ledger changed.
-    pub fn note_core_start(&mut self, origin: &Actor, machine: &str, now: u64) -> bool {
-        if self
+    /// Remembers that `origin` asked the core on connection `key` for a
+    /// start ([`CoreStart`]), before the ask leaves. One record per asker
+    /// and connection: asked again, the record takes the newest place and
+    /// time. At [`CORE_STARTS`] the oldest record whose asker ended goes;
+    /// while the asker of every record may still take its report, the new
+    /// start is refused `capacity` and nothing is dropped.
+    pub fn note_core_start(
+        &mut self,
+        origin: &Actor,
+        key: &str,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if let Some(at) = self
             .core_starts
             .iter()
-            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+            .position(|start| start.key == key && start.origin.same_identity(origin))
         {
-            return false;
+            let mut start = self.core_starts.remove(at);
+            start.at_unix_ms = now;
+            self.core_starts.push(start);
+            return Ok(());
         }
         if self.core_starts.len() >= CORE_STARTS {
-            let dropped = self.core_starts.remove(0);
+            let finished = self
+                .core_starts
+                .iter()
+                .position(|start| !self.core_start_open(start))
+                .ok_or("capacity")?;
+            let dropped = self.core_starts.remove(finished);
             crate::diagnostic!(serde_json::json!({
                 "component": "delivery", "kind": "core_start.dropped",
-                "machine": dropped.machine, "pane_id": dropped.origin.pane_id,
+                "pane_id": dropped.origin.pane_id,
             }));
         }
         self.core_starts.push(CoreStart {
             origin: origin.clone(),
-            machine: machine.to_owned(),
+            key: key.to_owned(),
             at_unix_ms: now,
         });
-        true
+        Ok(())
     }
 
-    /// Whether `origin` asked `machine`'s core for a start this ledger
-    /// still remembers.
-    pub fn core_started(&self, origin: &Actor, machine: &str) -> bool {
-        self.core_starts
+    /// Whether the report of `start` may still reach its asker: an agent
+    /// with a record that has not ended, or one this ledger keeps no
+    /// record of, whose end it cannot read.
+    fn core_start_open(&self, start: &CoreStart) -> bool {
+        let mut records = self
+            .agents
             .iter()
-            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+            .filter(|record| record.actor.same_identity(&start.origin))
+            .peekable();
+        records.peek().is_none() || records.any(|record| !record.ended)
     }
 
     /// Brings the machines' clocks to what `reach` says at `now` (PRD
@@ -1306,6 +1323,78 @@ mod tests {
         [(device.to_owned(), reachable)].into()
     }
 
+    /// PRD device-connect-iroh D-72: at the cap only a start whose asker
+    /// ended goes, the oldest such first. While every asker may still take
+    /// its report a new start is refused and the oldest record, a long
+    /// mission's, keeps its place; a start asked again takes the newest
+    /// place and time and needs no room.
+    #[test]
+    fn the_remembered_starts_drop_only_ended_askers_and_refuse_when_none_ended() {
+        let key = "a".repeat(64);
+        let asker = |n: usize| Actor {
+            pane_id: format!("w1:p{n}"),
+            name: format!("asker-{n}"),
+            kind: "codex".into(),
+            device_id: "local".into(),
+            session: crate::engine::tokens::session_digest(&format!("asker-{n}")),
+        };
+        let holds = |ledger: &Ledger, n: usize| {
+            ledger
+                .core_starts
+                .iter()
+                .any(|start| start.origin.same_identity(&asker(n)))
+        };
+        let mut ledger = Ledger::default();
+        for n in 0..CORE_STARTS {
+            ledger.note_core_start(&asker(n), &key, n as u64).unwrap();
+        }
+        assert_eq!(
+            ledger.note_core_start(&asker(CORE_STARTS), &key, 999),
+            Err("capacity")
+        );
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert!(ledger.core_starts[0].origin.same_identity(&asker(0)));
+
+        ledger.note_core_start(&asker(0), &key, 1_000).unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        let newest = ledger.core_starts.last().unwrap();
+        assert!(newest.origin.same_identity(&asker(0)) && newest.at_unix_ms == 1_000);
+        // The same asker on another connection is another record.
+        assert_eq!(
+            ledger.note_core_start(&asker(0), &"b".repeat(64), 1_000),
+            Err("capacity")
+        );
+
+        // Askers 9 and 5 ended: the older record of the two goes for the
+        // new start, and no living asker's does.
+        for n in [9, 5] {
+            let actor = asker(n);
+            ledger.agents.push(crate::coordination::AgentRecord {
+                id: format!("agent-{n}"),
+                name: Some(actor.name.clone()),
+                machine: "local".into(),
+                host_scope: "scope".into(),
+                native_machine: "machine".into(),
+                session: format!("asker-{n}"),
+                instance: format!("terminal-{n}"),
+                pane: actor.pane_id.clone(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor,
+                ended: true,
+                terminal_id: None,
+                forked: false,
+            });
+        }
+        ledger
+            .note_core_start(&asker(CORE_STARTS), &key, 1_001)
+            .unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert!(!holds(&ledger, 5) && holds(&ledger, 9) && holds(&ledger, 1));
+        assert!(holds(&ledger, CORE_STARTS));
+    }
+
     /// The deadline of a letter to another machine runs only while that
     /// machine is reachable: two hours away count nothing, and the letter
     /// turns undelivered 60 reachable minutes after it was sent; then the
@@ -1337,7 +1426,8 @@ mod tests {
         let mut ledger = letter_to("local", 0);
         let address =
             crate::address::CoreAddress::new("mini", crate::address::CoreItem::Agent, "agent-7");
-        ledger.letters[0].recipient = Actor::core(address, "Mac mini", "agent-7", "local");
+        let (mini, studio) = ("a".repeat(64), "b".repeat(64));
+        ledger.letters[0].recipient = Actor::core(address, &mini, "Mac mini", "agent-7", "local");
         assert_eq!(ledger.letters[0].recipient.reach(), "core:mini");
         assert_eq!(ledger.letters[0].recipient.machine(), "mini");
         let both = |core: bool| -> Reach {
@@ -1350,24 +1440,20 @@ mod tests {
         ledger.expire(189 * MINUTE);
         assert_eq!(ledger.letters[0].state, State::Pending);
 
+        // Another connection settles nothing, whatever device id it says.
         assert!(!ledger.settle_core(
             "letter-1",
-            "studio",
-            "hide:core:Studio:worker",
-            189 * MINUTE
-        ));
-        assert!(ledger.settle_core(
-            "letter-1",
-            "mini",
+            &studio,
             "hide:core:Mac mini:worker",
             189 * MINUTE
         ));
+        assert!(ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:worker", 189 * MINUTE));
         let letter = &ledger.letters[0];
         assert_eq!(letter.state, State::Delivered);
         assert_eq!(letter.recipient.name, "hide:core:Mac mini:worker");
         assert_eq!(letter.recipient.reach(), "core:mini", "the same agent");
         assert!(letter.waiting_answer && letter.finished_at_unix_ms.is_none());
-        assert!(!ledger.settle_core("letter-1", "mini", "hide:core:Mac mini:other", 190 * MINUTE));
+        assert!(!ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:other", 190 * MINUTE));
         ledger.observe_reach(&both(true), 190 * MINUTE);
         assert!(ledger.node_clocks.is_empty());
         ledger.validate().unwrap();

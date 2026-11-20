@@ -2340,9 +2340,13 @@ impl Runtime {
                     level == crate::access::Level::Act && current.same_identity(actor)
                 });
         }
-        // Another core's agent acts while its machine stands (D-72).
+        // Another core's agent acts as the caller its identity was made
+        // of, its machine's connection id and its slot, while the machine
+        // on that connection stands (D-72). What it asks is judged again
+        // where it applies (`core_command_current`).
         if actor.core_address().is_some() {
-            return caller == actor.pane_id && self.core_actor_current(actor);
+            return crate::engine::tokens::session_digest(caller) == actor.session
+                && self.core_actor_current(actor);
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())

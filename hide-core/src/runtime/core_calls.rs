@@ -42,6 +42,9 @@ use crate::workspace_control::Context;
 /// The other machine cannot be asked now: it is not connected.
 const MACHINE_UNAVAILABLE: &str = "machine_unavailable";
 
+/// Two paired machines say the device id a `core:` name carries.
+const DEVICE_AMBIGUOUS: &str = "device_ambiguous";
+
 #[derive(Default)]
 pub(in crate::runtime) struct CoreLetters {
     /// The connection to the other cores; none in a core no daemon gave one.
@@ -103,7 +106,7 @@ impl Runtime {
         }
     }
 
-    /// The machines this core is paired with, by device id, for the
+    /// The machines this core is paired with, by connection id, for the
     /// store's upkeep; `None` until the daemon told them, so a start ends
     /// nothing before it knows the list.
     pub(crate) fn delivery_core_machines(&self) -> Option<Vec<String>> {
@@ -112,7 +115,7 @@ impl Runtime {
                 .navigator
                 .peers
                 .iter()
-                .map(|machine| machine.device_id.clone())
+                .map(|machine| machine.key.clone())
                 .collect()
         })
     }
@@ -163,23 +166,52 @@ impl Runtime {
             .ok_or_else(|| MACHINE_NOT_PERMITTED.to_owned())
     }
 
+    /// The one paired machine that says device id `device`. A device id is
+    /// what a machine says of itself, so two connections may say the same
+    /// one, as `hide device list` shows them; a `core:` name then names
+    /// neither, and what was stored for one of them stays its own
+    /// (`core_machine`).
     pub(super) fn peer_on(&self, device: &str) -> Result<&PeerMachine, String> {
+        let mut named = self
+            .snapshot
+            .navigator
+            .peers
+            .iter()
+            .filter(|machine| machine.device_id == device);
+        match (named.next(), named.next()) {
+            (Some(machine), None) => Ok(machine),
+            (Some(_), Some(_)) => Err(DEVICE_AMBIGUOUS.into()),
+            (None, _) => Err(MACHINE_NOT_PERMITTED.into()),
+        }
+    }
+
+    /// The paired machine `actor` is an agent of: the one on the connection
+    /// its identity was made on (`Actor::core_of`), while it says the
+    /// device id the identity names.
+    fn core_machine(&self, actor: &Actor) -> Option<&PeerMachine> {
+        let address = actor.core_address()?;
         self.snapshot
             .navigator
             .peers
             .iter()
-            .find(|machine| machine.device_id == device)
-            .ok_or_else(|| MACHINE_NOT_PERMITTED.to_owned())
+            .find(|machine| machine.device_id == address.device && actor.core_of(&machine.key))
     }
 
     /// The agent `party` of `machine`, as this core knows it.
     pub(super) fn core_actor(&self, machine: &PeerMachine, party: &Party) -> Actor {
         Actor::core(
             CoreAddress::new(&machine.device_id, party.item, &party.id),
+            &machine.key,
             &machine.name,
             &party.name,
             self.node.as_str(),
         )
+    }
+
+    /// The caller `actor`, an agent of the core on `machine`, acts as
+    /// (`Actor::core_caller`): kept with what it asked until that applies.
+    fn core_caller(machine: &PeerMachine, actor: &Actor) -> String {
+        Actor::core_caller(&machine.key, &actor.pane_id)
     }
 
     /// No pane's context holds another core's authority: its machine's
@@ -193,11 +225,88 @@ impl Runtime {
         }
     }
 
-    /// Whether another core's agent still acts here: its machine stands in
-    /// at least one direction (`Runtime::code_owned_authority_current`).
+    /// Whether another core's agent still acts here: the machine on its
+    /// connection stands in at least one direction
+    /// (`Runtime::code_owned_authority_current`). What it may do there is
+    /// `core_command_current`'s to say.
     pub(super) fn core_actor_current(&self, actor: &Actor) -> bool {
-        self.peer_on(actor.machine())
-            .is_ok_and(|machine| access::core_standing(machine).is_some())
+        self.core_machine(actor)
+            .is_some_and(|machine| access::core_standing(machine).is_some())
+    }
+
+    /// What `command` of an agent of the core on `machine` is, to a
+    /// machine that only answers.
+    fn core_ask(&self, machine: &PeerMachine, command: &Command) -> CoreAsk {
+        match command {
+            // The store lets only a letter's recipient answer it.
+            Command::Reply { .. } => CoreAsk::Reply,
+            // The result report of a start this core's agent asked that
+            // connection for.
+            Command::Send { target, kind, .. }
+                if kind == "report"
+                    && self.delivery_ledger.as_ref().is_ok_and(|ledger| {
+                        ledger.core_starts.iter().any(|start| {
+                            start.key == machine.key
+                                && core_party(ledger, &start.origin).id == *target
+                        })
+                    }) =>
+            {
+                CoreAsk::ResultReport
+            }
+            _ => CoreAsk::First,
+        }
+    }
+
+    /// Judges `command` of an agent of the core on `machine` by how that
+    /// machine stands now. The one table for the moment a command is
+    /// prepared and the moment it applies (D-72): a grant paused or taken
+    /// back in between refuses what it alone allowed.
+    fn core_inbound_admit(&self, machine: &PeerMachine, command: &Command) -> Result<(), String> {
+        let standing = access::core_standing(machine).ok_or(MACHINE_NOT_PERMITTED)?;
+        match command {
+            Command::Agents { .. } => Ok(access::core_call_admit(
+                standing,
+                &Asked::Delivery(Box::new(command.clone())),
+            )?),
+            _ => Ok(access::core_admit(
+                standing,
+                command,
+                self.core_ask(machine, command),
+            )?),
+        }
+    }
+
+    /// Whether another core's agent `actor` still runs `command` here,
+    /// read again just before it applies.
+    pub(crate) fn core_command_current(
+        &self,
+        actor: &Actor,
+        command: &Command,
+    ) -> Result<(), String> {
+        let machine = self.core_machine(actor).ok_or(MACHINE_NOT_PERMITTED)?;
+        self.core_inbound_admit(machine, command)
+    }
+
+    /// Whether another core's agent `actor` still changes this core's
+    /// agents with `mutation`, read again just before it applies: a start
+    /// by the table that admitted it, and every other change, a step of
+    /// such a start, only from a machine that opens this one.
+    pub(crate) fn core_mutation_current(
+        &self,
+        actor: &Actor,
+        mutation: &crate::coordination::Mutation,
+    ) -> Result<(), String> {
+        let machine = self.core_machine(actor).ok_or(MACHINE_NOT_PERMITTED)?;
+        match mutation {
+            crate::coordination::Mutation::Reserve { command, .. } => self.core_inbound_admit(
+                machine,
+                &Command::Agents {
+                    command: command.clone(),
+                },
+            ),
+            _ if access::core_standing(machine) == Some(access::CoreStanding::Opens) => Ok(()),
+            _ => Err(MACHINE_NOT_PERMITTED.into()),
+        }
     }
 
     /// Whether `sender`'s letter `command` still goes to `recipient`, an
@@ -222,7 +331,10 @@ impl Runtime {
         if sender.code_owned() {
             return Err(MACHINE_NOT_PERMITTED.into());
         }
-        let machine = self.peer_on(recipient.machine())?;
+        // The machine on the connection the recipient's identity was made
+        // on, so a letter kept for one connection never turns to another
+        // that says the same device id.
+        let machine = self.core_machine(recipient).ok_or(MACHINE_NOT_PERMITTED)?;
         let standing = access::core_standing_there(machine).ok_or(MACHINE_NOT_PERMITTED)?;
         // The result report of a start that machine's agent asked for
         // here: that agent is the origin of the work, registered when it
@@ -258,7 +370,13 @@ impl Runtime {
         };
         let address = address.map_err(|_| "target_unavailable".to_owned())?;
         let machine = self.peer_on(address.device)?;
-        let recipient = Actor::core(address, &machine.name, address.id, self.node.as_str());
+        let recipient = Actor::core(
+            address,
+            &machine.key,
+            &machine.name,
+            address.id,
+            self.node.as_str(),
+        );
         self.core_send_admitted(sender, &recipient, command)?;
         if *force {
             // No composer of another core's pane is read from here.
@@ -271,12 +389,9 @@ impl Runtime {
 
     /// The letters waiting to go to machine `key`, as its core takes them.
     pub(crate) fn core_outbox(&mut self, key: &str) -> Vec<Letter> {
-        let Ok(device) = self
-            .peer_keyed(key)
-            .map(|machine| machine.device_id.clone())
-        else {
+        if self.peer_keyed(key).is_err() {
             return Vec::new();
-        };
+        }
         let Ok(ledger) = self.delivery_state() else {
             return Vec::new();
         };
@@ -286,10 +401,11 @@ impl Runtime {
             {
                 continue;
             }
+            // Only what was written to an agent of this connection.
             let Some(address) = letter
                 .recipient
                 .core_address()
-                .filter(|address| address.device == device)
+                .filter(|_| letter.recipient.core_of(key))
             else {
                 continue;
             };
@@ -364,7 +480,7 @@ impl Runtime {
                 client: self.delivery_client.clone()?,
                 effect: Effect::CoreSettled {
                     id: id.to_owned(),
-                    machine: machine.device_id,
+                    key: machine.key,
                     name: Actor::core_name(&machine.name, &recipient.name),
                 },
             }),
@@ -374,10 +490,7 @@ impl Runtime {
                     ledger.letters.iter().any(|letter| {
                         letter.id == id
                             && letter.state == State::Pending
-                            && letter
-                                .recipient
-                                .core_address()
-                                .is_some_and(|address| address.device == machine.device_id)
+                            && letter.recipient.core_of(&machine.key)
                     })
                 });
                 if waits {
@@ -396,9 +509,8 @@ impl Runtime {
         letter: Letter,
     ) -> Result<Taking, String> {
         let machine = self.peer_keyed(key)?.clone();
-        let standing = access::core_standing(&machine).ok_or(MACHINE_NOT_PERMITTED)?;
         let ledger = self.delivery_state()?;
-        let (actor, command, ask, answered) = match letter.reply_to {
+        let (actor, command, answered) = match letter.reply_to {
             Some(original) => {
                 // It answers a letter this core sent that machine, whose
                 // recipient is the agent that answers now.
@@ -406,12 +518,7 @@ impl Runtime {
                     .letters
                     .iter()
                     .find(|stored| stored.id == original)
-                    .filter(|stored| {
-                        stored
-                            .recipient
-                            .core_address()
-                            .is_some_and(|address| address.device == machine.device_id)
-                    })
+                    .filter(|stored| stored.recipient.core_of(&machine.key))
                     .ok_or("letter_unavailable")?;
                 let actor = Actor {
                     name: Actor::core_name(&machine.name, &letter.from.name),
@@ -423,17 +530,10 @@ impl Runtime {
                     body: letter.body,
                     now: letter.now,
                 };
-                (actor, command, CoreAsk::Reply, Some(stored.sender.clone()))
+                (actor, command, Some(stored.sender.clone()))
             }
             None => {
                 let actor = self.core_actor(&machine, &letter.from);
-                // The result report of a start this core's agent asked
-                // that machine for.
-                let reports = letter.kind == "report"
-                    && ledger.core_starts.iter().any(|start| {
-                        start.machine == machine.device_id
-                            && core_party(&ledger, &start.origin).id == letter.to
-                    });
                 let command = Command::Send {
                     target: letter.to,
                     intent: letter.intent,
@@ -442,21 +542,16 @@ impl Runtime {
                     now: letter.now,
                     force: false,
                 };
-                let ask = if reports {
-                    CoreAsk::ResultReport
-                } else {
-                    CoreAsk::First
-                };
-                (actor, command, ask, None)
+                (actor, command, None)
             }
         };
-        access::core_admit(standing, &command, ask)?;
+        self.core_inbound_admit(&machine, &command)?;
         let intent = match &command {
             Command::Send { intent, .. } | Command::Reply { intent, .. } => intent.clone(),
             _ => String::new(),
         };
         let context = self.core_context(&actor);
-        let caller = actor.pane_id.clone();
+        let caller = Self::core_caller(&machine, &actor);
         let node = self.node.as_str().to_owned();
         let prepared =
             self.prepare_as(&node, &caller, context, Proven::Now, actor.clone(), command)?;
@@ -496,7 +591,7 @@ impl Runtime {
         let node = self.node.as_str().to_owned();
         match asked {
             Asked::Delivery(command) => {
-                let caller = actor.pane_id.clone();
+                let caller = Self::core_caller(&machine, &actor);
                 self.prepare_as(&node, &caller, context, Proven::Now, actor, *command)
                     .map(|prepared| Call::Delivery(Box::new(prepared)))
             }
@@ -557,7 +652,7 @@ impl Runtime {
                         Agents::Show {
                             id: address.id.to_owned(),
                         },
-                        None,
+                        false,
                     )
                 }
             },
@@ -570,7 +665,7 @@ impl Runtime {
                     live: *live,
                     machine: None,
                 },
-                None,
+                false,
             ),
             Agents::Spawn {
                 parent: None,
@@ -589,7 +684,7 @@ impl Runtime {
                 if let Agents::Spawn { machine, .. } = &mut there {
                     *machine = None;
                 }
-                (machine.clone(), there, Some(machine.clone()))
+                (machine.clone(), there, true)
             }
             _ => return Ok(None),
         };
@@ -598,6 +693,8 @@ impl Runtime {
             actor,
             Asked::Delivery(Box::new(Command::Agents { command: asked })),
         )?;
+        // A start is remembered by the connection it was asked on.
+        let start = start.then(|| forward.key.clone());
         Ok(Some((forward, start)))
     }
 

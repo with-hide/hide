@@ -1353,11 +1353,14 @@ Like `hide agent catalog`, it needs the running daemon and a Hide credential but
 Two paired machines each run a core of their own ([ARCHITECTURE.md: The peer connection](ARCHITECTURE.md#the-peer-connection)), and an agent of one reaches the other's agents through the grant between them (PRD device-connect-iroh D-71, D-72).
 What the other core keeps is named `core:<device>:agent:<registration id>` or `core:<device>:pane:<pane id>`, read beside the `remote:` and `guest:` forms in `hide-node-link/src/address.rs` and nowhere else.
 An agent of another core enters this core at the boundary an external tool does, as `Actor::core`: `hide:core:<device>:agent|pane:<id>`, named `hide:core:<machine's name>:<the agent's name there>`, of kind `hide`, on this core's machine, one identity per agent whatever it or its machine is called later.
+The identity belongs to the connection its machine proved, not to the device id the machine says: its session is the digest of the caller it acts as, the connection id then that slot (`Actor::core_caller`), so the agents of two connections that say one device id are two identities, and a letter kept, a reply, a settle and a remembered start of one are never the other's.
+A `core:` name whose device id two paired connections say names neither and is refused `device_ambiguous`.
 A letter it wrote shows that name, so its recipient reads which machine wrote it.
 
 `hide_core::access` judges it from where its machine stands (`core_standing`), which the core reads from the paired machines the daemon told it in one event (`peer_machines`); the daemon filters nothing.
 A machine this one opened itself to (its grant here is active) runs what a tool at Act runs (`core_admit`, `core_call_admit`): it writes letters, reads with `hide agent list --machine <device>`, `hide agent show`, `hide agent read` and `hide pane read`, and starts agents with `hide agent spawn --machine <device>` and no `--parent`.
 A machine that is only opened (this machine's grant there is active, and none here) answers the letters it got and sends the `report` of a start this machine's agent asked it for, and writes nothing first: the rest is refused `machine_not_permitted`, where it is written and again by the core that would keep it.
+The receiving core judges it twice with the same table (`core_inbound_admit`): when the command is prepared and again just before it is stored or changes anything (`core_command_current`, `core_mutation_current`), so a first letter or a start prepared under a grant that was paused or taken back meanwhile is refused there, even while the other direction still stands.
 With grants both ways both write.
 Only an agent writes to another core: a tool, Hide's own identities and another core's agent are refused `machine_not_permitted`, so nothing is passed on through a third machine.
 `hide pane send` types into no pane of another core and is refused `machine_not_permitted`; a read or a start asked while the two are not connected is refused `machine_unavailable`.
@@ -1367,7 +1370,8 @@ The daemon carries it on the stream the two cores share ([ARCHITECTURE.md: The t
 A letter is sent again until it is answered, and the receiving core keeps it once, by its sender and intent.
 A refusal there (its ledger's cap, an intent conflict, a recipient that is gone) is answered with its reason: the letter ends `undelivered`, its sender gets one note from `hide:delivery` with the reason (`letter-undelivered:<id>`), and the letters behind it go on.
 
-A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked and where (`ledger::CoreStart`, at most 256), which is what lets that machine's result report in.
+A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked and on which connection (`ledger::CoreStart`, at most 256), saved before the ask leaves, which is what lets that machine's result report in.
+Asked again, the record takes the newest place and time; at the cap the oldest record whose asker ended goes, since no report reaches an ended agent, and while every asker may still take its report the new start is refused `capacity` and nothing is dropped, so a long mission's report is not lost to newer starts.
 When a pairing ends, the store's upkeep ends that machine's identities here and forgets the starts asked of it (`coordination::end_gone_cores`), as it does for a gone tool.
 
 A Conductor another machine's agent started with no parent reports to that agent: when its mission closes, by its own `hide mission close` or by Hide once every node is done, the core sends that origin the mission's report as a `report` letter, the Conductor's own (`hide-core/src/runtime/mission_report.rs`).

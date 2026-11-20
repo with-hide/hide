@@ -261,6 +261,7 @@ mod tests {
         let lead = agent("w1:p2");
         let there = Actor::core(
             CoreAddress::new("macbook", CoreItem::Agent, "agent-7"),
+            &"a".repeat(64),
             "MacBook",
             "planner",
             "local",

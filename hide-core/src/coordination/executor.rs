@@ -1002,10 +1002,11 @@ pub(crate) fn register_code_owned(
         host_scope: actor.kind.clone(),
         native_machine: actor.kind.clone(),
         // What the identity's session is the digest of: its name, and for
-        // another core's agent its address, which stays whatever the agent
-        // or its machine is called later (`Actor::core`).
+        // another core's agent the caller it acts as, its machine's
+        // connection id and its address (`Actor::core_caller`), which stay
+        // whatever the agent or its machine is called later.
         session: match actor.core_address() {
-            Some(_) => actor.pane_id.clone(),
+            Some(_) => authority.caller.clone(),
             None => actor.name.clone(),
         },
         instance: actor.pane_id.clone(),

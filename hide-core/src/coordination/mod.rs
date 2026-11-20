@@ -2774,11 +2774,10 @@ pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u
 }
 
 /// An agent of another core whose machine this core is paired with no
-/// longer.
+/// longer: none of the connections `machines` is the one its identity was
+/// made on.
 fn core_gone(actor: &Actor, machines: &[String]) -> bool {
-    actor
-        .core_address()
-        .is_some_and(|address| !machines.iter().any(|held| held == address.device))
+    actor.core_address().is_some() && !machines.iter().any(|key| actor.core_of(key))
 }
 
 /// Whether the ledger holds anything of a machine no longer paired that
@@ -2797,7 +2796,7 @@ pub(crate) fn cores_left_behind(ledger: &Ledger, machines: &[String]) -> bool {
         || ledger
             .core_starts
             .iter()
-            .any(|start| !machines.contains(&start.machine))
+            .any(|start| !machines.contains(&start.key))
 }
 
 /// Ends what the agents of machines no longer paired keep in the ledger

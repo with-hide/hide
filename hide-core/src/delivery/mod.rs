@@ -153,22 +153,41 @@ impl Actor {
     /// `machine` that machine's name and `name` the agent's name there, so a
     /// letter's recipient reads which machine wrote it. Its pane slot is the
     /// address, which names one agent of one machine whatever either is
-    /// called later, and its session is of that slot, so the same agent is
-    /// the same identity however it was named when it was written to.
+    /// called later, and its session is of that slot on the connection
+    /// `key` ([`Self::core_caller`]), so the same agent is the same identity
+    /// however it was named when it was written to, and an agent of another
+    /// connection that says the same device id is another identity.
     pub fn core(
         address: crate::address::CoreAddress<'_>,
+        key: &str,
         machine: &str,
         name: &str,
         node: &str,
     ) -> Self {
         let pane_id = format!("{HIDE_PREFIX}{address}");
         Self {
-            session: crate::engine::tokens::session_digest(&pane_id),
+            session: crate::engine::tokens::session_digest(&Self::core_caller(key, &pane_id)),
             name: Self::core_name(machine, name),
             pane_id,
             kind: HIDE_KIND.into(),
             device_id: node.into(),
         }
+    }
+
+    /// The caller an agent of another core acts as here, which its session
+    /// is the digest of: the connection id its machine proved, then its
+    /// slot. A device id is only what a machine says of itself, and two
+    /// connections may say the same one; the connection id is what keeps
+    /// their agents, and what is stored for them, apart.
+    pub fn core_caller(key: &str, pane_id: &str) -> String {
+        format!("{key}:{pane_id}")
+    }
+
+    /// Whether this is an agent of the core on connection `key`.
+    pub fn core_of(&self, key: &str) -> bool {
+        self.core_address().is_some()
+            && self.session
+                == crate::engine::tokens::session_digest(&Self::core_caller(key, &self.pane_id))
     }
 
     /// The agent on another machine's core this identity stands for.

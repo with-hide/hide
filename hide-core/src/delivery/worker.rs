@@ -56,7 +56,7 @@ pub struct Prepared {
 /// asks.
 struct Forwarded {
     forward: crate::core_calls::Forward,
-    /// A start: the machine it is asked of. Its asker is remembered first,
+    /// A start: the connection it is asked on. Its asker is remembered first,
     /// so the result report of what starts there finds it
     /// (`ledger::CoreStart`).
     start: Option<String>,
@@ -235,12 +235,12 @@ impl Prepared {
             Ok(answer)
         } else if let Some(Forwarded { forward, start }) = self.forward {
             match start {
-                Some(machine) => self
+                Some(key) => self
                     .client
                     .submit(
                         Effect::CoreStart {
                             origin: self.actor,
-                            machine,
+                            key,
                         },
                         timeout,
                     )
@@ -394,11 +394,11 @@ pub(crate) enum Effect {
         recipient: Actor,
         owed: hide_agent_hooks::owed::Owed,
     },
-    /// The core of `machine` took letter `id` for the agent it calls
-    /// `name` (`Ledger::settle_core`).
+    /// The core on connection `key` took letter `id` for the agent it
+    /// calls `name` (`Ledger::settle_core`).
     CoreSettled {
         id: String,
-        machine: String,
+        key: String,
         name: String,
     },
     /// Letter `id`, which an agent of another core sent, is `core_id` in
@@ -407,10 +407,12 @@ pub(crate) enum Effect {
         id: String,
         core_id: String,
     },
-    /// `origin` asks `machine`'s core for a start (`Ledger::note_core_start`).
+    /// `origin` asks the core on connection `key` for a start
+    /// (`Ledger::note_core_start`), refused `capacity` when the ledger can
+    /// remember no more.
     CoreStart {
         origin: Actor,
-        machine: String,
+        key: String,
     },
 }
 
@@ -946,16 +948,16 @@ fn apply(
             let changed = !confirmed.is_empty();
             return Ok((json!(confirmed), changed));
         }
-        Effect::CoreSettled { id, machine, name } => {
-            let settled = ledger.settle_core(id, machine, name, now);
+        Effect::CoreSettled { id, key, name } => {
+            let settled = ledger.settle_core(id, key, name, now);
             return Ok((json!({ "settled": settled }), settled));
         }
         Effect::CoreName { id, core_id } => {
             ledger.name_core_letter(id, core_id);
             return Ok((Value::Null, false));
         }
-        Effect::CoreStart { origin, machine } => {
-            ledger.note_core_start(origin, machine, now);
+        Effect::CoreStart { origin, key } => {
+            ledger.note_core_start(origin, key, now)?;
             return Ok((Value::Null, false));
         }
         Effect::Deferred { id, recipient } => {
@@ -1436,10 +1438,15 @@ fn current(
                     // Only the core's code-owned callers
                     // hold this authority; neither has a pane to
                     // re-check.
-                    return guard
-                        .code_owned_authority_current(&authority.caller, actor)
-                        .then_some(())
-                        .ok_or_else(|| "caller_identity_changed".into());
+                    if !guard.code_owned_authority_current(&authority.caller, actor) {
+                        return Err("caller_identity_changed".into());
+                    }
+                    // What another core's agent changes is judged again
+                    // by how its machine stands now (D-72).
+                    if actor.core_address().is_some() {
+                        guard.core_mutation_current(actor, mutation)?;
+                    }
+                    return Ok(());
                 }
                 let context = guard
                     .workspace_control_query(&actor.device_id, &authority.caller, Query::Info)
@@ -1478,6 +1485,11 @@ fn current(
                     } else if actor.code_owned() {
                         if !guard.code_owned_authority_current(&authority.caller, actor) {
                             return Err("caller_identity_changed".into());
+                        }
+                        // What another core's agent asks is judged again
+                        // by how its machine stands now (D-72).
+                        if actor.core_address().is_some() {
+                            guard.core_command_current(actor, command)?;
                         }
                     } else {
                         // The caller is the agent's own pane.

@@ -406,11 +406,34 @@ fn a_machine_that_is_only_opened_reports_a_start_and_writes_nothing_first() {
         .submit(
             Effect::CoreStart {
                 origin,
-                machine: MINI.into(),
+                key: mini_key(),
             },
             WITHIN,
         )
         .unwrap();
+    // The ledger then remembers as many starts as it can, every asker
+    // still alive: one more is refused before it leaves, and the report of
+    // the first, a mission that ran through all of them, is still taken.
+    let asker = |n: usize| crate::delivery::Actor {
+        pane_id: format!("w9:p{n}"),
+        name: format!("asker-{n}"),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest(&format!("asker-{n}")),
+    };
+    let start = |n: usize| {
+        client.submit(
+            Effect::CoreStart {
+                origin: asker(n),
+                key: mini_key(),
+            },
+            WITHIN,
+        )
+    };
+    for n in 1..crate::delivery::ledger::CORE_STARTS {
+        start(n).unwrap();
+    }
+    assert_eq!(start(0).unwrap_err(), "capacity");
     assert_eq!(
         asked(wire("report", "result", &mac_id)),
         Outcome::Taken {
@@ -471,7 +494,7 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
         .submit(
             Effect::CoreStart {
                 origin: asker,
-                machine: MINI.into(),
+                key: mini_key(),
             },
             WITHIN,
         )
@@ -480,7 +503,7 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
         let guard = pair.mini.runtime.lock().unwrap();
         let origin = guard.core_actor(guard.peer_on(MAC).unwrap(), &worker(&pair.mac));
         let authority = crate::delivery::worker::Authority {
-            caller: origin.pane_id.clone(),
+            caller: crate::delivery::Actor::core_caller(&mac_key(), &origin.pane_id),
             context: guard.core_context(&origin),
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
@@ -707,4 +730,193 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         }),
         Err("machine_unavailable".into())
     );
+}
+
+/// A device id is what a machine says of itself, so a second connection may
+/// say the one a paired machine says. What was stored for one connection
+/// stays its own: the other is handed none of its letters, settles and
+/// answers none, its agents are other identities, and a `core:` name two
+/// connections claim names neither.
+#[test]
+fn two_connections_that_say_one_device_id_share_no_letter_answer_or_identity() {
+    let pair = Pair::start();
+    let there = agent_there(MINI, &pair.mini.ids["worker"]);
+    let sent = pair
+        .mac
+        .agent("worker", send(&there, "ask", "request"))
+        .unwrap();
+    let sent_id = sent["id"].as_str().unwrap().to_owned();
+
+    // A second connection that says the Mac mini's device id, paired both
+    // ways and connected.
+    let other_key = "c3".repeat(32);
+    let machine = |key: &str| {
+        json!({
+            "key": key, "device_id": MINI, "name": "Mac mini",
+            "opens": "active", "opened_by": "active",
+            "connected": true, "path": "direct", "reason": null, "update": null,
+        })
+    };
+    let event = serde_json::to_vec(&json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "peer_machines",
+        "payload": { "machines": [machine(&mini_key()), machine(&other_key)] },
+    }))
+    .unwrap();
+    pair.mac.runtime.lock().unwrap().dispatch_json(&event);
+    let outbox = |key: &str| pair.mac.runtime.lock().unwrap().core_outbox(key).len();
+
+    // The letter kept for the first connection goes to it alone, and the
+    // other's "taken" or "refused" moves nothing of it.
+    assert_eq!((outbox(&other_key), outbox(&mini_key())), (0, 1));
+    for outcome in [
+        Outcome::Taken {
+            recipient: worker(&pair.mini),
+        },
+        Outcome::Refused {
+            reason: "capacity".into(),
+        },
+    ] {
+        let settle = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .core_letter_answered(&other_key, &sent_id, outcome);
+        if let Some(settle) = settle {
+            settle.run(WITHIN).unwrap();
+        }
+    }
+    assert_eq!(letter(&pair.mac, &sent_id).state, State::Pending);
+    assert_eq!(outbox(&mini_key()), 1, "it still waits to go");
+
+    // Only the connection it was written to answers it.
+    let wire = |id: &str, intent: &str, reply_to: Option<&str>| Letter {
+        id: id.into(),
+        from: worker(&pair.mini),
+        to: pair.mac.ids["worker"].clone(),
+        reply_to: reply_to.map(str::to_owned),
+        kind: if reply_to.is_some() {
+            "reply"
+        } else {
+            "request"
+        }
+        .into(),
+        intent: intent.into(),
+        body: "done".into(),
+        now: false,
+    };
+    let asked = |key: &str, letter: Letter| {
+        let prepared = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(key, letter);
+        take(prepared, WITHIN).unwrap()
+    };
+    assert_eq!(
+        asked(&other_key, wire("letter-5", "answer", Some(&sent_id))),
+        Outcome::Refused {
+            reason: "letter_unavailable".into()
+        }
+    );
+    assert!(matches!(
+        asked(&mini_key(), wire("letter-5", "answer", Some(&sent_id))),
+        Outcome::Taken { .. }
+    ));
+
+    // The same agent id on the two connections is two identities.
+    for (key, id, intent) in [
+        (mini_key(), "letter-6", "one"),
+        (other_key.clone(), "letter-7", "two"),
+    ] {
+        assert!(matches!(
+            asked(&key, wire(id, intent, None)),
+            Outcome::Taken { .. }
+        ));
+    }
+    let kept = letters(&pair.mac);
+    let from = |intent: &str| {
+        kept.iter()
+            .find(|letter| letter.intent == intent)
+            .unwrap()
+            .sender
+            .clone()
+    };
+    assert_eq!(from("one").pane_id, from("two").pane_id);
+    assert!(!from("one").same_identity(&from("two")));
+    assert!(from("one").core_of(&mini_key()) && from("two").core_of(&other_key));
+
+    // A name two connections claim names neither.
+    assert_eq!(
+        pair.mac
+            .agent("worker", send(&there, "again", "request"))
+            .unwrap_err(),
+        "device_ambiguous"
+    );
+}
+
+/// D-72: what another machine's agent asks is judged again where it
+/// applies. A grant taken back after a first letter, or a step of a start,
+/// was prepared refuses it there, while the other direction still stands.
+#[test]
+fn a_grant_taken_back_after_an_ask_was_prepared_refuses_it_where_it_applies() {
+    let pair = Pair::start();
+    // Each machine opens the other.
+    pair.paired(true, true, true);
+    let first = || Letter {
+        id: "letter-9".into(),
+        from: worker(&pair.mini),
+        to: pair.mac.ids["worker"].clone(),
+        reply_to: None,
+        kind: "request".into(),
+        intent: "first".into(),
+        body: "please look".into(),
+        now: false,
+    };
+    let prepare = || {
+        pair.mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(&mini_key(), first())
+    };
+    let prepared = prepare();
+    assert!(prepared.is_ok());
+    // A step of a start the Mac mini's agent asks for here: its own record
+    // as the origin of what it starts.
+    let (client, authority, origin) = {
+        let guard = pair.mac.runtime.lock().unwrap();
+        let origin = guard.core_actor(guard.peer_on(MINI).unwrap(), &worker(&pair.mini));
+        let authority = crate::delivery::worker::Authority {
+            caller: crate::delivery::Actor::core_caller(&mini_key(), &origin.pane_id),
+            context: guard.core_context(&origin),
+            also_reads: Vec::new(),
+            proven: crate::delivery::worker::Proven::Now,
+        };
+        (guard.delivery_client.clone().unwrap(), authority, origin)
+    };
+    let registers =
+        || crate::coordination::executor::register_code_owned(&client, &authority, &origin);
+
+    // The MacBook takes back the Mac mini's grant and still opens the Mac
+    // mini itself.
+    pair.paired(true, false, true);
+    assert_eq!(
+        take(prepared, WITHIN).unwrap(),
+        Outcome::Refused {
+            reason: "machine_not_permitted".into()
+        }
+    );
+    assert!(letters(&pair.mac).is_empty());
+    assert_eq!(registers().unwrap_err(), "machine_not_permitted");
+
+    // Granted again, the same asks apply.
+    pair.paired(true, true, true);
+    assert!(matches!(
+        take(prepare(), WITHIN).unwrap(),
+        Outcome::Taken { .. }
+    ));
+    registers().unwrap();
 }
