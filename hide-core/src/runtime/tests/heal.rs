@@ -263,17 +263,18 @@ fn a_healed_agent_at_work_is_told_to_go_on_only_when_it_is_a_child_or_a_particip
     for actor in [&conductor, &device_child] {
         observe(&mut runtime, actor);
     }
-    // The Conductor's one child is back in its pane, so its count goes too;
-    // the child at rest is still healing, so its parent's count waits.
+    // The Conductor's one child reported after its resume, so its count
+    // goes too; the child at rest is still healing, so its parent's waits.
+    runtime.hook_after_heal(DEVICE, "w1:p5", true);
     assert_eq!(
         admit(&mut runtime),
         [
-            ("w1:p3".to_owned(), line.clone()),
-            (device_pane.clone(), line),
             (
                 "w1:p3".to_owned(),
                 format!("되살림: 1명 · agent {device_pane}")
             ),
+            ("w1:p3".to_owned(), line.clone()),
+            (device_pane.clone(), line),
         ]
     );
     assert!(runtime.heal_letters_owed().is_empty());
@@ -424,17 +425,18 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
     runtime.note_healing(&node, &[], 2_000);
     assert!(admit(&mut runtime).is_empty());
     runtime.drive_heal_letters(1_000 + 24 * 60 * 60 * 1000);
+    // One entry for the parent, with the child that came back and the one
+    // that could not; the worker is its Conductor's `worker_ended`.
     let owed = runtime.heal_letters_owed();
-    assert_eq!(owed.len(), 2);
-    assert!(owed[0].starts_with("children:agent-9:") && owed[0].ends_with(":1"));
-    assert_eq!(owed[1], "resumed:agent-9:1000");
+    assert_eq!(owed.len(), 1, "{owed:?}");
+    assert!(owed[0].starts_with("children:agent-9:") && owed[0].ends_with(":2"));
     observe(&mut runtime, &parent);
     assert_eq!(
         admit(&mut runtime),
-        [
-            ("w1:p9".to_owned(), "Could not wake agent w1:p2".to_owned()),
-            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
-        ]
+        [(
+            "w1:p9".to_owned(),
+            "Resumed: 1 · agent w1:p1\nCould not wake agent w1:p2".to_owned()
+        )]
     );
 }
 
@@ -474,14 +476,63 @@ fn a_resumed_agent_reporting_before_the_session_pass_is_still_told_once() {
     assert_eq!(
         admit(&mut runtime),
         [
+            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
             (
                 "w1:p1".to_owned(),
                 "Carry on with the work that was cut off.".to_owned()
             ),
-            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
         ]
     );
     assert!(admit(&mut runtime).is_empty(), "owed once");
+}
+
+/// B18: a parent's count waits for every child's outcome, not for the
+/// child to show in its pane: one child reports after its resume, the
+/// other shows in its pane and then its resume fails; the parent gets one
+/// letter, the first counted back and the second not woken.
+#[test]
+fn a_parent_hears_once_every_child_has_an_outcome() {
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    let parent = actor(&node, "w1:p9", "s-9");
+    let back = actor(&node, "w1:p1", "s-1");
+    let failed = actor(&node, "w1:p2", "s-2");
+    registered(
+        &mut runtime,
+        vec![
+            record("agent-9", &parent, None),
+            record("agent-1", &back, Some("agent-9")),
+            record("agent-2", &failed, Some("agent-9")),
+        ],
+    );
+    observe(&mut runtime, &parent);
+    // The restore says both resumes, and the pass reads both healing.
+    let fake = crate::engine::fake::FakeEngine::absent();
+    let engine = fake.engine();
+    fake.resumed("w1:p1");
+    fake.resumed("w1:p2");
+    runtime.take_heal(&node, engine.as_ref(), 1_000);
+    let both = ["w1:p1".to_owned(), "w1:p2".to_owned()];
+    runtime.note_healing(&node, &both, 1_000);
+    // One reports; the other only shows in its pane, its resume not done.
+    runtime.hook_after_heal(&node, "w1:p1", true);
+    observe(&mut runtime, &back);
+    observe(&mut runtime, &failed);
+    runtime.note_healing(&node, &["w1:p2".to_owned()], 2_000);
+    assert!(due(&mut runtime).is_empty(), "one child has no outcome yet");
+
+    // Its resume fails: the pass ends its registration and the engine
+    // names it healing no more.
+    runtime.heal_not_woken(&["agent-2".to_owned()]);
+    runtime.note_healing(&node, &[], 120_000);
+    assert_eq!(
+        admit(&mut runtime),
+        [(
+            "w1:p9".to_owned(),
+            "Resumed: 1 · agent w1:p1\nCould not wake agent w1:p2".to_owned()
+        )]
+    );
+    assert!(admit(&mut runtime).is_empty(), "once");
 }
 
 /// B17: a registration is owed one line to go on at a time. A second heal
@@ -527,7 +578,9 @@ fn a_second_heal_waits_until_the_first_line_is_admitted() {
     assert!(runtime.heal_pending().is_empty());
     assert!(!runtime.hook_facts.lock().unwrap().cut_pending("w1:p1"));
     // The parent, away, is still owed its count.
-    assert_eq!(runtime.heal_letters_owed(), ["resumed:agent-9:1000"]);
+    let owed = runtime.heal_letters_owed();
+    assert_eq!(owed.len(), 1, "{owed:?}");
+    assert!(owed[0].starts_with("children:agent-9:") && owed[0].ends_with(":1"));
 }
 
 /// B17, B18: a pending heal is about the agent it was cut for. When that

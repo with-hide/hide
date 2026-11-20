@@ -19,14 +19,14 @@
 //! another agent's child is owed the line; an agent at rest is only
 //! reopened, and the operator's own agents are never typed into. The line is
 //! the same whatever cut the work, in the operator's language. Each parent
-//! hears once per heal how many of its children came back
-//! (`Body::Resumed`), once each was seen in its pane, could not be woken or
-//! is healing no more; a child its engine could not resume is said by name
-//! (`Lost::NotWoken`), and a child whose registration ended before its line
-//! could go is said too (`Lost::NotTold`), both in the parent's one entry
-//! of such children (`Body::Children`). A mission worker the engine could
-//! not resume is its Conductor's `worker_ended` raise already, so it is not
-//! said twice.
+//! hears once per heal what became of its children, in its one entry
+//! (`Body::Children`), once each has an outcome: it came back
+//! (`Lost::Back`: it reported after its resume, or its engine is done with
+//! it and its registration stands) or its engine could not resume it
+//! (`Lost::NotWoken`); a child whose registration ended before its line
+//! could go is said there too (`Lost::NotTold`). A mission worker the
+//! engine could not resume is its Conductor's `worker_ended` raise already,
+//! so it is not said twice.
 //!
 //! Every line is owed to a registration, never to a pane, so a line never
 //! reaches another agent that took the pane; it stays owed until the ledger
@@ -62,18 +62,14 @@ pub(crate) const HEAL_ROLE: &str = "heal";
 /// gives up), and an agent at rest says nothing more.
 const HEALING_FOR: u64 = 10 * 60 * 1000;
 
-/// The most children a count names; the rest are only counted.
-const NAMES_SAID: usize = 8;
-
 #[derive(Default)]
 pub(in crate::runtime) struct HealLetters {
     /// The resumes taken and not settled yet, by machine and when taken,
     /// oldest first; one per pane of a machine.
     pending: Vec<Pending>,
     /// The lines owed, one of each kind per live registration: the line to
-    /// go on (`go-on:<id>`), and for a parent its count (`resumed:<id>`)
-    /// and its children lost (`children:<id>`), until the ledger admits
-    /// them.
+    /// go on (`go-on:<id>`), and for a parent what became of its children
+    /// (`children:<id>`), until the ledger admits them.
     owed: BTreeMap<String, Owed>,
     /// The children each parent's count waits on, by the parent's
     /// registration id.
@@ -121,9 +117,7 @@ enum Body {
         parent: Option<String>,
         name: String,
     },
-    /// This many of your children came back, these by name.
-    Resumed { count: usize, names: Vec<String> },
-    /// These children were lost to the heal, oldest first; the ones past
+    /// What became of these children in the heal, oldest first; the ones past
     /// [`CHILDREN_SAID`] only counted. `batch` names this entry's letters
     /// apart from every earlier entry's to the same parent; `told` is how
     /// many of its children were said before.
@@ -137,18 +131,19 @@ enum Body {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lost {
+    /// The child came back.
+    Back,
     /// The child could not be brought back.
     NotWoken,
     /// The child came back but ended before it could be told to go on.
     NotTold,
 }
 
-/// The most lost children a parent's entry names; the rest are counted.
+/// The most children a parent's entry names; the rest are counted.
 const CHILDREN_SAID: usize = 32;
 
 /// A parent's count: its children the heal is bringing back, by id.
 struct Resumed {
-    since: u64,
     children: BTreeMap<String, Child>,
 }
 
@@ -157,7 +152,24 @@ struct Child {
     machine: String,
     /// The pane by its machine's own id.
     pane: String,
-    woken: bool,
+    outcome: Outcome,
+}
+
+/// What is known of a child in its parent's count.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    /// Its resume is said; its engine has not named its pane healing yet.
+    Said,
+    /// Its engine named its pane healing: once it names it no more (or the
+    /// core gives the pane up), the engine is done with it.
+    Named,
+    /// It reported after its resume: it came back.
+    Back,
+    /// Its engine could not resume it.
+    NotWoken,
+    /// A mission's worker its engine could not resume: its Conductor hears
+    /// it as `worker_ended`, so the count does not say it.
+    Raised,
 }
 
 /// A pane its engine names healing.
@@ -176,24 +188,6 @@ impl Body {
             (Self::GoOn { .. }, Japanese) => "中断された作業を続けてください。".into(),
             (Self::GoOn { .. }, SimplifiedChinese) => "请继续之前被中断的工作。".into(),
             (Self::GoOn { .. }, English) => "Carry on with the work that was cut off.".into(),
-            (Self::Resumed { count, names }, language) => {
-                let more = count.saturating_sub(names.len());
-                let mut names = names.join(", ");
-                if more > 0 {
-                    names.push_str(&match language {
-                        Korean => format!(" 외 {more}명"),
-                        Japanese => format!(" ほか{more}件"),
-                        SimplifiedChinese => format!(" 等另外 {more} 个"),
-                        English => format!(" and {more} more"),
-                    });
-                }
-                match language {
-                    Korean => format!("되살림: {count}명 · {names}"),
-                    Japanese => format!("再開: {count}件 · {names}"),
-                    SimplifiedChinese => format!("已恢复：{count} 个 · {names}"),
-                    English => format!("Resumed: {count} · {names}"),
-                }
-            }
             (Self::Children { lost, more, .. }, language) => {
                 let names = |kind: Lost| -> String {
                     lost.iter()
@@ -203,6 +197,16 @@ impl Body {
                         .join(", ")
                 };
                 let mut lines = Vec::new();
+                let back = lost.iter().filter(|(at, _)| *at == Lost::Back).count();
+                if back > 0 {
+                    let names = names(Lost::Back);
+                    lines.push(match language {
+                        Korean => format!("되살림: {back}명 · {names}"),
+                        Japanese => format!("再開: {back}件 · {names}"),
+                        SimplifiedChinese => format!("已恢复：{back} 个 · {names}"),
+                        English => format!("Resumed: {back} · {names}"),
+                    });
+                }
                 let (not_woken, not_told) = (names(Lost::NotWoken), names(Lost::NotTold));
                 if !not_woken.is_empty() {
                     lines.push(match language {
@@ -357,7 +361,6 @@ impl Runtime {
                 .resumed
                 .entry(parent.clone())
                 .or_insert_with(|| Resumed {
-                    since,
                     children: BTreeMap::new(),
                 })
                 .children
@@ -367,7 +370,7 @@ impl Runtime {
                         name: agent_name(record),
                         machine: device.to_owned(),
                         pane: resume.pane.clone(),
-                        woken: true,
+                        outcome: Outcome::Said,
                     },
                 );
         }
@@ -402,6 +405,19 @@ impl Runtime {
             crate::diagnostic!(json!({
                 "component": "heal", "kind": "heal.resumed", "pane_id": pane,
             }));
+            for child in self
+                .heal_letters
+                .resumed
+                .values_mut()
+                .flat_map(|resumed| resumed.children.values_mut())
+            {
+                if child.machine == device
+                    && crate::address::named_pane_id(&node, device, &child.pane) == pane
+                    && child.outcome != Outcome::NotWoken
+                {
+                    child.outcome = Outcome::Back;
+                }
+            }
             return;
         }
         let pending = self.heal_letters.pending.iter().any(|held| {
@@ -435,19 +451,25 @@ impl Runtime {
             let Some(parent) = &record.parent else {
                 continue;
             };
-            if let Some(child) = letters
-                .resumed
-                .get_mut(parent)
-                .and_then(|resumed| resumed.children.get_mut(id))
-            {
-                child.woken = false;
-            }
             let worker = self.missions.book.missions.iter().any(|mission| {
                 mission
                     .nodes
                     .iter()
                     .any(|node| node.agent_id.as_deref() == Some(id.as_str()))
             });
+            // A child in its parent's count is said with the count.
+            if let Some(child) = letters
+                .resumed
+                .get_mut(parent)
+                .and_then(|resumed| resumed.children.get_mut(id))
+            {
+                child.outcome = if worker {
+                    Outcome::Raised
+                } else {
+                    Outcome::NotWoken
+                };
+                continue;
+            }
             if worker {
                 continue;
             }
@@ -505,6 +527,19 @@ impl Runtime {
                 (pane.clone(), healing)
             })
             .collect();
+        for child in self
+            .heal_letters
+            .resumed
+            .values_mut()
+            .flat_map(|resumed| resumed.children.values_mut())
+        {
+            if child.outcome == Outcome::Said
+                && child.machine == device
+                && named.contains_key(&child.pane)
+            {
+                child.outcome = Outcome::Named;
+            }
+        }
         if !named.is_empty() {
             self.heal_letters.healing.insert(device.to_owned(), named);
         }
@@ -635,16 +670,12 @@ impl Runtime {
             .heal_letters
             .resumed
             .iter()
-            .filter(|(parent, resumed)| {
-                !self
-                    .heal_letters
-                    .owed
-                    .contains_key(&format!("resumed:{parent}"))
-                    && resumed.children.iter().all(|(id, child)| {
-                        !child.woken
-                            || !self.still_healing(&child.machine, &child.pane)
-                            || self.observed_registration(id).is_some()
-                    })
+            .filter(|(_, resumed)| {
+                resumed.children.values().all(|child| match child.outcome {
+                    Outcome::Said => false,
+                    Outcome::Named => !self.still_healing(&child.machine, &child.pane),
+                    Outcome::Back | Outcome::NotWoken | Outcome::Raised => true,
+                })
             })
             .map(|(parent, _)| parent.clone())
             .collect();
@@ -652,26 +683,16 @@ impl Runtime {
             let Some(resumed) = self.heal_letters.resumed.remove(&parent) else {
                 continue;
             };
-            // A child that ended since is not one that came back.
-            let names: Vec<String> = resumed
-                .children
-                .into_iter()
-                .filter(|(id, child)| child.woken && self.registration(id).is_some())
-                .map(|(_, child)| child.name)
-                .collect();
-            if names.is_empty() {
-                continue;
+            for (id, child) in resumed.children {
+                match child.outcome {
+                    // A child that ended since is not one that came back.
+                    Outcome::Back | Outcome::Named if self.registration(&id).is_some() => {
+                        self.tell_parent(&parent, Lost::Back, child.name);
+                    }
+                    Outcome::NotWoken => self.tell_parent(&parent, Lost::NotWoken, child.name),
+                    _ => {}
+                }
             }
-            let key = format!("resumed:{parent}");
-            let owed = Owed {
-                letter: format!("{key}:{}", resumed.since),
-                to: parent,
-                body: Body::Resumed {
-                    count: names.len(),
-                    names: names.into_iter().take(NAMES_SAID).collect(),
-                },
-            };
-            self.heal_letters.owed.insert(key, owed);
         }
 
         let unreachable: Vec<String> = self
