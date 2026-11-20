@@ -603,15 +603,14 @@ impl HookFacts {
         }
     }
 
-    /// Whether `pane`'s agent was cut mid-turn and no line has been owed
-    /// for it yet.
+    /// Whether `pane`'s agent was cut mid-turn and no heal has read it yet.
+    #[cfg(test)]
     pub(crate) fn cut_pending(&self, pane: &str) -> bool {
         self.cut.contains(pane)
     }
 
     /// Whether `pane`'s agent was cut mid-turn, for the heal that resumed
-    /// it, spending the cut once the line it is owed is owed: once, since
-    /// the line goes once.
+    /// it, spending the cut: the heal reads it once.
     pub(crate) fn take_cut(&mut self, pane: &str) -> bool {
         self.cut.remove(pane)
     }
