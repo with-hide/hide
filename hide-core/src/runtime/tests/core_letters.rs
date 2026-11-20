@@ -444,6 +444,92 @@ fn a_machine_that_is_only_opened_reports_a_start_and_writes_nothing_first() {
     );
 }
 
+/// B65: the report of a mission closed on the Mac mini goes to the
+/// MacBook's agent that asked for its Conductor, under the Mac mini's
+/// name. Written while the MacBook is away it waits, the same close asked
+/// again is the same letter, and it arrives once when the MacBook is back.
+#[test]
+fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_back() {
+    let pair = Pair::start();
+    let mac_id = pair.mac.ids["worker"].clone();
+    // The MacBook's worker asked the Mac mini for a Conductor: the MacBook
+    // keeps who asked, and the Mac mini registered the asker as the origin
+    // of what it started, as a start does.
+    let (client, asker) = {
+        let guard = pair.mac.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let asker = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == mac_id)
+            .unwrap()
+            .actor
+            .clone();
+        (guard.delivery_client.clone().unwrap(), asker)
+    };
+    client
+        .submit(
+            Effect::CoreStart {
+                origin: asker,
+                machine: MINI.into(),
+            },
+            WITHIN,
+        )
+        .unwrap();
+    let (client, authority, origin) = {
+        let guard = pair.mini.runtime.lock().unwrap();
+        let origin = guard.core_actor(guard.peer_on(MAC).unwrap(), &worker(&pair.mac));
+        let authority = crate::delivery::worker::Authority {
+            caller: origin.pane_id.clone(),
+            context: guard.core_context(&origin),
+            also_reads: Vec::new(),
+            proven: crate::delivery::worker::Proven::Now,
+        };
+        (guard.delivery_client.clone().unwrap(), authority, origin)
+    };
+    crate::coordination::executor::register_code_owned(&client, &authority, &origin).unwrap();
+
+    // The letter the close owes an origin on the MacBook, sent as its
+    // Conductor sends any letter.
+    let report = || {
+        crate::runtime::mission_report::letter(
+            agent_there(MAC, &mac_id),
+            "mission-1",
+            "Fix the bug",
+            crate::missions::MissionStatus::Done,
+            Some("Merged as #12."),
+        )
+    };
+    pair.paired(true, false, false);
+    let sent = pair.mini.agent("worker", report()).unwrap();
+    let sent_id = sent["id"].as_str().unwrap().to_owned();
+    assert_eq!(letter(&pair.mini, &sent_id).state, State::Pending);
+    assert_eq!(
+        pair.mini.agent("worker", report()).unwrap()["id"],
+        sent_id.as_str(),
+        "the same close asked again"
+    );
+
+    pair.paired(true, false, true);
+    assert_eq!(
+        pair.mini_to_mac(),
+        [Outcome::Taken {
+            recipient: worker(&pair.mac)
+        }]
+    );
+    assert!(pair.mini_to_mac().is_empty(), "it is handed over once");
+    let arrived = letters(&pair.mac);
+    assert_eq!(arrived.len(), 1);
+    assert_eq!(arrived[0].kind, "report");
+    assert_eq!(arrived[0].sender.name, named_there("Mac mini", &pair.mini));
+    assert_eq!(arrived[0].recipient.pane_id, "worker");
+    assert_eq!(
+        arrived[0].body,
+        "Mission mission-1 \"Fix the bug\" closed as done.\n\nMerged as #12."
+    );
+    assert_eq!(letter(&pair.mini, &sent_id).state, State::Delivered);
+}
+
 /// D-72: a letter the other core does not keep is answered with why, ends
 /// undelivered in its sender's ledger, and its sender is told once; the
 /// letter behind it goes through.
@@ -512,7 +598,7 @@ fn a_letter_the_other_core_refuses_ends_undelivered_with_its_reason() {
             .collect()
     };
     pair.mac.runtime.lock().unwrap().drive_core_refusals();
-    until("the sender is told", || !notes().is_empty());
+    wait_for("the sender to be told", || !notes().is_empty());
     let note = &notes()[0];
     assert_eq!(note.sender.name, "hide:delivery");
     assert_eq!(note.recipient.pane_id, "worker");
@@ -621,14 +707,4 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         }),
         Err("machine_unavailable".into())
     );
-}
-
-/// Waits for a thread of the core's own, which the test cannot order.
-#[allow(clippy::disallowed_methods)] // a polling helper, bounded by a deadline
-fn until(what: &str, ready: impl Fn() -> bool) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
-        std::thread::sleep(Duration::from_millis(10));
-    }
 }

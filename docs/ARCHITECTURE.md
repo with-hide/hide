@@ -3171,7 +3171,7 @@ The security and ownership specification this connection is built to (the threat
 
 | Crate | What it holds | What it may link |
 |---|---|---|
-| `hide-peer-protocol` | What the two say: the hello and its versions, the stream kinds and priorities, the pairing, revoke and management messages, the events one core hands another, a guest node's launch contract with its folder and socket names, the tap | `hex`, `serde`, `serde_json`, `sha2`, and no crate of Hide's |
+| `hide-peer-protocol` | What the two say: the hello and its versions, the stream kinds and priorities, the pairing, revoke and management messages, what the two cores say to each other, the events one core hands another, a guest node's launch contract with its folder and socket names, the tap | `hex`, `serde`, `serde_json`, `sha2`, and no crate of Hide's |
 | `hide-peer` | The connection above any transport: the machine key, the grant and known-host stores, each direction's gate, admission and the dial rule, the event inbox, a loopback transport, the link multiplexer | Hide's crates and tokio; no transport |
 | `hide-peer-iroh` | The transport: an iroh endpoint behind `hide_peer`'s seam, with no product state | iroh and noq, which no other member may name |
 
@@ -3203,7 +3203,7 @@ The side that opens a stream writes nine bytes, the stream's kind and the genera
 Hello, pairing and revoke need no grant; every other kind is refused unless the direction it serves has an active grant at that generation.
 An accepted stream is bound to the generation it was accepted under (`gate::Guarded`): its next read or write after the generation moves fails, so a pause or a removal ends every stream it allowed without a list of them.
 A connection carries at most 72 streams, and each kind has its own cap inside that (`limits::max_streams_of`), so a flood of one kind never takes another's place.
-The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen (0), and files and pages last (-100).
+The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke, management and the two cores' stream (75), the node link (50), terminal output and the remote screen (0), and files and pages last (-100).
 
 **Grants are saved first.**
 The host keeps who may be its guest in `peers/grants.json` and the guest keeps the hosts it paired with in `peers/known.json`, private files of at most 64 KiB replaced atomically.
@@ -3415,6 +3415,20 @@ The node proves the sender when the letter is written (`hide_host::panes::prove_
 So a letter is applied as its agent whether or not the pane still runs, and a worker's report written before the host closed its pane reaches its parent; nothing of the caller is checked again when it applies (`Authority::proven`, `Proven::WhenWritten`), because that was settled when it was written.
 A letter is given up, and logged as unappliable, only when what it names is gone: its recipient, or a sender the core registered in no terminal and whose pane it does not find within 60 s of the link's return; a core that cannot write a letter just then is asked again for that long.
 A pane's end and an agent's completion are not events: they reach the core as the node's state when its link is read again, which is the same however often it is read.
+
+### The two cores' stream
+
+Each machine of a pair has a core of its own, and the `core` stream (kind 11) is the one stream the two cores talk on, apart from a guest's node and its management stream (PRD device-connect-iroh D-62, D-72).
+A side that holds an active grant on the other opens it when the connection comes up or the grant turns active, at most one each way, and both sides write on whichever is open, so a machine that is only opened answers on the stream the other opened.
+Its messages are one tagged list (`hide_peer_protocol::core::CoreMessage`, in `contracts/peer-link.json`): a letter with the sending core's id for it, `letter_taken` or `letter_refused` with a reason, and a read or a start one core asks of the other (`call`) with its `call_answer`.
+A later build adds a kind to the list, and a reader skips a type it does not know.
+
+`hided/src/peer_core.rs` is the one place a daemon handles it, and it decides nothing: who may write, read or start is the core's to judge from the pairing it was told ([delivery.md: Another machine's agents](delivery.md#another-machines-agents)), and the letters wait in the core's ledger, not in the daemon.
+The daemon asks the core for what waits for a connected peer whenever the core says its outbox moved or a stream opens, and sends a letter again after 30 s without an answer and on the next stream; the receiving core keeps the same letter once.
+A letter is handed to the core in the order it came and answered on the stream it came on; a call runs beside the letters, four at a time per peer, and one past that is answered `capacity`.
+A read waits at most 15 s for the other core and a start 180 s (`delivery_timeout`), and a call whose stream ends first is answered `machine_unavailable`.
+What the daemon remembers is of this run only: which letters wait for their answer and which calls for theirs, each dropped when its peer's last stream ends.
+A peer of a build from before this stream refuses the kind (`unknown_kind`), which is logged and asked again at the next connection.
 
 ### Switching a helper device to its machine's own Hide
 
