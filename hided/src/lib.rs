@@ -48,14 +48,14 @@ pub mod page_forward;
 pub mod pairing;
 pub mod pairing_ssh;
 pub mod pairing_wsl;
-pub mod started_cores;
-// The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
-// the deadlines those tests run them under.
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
+pub mod started_cores;
+// The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
+// the deadlines those tests run them under.
 #[cfg(all(test, unix))]
 #[allow(dead_code)] // these tests place stand-ins and ready nothing else
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]

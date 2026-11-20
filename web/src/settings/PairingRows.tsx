@@ -144,7 +144,6 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
       {state.action === "update_there" ? (
         <Button variant="secondary" size="sm" data-peer-update={device} onClick={() => actions.pairing("update", { device: named })}>{t("pairing.action.updateThere", { name: peer.name })}</Button>
       ) : null}
-
       {state.action === "resume_outgoing" || state.action === "resume_incoming" ? (
         <Button variant="secondary" size="sm" data-peer-resume={device} onClick={() => act("resume", state.action === "resume_outgoing" ? "outgoing" : "incoming")}>
           {t("pairing.action.resume")}
