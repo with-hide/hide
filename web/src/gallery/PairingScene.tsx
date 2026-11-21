@@ -39,6 +39,7 @@ const peer = (letter: string, name: string, over: Partial<Peer>): Peer => ({ key
 const PEERS: Peer[] = [
   peer("a", "MacBook", { opened_by: "active", path: "relay" }),
   peer("b", "Mac mini", { opens: "active", opened_by: "active" }),
+  peer("i", "Home server", { opens: "active", path: "tailscale" }),
   peer("c", "Windows PC", { opens: "active", connected: false, path: null, reason: "relay_unreachable" }),
   peer("d", "연구실 빌드 서버 자동화 장비", { opens: "paused", connected: false, path: null }),
   peer("e", "Studio", { opens: "paused_there" }),

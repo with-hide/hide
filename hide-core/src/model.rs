@@ -11862,10 +11862,15 @@ mod wire_enum_tests {
             assert_wire(&contract, "peer_opened_by", &opened_by);
             checked.insert("peer_opened_by");
 
-            let paths = [PeerPath::Direct, PeerPath::Relay, PeerPath::Local];
+            let paths = [
+                PeerPath::Direct,
+                PeerPath::Tailscale,
+                PeerPath::Relay,
+                PeerPath::Local,
+            ];
             for variant in paths {
                 match variant {
-                    PeerPath::Direct | PeerPath::Relay | PeerPath::Local => {}
+                    PeerPath::Direct | PeerPath::Tailscale | PeerPath::Relay | PeerPath::Local => {}
                 }
             }
             assert_wire(&contract, "peer_path", &paths);

@@ -1116,7 +1116,8 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
     }
 }
 
-/// A paired machine: who opens whom, and whether the two are connected.
+/// A paired machine: who opens whom, whether the two are connected, and the
+/// path the connection takes now in one word (D-86).
 fn peer_line(peer: &Value) -> String {
     let text = |key: &str| peer[key].as_str().unwrap_or_default();
     let mut line = format!(
@@ -1124,7 +1125,10 @@ fn peer_line(peer: &Value) -> String {
         text("id"),
         text("name"),
         match (peer["connected"] == true, text("path")) {
-            (true, "relay") => "connected through the relay",
+            (true, "direct") => "connected · direct",
+            (true, "tailscale") => "connected · Tailscale",
+            (true, "relay") => "connected · relay",
+            // A WSL distribution and its PC: one machine, no path to name.
             (true, _) => "connected",
             (false, _) => "not connected",
         },
@@ -1207,6 +1211,30 @@ mod tests {
     fn parse_words(words: &[&str]) -> Result<DeviceCli, String> {
         let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
         parse(args.iter())
+    }
+
+    /// D-86, B39: a connected machine's line names the path its connection
+    /// takes now in one word; one that is not connected names none.
+    #[test]
+    fn a_connected_machine_s_line_names_its_path() {
+        let first = |peer: Value| peer_line(&peer).lines().next().unwrap().to_owned();
+        let peer = |connected: bool, path: Value| json!({"id": "m1", "name": "Mac mini", "connected": connected, "path": path});
+        assert_eq!(
+            first(peer(true, json!("direct"))),
+            "m1  Mac mini  connected · direct"
+        );
+        assert_eq!(
+            first(peer(true, json!("tailscale"))),
+            "m1  Mac mini  connected · Tailscale"
+        );
+        assert_eq!(
+            first(peer(true, json!("relay"))),
+            "m1  Mac mini  connected · relay"
+        );
+        assert_eq!(
+            first(peer(false, Value::Null)),
+            "m1  Mac mini  not connected"
+        );
     }
 
     /// The pairing verbs are listed only where the build offers them.

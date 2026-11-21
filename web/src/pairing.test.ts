@@ -17,6 +17,8 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
   it("says only how a connected machine is reached", () => {
     expect(peerState(peer())).toEqual({ key: "pairing.state.direct", tone: "ok", action: null, reason: null });
     expect(peerState(peer({ path: "relay" })).key).toBe("pairing.state.relay");
+    // D-86: a direct path between two Tailscale addresses is named apart.
+    expect(peerState(peer({ path: "tailscale" }))).toEqual({ key: "pairing.state.tailscale", tone: "ok", action: null, reason: null });
   });
 
   it("offers Retry with the relay's reason for a machine it opens and cannot reach, and nothing for one that only opens it", () => {

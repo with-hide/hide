@@ -70,6 +70,8 @@ pub enum PeerOpenedBy {
 #[serde(rename_all = "snake_case")]
 pub enum PeerPath {
     Direct,
+    /// A direct path between the two machines' Tailscale addresses (D-86).
+    Tailscale,
     Relay,
     /// Inside one machine: a WSL distribution and its PC.
     Local,
