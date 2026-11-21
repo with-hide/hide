@@ -4,6 +4,6 @@
 # the version is written; docs/BUILD.md, "One toolchain version", owns why and
 # how it moves.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
