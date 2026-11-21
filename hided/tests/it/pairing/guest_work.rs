@@ -23,6 +23,7 @@
 //! host on a port this test found free, so the guest finds it again after
 //! either daemon starts anew.
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
@@ -43,23 +44,27 @@ const HOST: &str = "guest-work-host";
 
 /// The programs a build is, which a guest's node, its panes' `hide`, its
 /// hooks and its pane holders run from.
-const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
+pub(super) const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 
 /// How long one step may take: a daemon's start, a node's start from a
 /// program the system checks first, a pane's shell, a dial after a restart.
-const WITHIN: Duration = Duration::from_secs(90);
+pub(super) const WITHIN: Duration = Duration::from_secs(90);
 
 /// One of the two machines: its account, its state folder and the shipped
 /// `hide` at its terminal, which starts and stops its daemon.
-struct Machine {
-    terminal: Terminal,
-    hide: PathBuf,
+pub(super) struct Machine {
+    pub(super) terminal: Terminal,
+    pub(super) hide: PathBuf,
     /// Where its endpoint for other Hides binds.
-    direct: String,
+    pub(super) direct: String,
     /// The folder its terminal is in: a project of its own, since a pane is
     /// listed and typed into for a caller in a project Hide has
     /// (`hided::pane_auth`).
-    project: PathBuf,
+    pub(super) project: PathBuf,
+    /// What the account's sessions set beyond the terminal's own: the login
+    /// shell and `PATH` of a machine whose panes run an agent, which its
+    /// daemon starts them from.
+    pub(super) account: Vec<(OsString, OsString)>,
 }
 
 impl Machine {
@@ -69,23 +74,24 @@ impl Machine {
             .env("HIDE_PEER_DIRECT", &self.direct)
             // The daemon stays while this test's terminal is away from it.
             .env("HIDE_IDLE_SECS", "3600")
+            .envs(self.account.iter().map(|(name, value)| (name, value)))
             .current_dir(&self.project);
         command
     }
 
-    fn run(&self, args: &[&str]) -> Ran {
+    pub(super) fn run(&self, args: &[&str]) -> Ran {
         Ran::of(self.command(args).output().unwrap())
     }
 
     /// Runs `hide args` and has it succeed.
-    fn ran(&self, args: &[&str]) -> Ran {
+    pub(super) fn ran(&self, args: &[&str]) -> Ran {
         let ran = self.run(args);
         assert!(ran.ok, "hide {args:?}: {}", ran.text());
         ran
     }
 
     /// The daemon's screen connection.
-    fn screen(&self) -> Daemon {
+    pub(super) fn screen(&self) -> Daemon {
         let state: Value =
             serde_json::from_slice(&read(&self.terminal.state.join("hided.json")).unwrap())
                 .unwrap();
@@ -96,7 +102,7 @@ impl Machine {
     }
 
     /// Has this machine's Hide open the project its terminal is in.
-    fn opens_its_project(&self) {
+    pub(super) fn opens_its_project(&self) {
         let (screen, path) = (self.screen(), self.project.to_string_lossy().into_owned());
         screen
             .event(
@@ -135,7 +141,7 @@ impl Machine {
     }
 
     /// Waits until `hide device list` here is as `wanted` reads it.
-    fn lists<T>(&self, what: &str, wanted: impl Fn(&Value) -> Option<T>) -> T {
+    pub(super) fn lists<T>(&self, what: &str, wanted: impl Fn(&Value) -> Option<T>) -> T {
         let mut last = Value::Null;
         wait_within(what, WITHIN, || {
             last = self.listed();
@@ -186,7 +192,7 @@ impl Drop for Machine {
 
 /// A port of loopback no one holds now, for an endpoint that is found again
 /// at the same address after its daemon starts anew.
-fn free_port() -> u16 {
+pub(super) fn free_port() -> u16 {
     UdpSocket::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -196,13 +202,17 @@ fn free_port() -> u16 {
 
 /// Puts the shipped build in `programs` where a host of `state` keeps the
 /// builds of the guest `key`; answers the build's name.
-fn place_build(programs: &Path, state: &Path, key: &hide_peer::protocol::PeerKey) -> String {
+pub(super) fn place_build(
+    programs: &Path,
+    state: &Path,
+    key: &hide_peer::protocol::PeerKey,
+) -> String {
     shipped::place_guest_build(programs, &hide_kit::layout::guest_install_root(state, key))
 }
 
 /// Pairs the two by the host's link, both operators saying yes, and answers
 /// the id the guest lists its host under.
-async fn pair(host: &Machine, guest: &Machine) -> String {
+pub(super) async fn pair(host: &Machine, guest: &Machine) -> String {
     let screen = host.screen();
     let mut window = Window::open_at(screen.port, &screen.token, "web").await;
     window
@@ -355,6 +365,7 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
             hide: at("p").join("hide"),
             direct,
             project: at(home).join("own"),
+            account: Vec::new(),
         }
     };
     let host = machine("hh", "h", HOST, format!("127.0.0.1:{}", free_port()));

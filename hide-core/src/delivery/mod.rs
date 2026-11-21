@@ -84,6 +84,15 @@ pub const HIDE_DESK_ROLE: &str = "desk";
 /// D-10): `hide:access:<connection id>`, one per connection, which acts as
 /// Desk's does, and only while its connection stands at Act.
 pub const HIDE_ACCESS_ROLE: &str = "access";
+/// The role of another machine's agent as this core knows it (PRD
+/// device-connect-iroh D-72): `hide:core:<device>:agent|pane:<id>`, which is
+/// `hide:` before that agent's address on its own core
+/// (`hide_node_link::address::CoreAddress`), one identity per agent. It
+/// stands as the sender of what that agent asks of this core, and as the
+/// recipient of what this core's agents write to it.
+pub const HIDE_CORE_ROLE: &str = "core";
+/// The most bytes a ledger key holds, a name among them.
+const KEY_BYTES: usize = 256;
 /// The kind of the operator's own code-owned identity: the sender of the
 /// feedback letters the desktop app's Send makes from the operator's View
 /// comments (PRD view-opener-feedback D-17). It has no pane, reads no
@@ -145,6 +154,69 @@ impl Actor {
             .strip_prefix(':')
     }
 
+    /// Another machine's agent as this core, on `node`, knows it (PRD
+    /// device-connect-iroh D-72): `address` is the agent on its own core,
+    /// `machine` that machine's name and `name` the agent's name there, so a
+    /// letter's recipient reads which machine wrote it. Its pane slot is the
+    /// address, which names one agent of one machine whatever either is
+    /// called later, and its session is of that slot on the connection
+    /// `key` ([`Self::core_caller`]), so the same agent is the same identity
+    /// however it was named when it was written to, and an agent of another
+    /// connection that says the same device id is another identity.
+    pub fn core(
+        address: crate::address::CoreAddress<'_>,
+        key: &str,
+        machine: &str,
+        name: &str,
+        node: &str,
+    ) -> Self {
+        let pane_id = format!("{HIDE_PREFIX}{address}");
+        Self {
+            session: crate::engine::tokens::session_digest(&Self::core_caller(key, &pane_id)),
+            name: Self::core_name(machine, name),
+            pane_id,
+            kind: HIDE_KIND.into(),
+            device_id: node.into(),
+        }
+    }
+
+    /// The caller an agent of another core acts as here, which its session
+    /// is the digest of: the connection id its machine proved, then its
+    /// slot. A device id is only what a machine says of itself, and two
+    /// connections may say the same one; the connection id is what keeps
+    /// their agents, and what is stored for them, apart.
+    pub fn core_caller(key: &str, pane_id: &str) -> String {
+        format!("{key}:{pane_id}")
+    }
+
+    /// Whether this is an agent of the core on connection `key`.
+    pub fn core_of(&self, key: &str) -> bool {
+        self.core_address().is_some()
+            && self.session
+                == crate::engine::tokens::session_digest(&Self::core_caller(key, &self.pane_id))
+    }
+
+    /// The name another machine's agent goes by here: its machine's name,
+    /// then its own, cut to what a ledger key holds, since the other core
+    /// chose it.
+    pub fn core_name(machine: &str, name: &str) -> String {
+        let mut full = format!("{HIDE_PREFIX}{HIDE_CORE_ROLE}:{machine}:");
+        for character in name.chars().filter(|character| !character.is_control()) {
+            if full.len() + character.len_utf8() > KEY_BYTES {
+                break;
+            }
+            full.push(character);
+        }
+        full
+    }
+
+    pub fn core_address(&self) -> Option<crate::address::CoreAddress<'_>> {
+        if self.kind != HIDE_KIND {
+            return None;
+        }
+        crate::address::CoreAddress::parse(self.pane_id.strip_prefix(HIDE_PREFIX)?)?.ok()
+    }
+
     /// The operator's own code-owned identity on `node`, the core's own:
     /// the sender of a feedback letter (PRD view-opener-feedback D-17).
     pub fn operator(node: &str) -> Self {
@@ -175,10 +247,11 @@ impl Actor {
     }
 
     /// Whether this is Hide itself: Hide's own identity and never an
-    /// external tool's, which is code-owned too ([`Self::access_connection`]).
-    /// A gate that only Hide may pass asks this, not [`Self::hide_owned`].
+    /// external tool's or another machine's agent's, which are code-owned
+    /// too ([`Self::access_connection`], [`Self::core_address`]). A gate
+    /// that only Hide may pass asks this, not [`Self::hide_owned`].
     pub fn hide_itself(&self) -> bool {
-        self.hide_owned() && self.access_connection().is_none()
+        self.hide_owned() && self.access_connection().is_none() && self.core_address().is_none()
     }
 
     /// Mailbox authority requires a positively observed native session. Watch
@@ -225,5 +298,5 @@ pub use hide_agent_hooks::delivery::{
 };
 
 pub(crate) fn valid_key(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+    !value.is_empty() && value.len() <= KEY_BYTES && !value.chars().any(char::is_control)
 }

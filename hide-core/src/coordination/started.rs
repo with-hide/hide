@@ -101,7 +101,9 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
     // with no Hide AI start costs one pass over the agents and one over the spawns.
     // Desk's sessions are the operator's own work, which Desk starts on the
     // operator's word, not Hide AI's (PRD Desk 1차); an external tool's are
-    // that tool's (PRD hide-external-control D-09), kept apart.
+    // that tool's (PRD hide-external-control D-09), kept apart; what an
+    // agent of another core started is this machine's operator's (PRD
+    // device-connect-iroh D-59, D-72).
     let desk = format!(
         "{}{}",
         crate::delivery::HIDE_PREFIX,
@@ -110,7 +112,11 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
     let origins: Vec<(&str, Option<(&str, &str)>)> = ledger
         .agents
         .iter()
-        .filter(|agent| agent.actor.hide_owned() && agent.actor.pane_id != desk)
+        .filter(|agent| {
+            agent.actor.hide_owned()
+                && agent.actor.pane_id != desk
+                && agent.actor.core_address().is_none()
+        })
         .map(|agent| {
             let tool = agent
                 .actor

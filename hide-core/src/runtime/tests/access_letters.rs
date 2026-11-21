@@ -18,16 +18,21 @@ use serde_json::{Value, json};
 const PANES: [&str; 2] = ["worker", "other"];
 const KEY: &str = "5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5";
 
-struct Fixture {
-    runtime: Arc<Mutex<Runtime>>,
-    ids: std::collections::HashMap<&'static str, String>,
+pub(super) struct Fixture {
+    pub(super) runtime: Arc<Mutex<Runtime>>,
+    pub(super) ids: std::collections::HashMap<&'static str, String>,
     _worker: Worker,
     _root: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn start() -> Self {
-        let root = tempfile::tempdir().unwrap();
+    pub(super) fn start() -> Self {
+        Self::start_in(tempfile::tempdir().unwrap())
+    }
+
+    /// The fixture over `root`, whose `state` folder may hold what an
+    /// earlier core left there.
+    pub(super) fn start_in(root: tempfile::TempDir) -> Self {
         let (runtime, _, _, path) = fixture(root.path());
         let native = |pane: &str| {
             json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
@@ -106,8 +111,21 @@ impl Fixture {
         started
     }
 
+    /// Ends the core and its store's worker; the folder they ran over.
+    pub(super) fn stop(self) -> tempfile::TempDir {
+        let Self {
+            runtime,
+            _worker,
+            _root,
+            ..
+        } = self;
+        drop(_worker);
+        drop(runtime);
+        _root
+    }
+
     /// A command of the agent in `pane`.
-    fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
+    pub(super) fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
         let context = authority(&Actor {
             pane_id: pane.into(),
             name: pane.into(),
@@ -741,7 +759,10 @@ fn the_agent_list_names_no_tools_own_identity() {
         names
     };
     let list = || Command::Agents {
-        command: crate::coordination::Command::List { live: false },
+        command: crate::coordination::Command::List {
+            live: false,
+            machine: None,
+        },
     };
     assert_eq!(
         names(fixture.agent("worker", list()).unwrap()),

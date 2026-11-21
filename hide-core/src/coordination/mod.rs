@@ -188,6 +188,11 @@ pub enum Command {
     List {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         live: bool,
+        /// Another machine whose own core is asked for its agents (`hide
+        /// agent list --machine`, PRD device-connect-iroh B66); absent
+        /// lists this core's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     Show {
         id: String,
@@ -2906,6 +2911,80 @@ pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u
     true
 }
 
+/// An agent of another core whose machine this core is paired with no
+/// longer: none of the connections `machines` is the one its identity was
+/// made on.
+fn core_gone(actor: &Actor, machines: &[String]) -> bool {
+    actor.core_address().is_some() && !machines.iter().any(|key| actor.core_of(key))
+}
+
+/// Whether the ledger holds anything of a machine no longer paired that
+/// [`end_gone_cores`] ends: an origin record of one of its agents, a letter
+/// that still waits to go to one, an answer owed on a letter to or from one,
+/// or a start asked of it.
+pub(crate) fn cores_left_behind(ledger: &Ledger, machines: &[String]) -> bool {
+    ledger
+        .agents
+        .iter()
+        .any(|record| !record.ended && core_gone(&record.actor, machines))
+        || ledger.letters.iter().any(|letter| {
+            if letter.awaiting_intake() {
+                return core_gone(&letter.recipient, machines);
+            }
+            letter.waiting_answer
+                && (core_gone(&letter.sender, machines) || core_gone(&letter.recipient, machines))
+        })
+        || ledger
+            .core_starts
+            .iter()
+            .any(|start| !machines.contains(&start.key))
+}
+
+/// Ends what the agents of machines no longer paired keep in the ledger
+/// (PRD device-connect-iroh D-72), as [`end_gone_tools`] does for a tool:
+/// their origin records, the letters still waiting to go to them, which end
+/// `no_recipient` as a letter whose agent ended does, the answer waits of
+/// their letters, and the starts asked of those machines. The store's upkeep
+/// runs it before every batch with the machines the core was told. Whether
+/// it changed anything.
+pub(crate) fn end_gone_cores(ledger: &mut Ledger, machines: &[String], now: u64) -> bool {
+    if !cores_left_behind(ledger, machines) {
+        return false;
+    }
+    let ended: Vec<String> = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && core_gone(&record.actor, machines))
+        .map(|record| record.id.clone())
+        .collect();
+    for id in &ended {
+        end_record(ledger, id, now);
+    }
+    ledger.end_letters_of(|recipient| core_gone(recipient, machines), now);
+    let mut parties: Vec<Actor> = Vec::new();
+    for letter in &ledger.letters {
+        for party in [&letter.sender, &letter.recipient] {
+            if letter.waiting_answer
+                && core_gone(party, machines)
+                && !parties.iter().any(|known| known.same_identity(party))
+            {
+                parties.push(party.clone());
+            }
+        }
+    }
+    for party in &parties {
+        ledger.end_answer_waits_of(party, now);
+    }
+    ledger.forget_core_starts(machines);
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "core.machines_ended",
+        "records": ended,
+        "parties": parties.len(),
+    }));
+    true
+}
+
 /// Ends a registration that no agent took over, the watches on it, the
 /// letters still waiting for it (`no_recipient`, B2) and the answer waits of
 /// the letters it sent or received, in one transition. Returns whether it was
@@ -3323,6 +3402,9 @@ fn hand_over(ledger: &mut Ledger, old: &AgentRecord, successor: &str, now: u64) 
             spawn.parent = successor.to_owned();
         }
     }
+    // The report of a start the old agent asked another machine for is the
+    // successor's to take.
+    ledger.hand_core_starts(&old.id, successor);
     for record in &mut ledger.agents {
         if record.id == successor {
             continue;

@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::build::{self, BuildFile, FileMessage};
+use crate::core::{Agent, Ask, CoreMessage, Item, Party};
 use crate::event::{self, Acked, Event};
 use crate::hello::{self, GrantState, Hello, HelloFrame, LinkRange};
 use crate::launch::{
@@ -241,6 +242,66 @@ fn manage_messages() -> Vec<Manage> {
     ]
 }
 
+fn core_messages() -> Vec<CoreMessage> {
+    fn exhaustive(message: &CoreMessage) {
+        match message {
+            CoreMessage::Letter { .. }
+            | CoreMessage::LetterTaken { .. }
+            | CoreMessage::LetterRefused { .. }
+            | CoreMessage::Call { .. }
+            | CoreMessage::CallAnswer { .. } => {}
+        }
+    }
+    let _ = exhaustive;
+    let text = String::new;
+    vec![
+        CoreMessage::Letter {
+            id: text(),
+            from: sample_agent(),
+            to: text(),
+            reply_to: Some(text()),
+            kind: text(),
+            intent: text(),
+            body: text(),
+            now: false,
+        },
+        CoreMessage::LetterTaken {
+            id: text(),
+            recipient: sample_agent(),
+        },
+        CoreMessage::LetterRefused {
+            id: text(),
+            reason: text(),
+        },
+        CoreMessage::Call {
+            call: 0,
+            from: sample_party(),
+            ask: Ask::Delivery,
+            command: json!({}),
+        },
+        CoreMessage::CallAnswer {
+            call: 0,
+            answer: Some(json!({})),
+            refused: Some(text()),
+        },
+    ]
+}
+
+fn sample_party() -> Party {
+    Party {
+        item: Item::Agent,
+        id: String::new(),
+        name: String::new(),
+    }
+}
+
+fn sample_agent() -> Agent {
+    Agent {
+        id: String::new(),
+        name: String::new(),
+    }
+}
+
 fn sample_build_file() -> BuildFile {
     BuildFile {
         path: String::new(),
@@ -420,6 +481,13 @@ pub fn shape() -> Value {
                 NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, HostFull, Other
             ),
             "release_fields": fields(&sample_release()),
+        },
+        "core": {
+            "messages": messages(&CoreMessage::TYPES, &core_messages()),
+            "party_fields": fields(&sample_party()),
+            "agent_fields": fields(&sample_agent()),
+            "items": names!(Item: Agent, Pane),
+            "asks": names!(Ask: Delivery, Pane),
         },
         "file": {
             "messages": messages(&FileMessage::TYPES, &file_messages()),

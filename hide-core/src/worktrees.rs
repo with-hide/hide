@@ -586,6 +586,25 @@ impl GitWatch {
         self.collect();
         !self.pending.is_empty()
     }
+
+    /// The projects marked and not settled yet, all of them at once: for a
+    /// read made while the watch rests, when no later report extends their
+    /// wait and nothing else settles them.
+    fn take_marked(&mut self) -> Vec<PathBuf> {
+        self.collect();
+        std::mem::take(&mut self.pending).into_keys().collect()
+    }
+
+    /// A read is made while no watch covers the projects (a core no window
+    /// is attached to): nothing sees what changes after it, so the watch
+    /// that starts next owes every project a read once it is watching, as
+    /// after any lapse in cover. Without it a window's first read would
+    /// ask for what the read before it already answered and draw that.
+    fn read_uncovered(&mut self) {
+        if self.subscription.is_none() {
+            self.owes_reread = true;
+        }
+    }
 }
 
 impl Drop for GitWatch {
@@ -736,13 +755,43 @@ impl WorktreeReader {
         self.read_if_due_at(request, Instant::now())
     }
 
+    /// The same read for a core no renderer is attached to, which keeps no
+    /// Git watch ([`Self::rest`]): the catalog is read when `request`
+    /// changes (a project, a removal, a generation), which is what a
+    /// mission made on a machine with no window needs of it. Nothing is
+    /// asked of the node on the caller's thread: following the request's
+    /// projects asks it for each repository's directories
+    /// (`GitWatch::reconcile`), which the session-sync thread does only for
+    /// a window that draws what the watch reports.
+    pub fn read_unwatched_if_due(&mut self, request: WorktreeRequest) -> Option<WorktreeAnswer> {
+        self.read_at(request, Instant::now(), false)
+    }
+
     pub(crate) fn read_if_due_at(
         &mut self,
         request: WorktreeRequest,
         now: Instant,
     ) -> Option<WorktreeAnswer> {
-        self.git_watch.reconcile(&request.projects);
-        self.owed.extend(self.git_watch.settled());
+        self.read_at(request, now, true)
+    }
+
+    fn read_at(
+        &mut self,
+        request: WorktreeRequest,
+        now: Instant,
+        watched: bool,
+    ) -> Option<WorktreeAnswer> {
+        if watched {
+            self.git_watch.reconcile(&request.projects);
+            self.owed.extend(self.git_watch.settled());
+        } else {
+            // A change the watch marked before it rested is owed now. Left
+            // marked, it would keep every answer from counting as current
+            // (`observations_current`), and the catalog a mission reads
+            // would not be replaced until a window came back.
+            self.owed.extend(self.git_watch.take_marked());
+            self.git_watch.read_uncovered();
+        }
         self.owed
             .retain(|root| request.projects.iter().any(|p| &p.root_path == root));
         // A change waits while a read runs, since that read may have begun
@@ -1514,18 +1563,21 @@ mod tests {
         answer: std::sync::Mutex<hide_node_link::worktrees::RepositoryWorktrees>,
         reads: std::sync::atomic::AtomicUsize,
         watches: DrivenWatches,
+        /// One message for each watch report the node handed on.
+        forwarded: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
     }
 
     impl Answering {
         fn new(answer: hide_node_link::worktrees::RepositoryWorktrees) -> Self {
-            let (forwarded, _) = std::sync::mpsc::channel();
+            let (acknowledge, forwarded) = std::sync::mpsc::channel();
             Self {
                 answer: std::sync::Mutex::new(answer),
                 reads: 0.into(),
                 watches: DrivenWatches {
                     watches: std::sync::Arc::default(),
-                    forwarded: std::sync::Mutex::new(forwarded),
+                    forwarded: std::sync::Mutex::new(acknowledge),
                 },
+                forwarded: std::sync::Mutex::new(forwarded),
             }
         }
 
@@ -1616,6 +1668,95 @@ mod tests {
         let explicit = start + WATCH_READ_SPACING + Duration::from_secs(1);
         assert!(landed(&mut reader, &request, explicit));
         assert_eq!(node.reads(), 3, "an explicit read is not held");
+        // The node's watch ends before the reader, which then waits for none.
+        drop(watch);
+    }
+
+    /// A change the watch had marked and not settled when the window closed
+    /// is read by the next read with no window, and that answer counts as
+    /// current: no later report extends the change's wait, and an answer
+    /// that never counted as current would never replace the catalog a
+    /// mission on a machine with no window reads.
+    #[test]
+    fn a_change_a_rested_watch_left_marked_is_read_with_no_window() {
+        let node = std::sync::Arc::new(Answering::new(Default::default()));
+        let mut reader = WorktreeReader::spaced(node.clone(), Duration::ZERO);
+        let request = WorktreeRequest {
+            projects: projects(&["/a"]),
+            generation: 0,
+            removals: 0,
+        };
+        let read = |reader: &mut WorktreeReader| {
+            let answer = reader.read_unwatched_if_due(request.clone());
+            answer.or_else(|| {
+                reader.inner.join_pending();
+                reader.read_unwatched_if_due(request.clone())
+            })
+        };
+        assert!(
+            read(&mut reader)
+                .expect("the first read")
+                .observations_current
+        );
+        assert_eq!(node.reads(), 1);
+
+        reader
+            .git_watch
+            .pending
+            .insert(PathBuf::from("/a"), Instant::now());
+        reader.rest();
+        let answer = read(&mut reader).expect("the marked change is read");
+        assert!(answer.observations_current);
+        assert_eq!(node.reads(), 2);
+        assert!(read(&mut reader).is_none(), "and read once");
+    }
+
+    /// A read made with no window is covered by no watch, so nothing sees
+    /// what changes after it (a worktree somebody adds before the window
+    /// opens). The watch a window's first read starts owes every project a
+    /// read once it is watching: the window does not keep drawing the
+    /// catalog read before it.
+    #[test]
+    fn the_first_watch_after_a_read_with_no_window_reads_every_project_again() {
+        let node = std::sync::Arc::new(Answering::new(Default::default()));
+        let (watch, reports) = std::sync::mpsc::channel::<GitWatchReport>();
+        node.watches
+            .watches
+            .lock()
+            .unwrap()
+            .push((vec!["/a/.git".to_owned()], reports));
+        let mut reader = WorktreeReader::spaced(node.clone(), Duration::ZERO);
+        let request = WorktreeRequest {
+            projects: projects(&["/a"]),
+            generation: 0,
+            removals: 0,
+        };
+        reader.rest();
+        if reader.read_unwatched_if_due(request.clone()).is_none() {
+            reader.inner.join_pending();
+            assert!(reader.read_unwatched_if_due(request.clone()).is_some());
+        }
+        assert_eq!(node.reads(), 1);
+
+        // A window attaches and asks for what was already answered.
+        assert!(!landed(&mut reader, &request, Instant::now()));
+        assert_eq!(node.reads(), 1, "nothing is read before the watch is up");
+        watch.send(watching()).unwrap();
+        node.forwarded
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the node forwarded the report");
+        assert!(!landed(&mut reader, &request, Instant::now()));
+        let marked = reader
+            .git_watch
+            .pending
+            .get_mut(Path::new("/a"))
+            .expect("the project is owed a read once the watch is watching");
+        *marked -= GIT_WATCH_DEBOUNCE;
+        assert!(landed(&mut reader, &request, Instant::now()));
+        assert_eq!(node.reads(), 2);
+        assert!(!landed(&mut reader, &request, Instant::now()), "once");
         // The node's watch ends before the reader, which then waits for none.
         drop(watch);
     }

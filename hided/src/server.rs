@@ -1446,8 +1446,12 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "force_target_asleep" => {
             "The recipient is asleep; send it again without --force, and a request or block wakes it"
         }
-        "machine_not_permitted" => {
-            "Run the command from an agent on the machine that runs Hide, or leave out --machine"
+        "machine_not_permitted" => hide_core::access::MACHINE_NOT_PERMITTED_NEXT,
+        "recipient_not_agent" => {
+            "A letter to another machine goes to an agent, not a pane; find the agent with hide agent list --machine <device> and send to core:<device>:agent:<id>"
+        }
+        "sender_not_registered" => {
+            "Another machine answers an agent Hide knows, and Hide could read no agent session from this pane yet; run the command again from the agent's own turn once hide agent show here names it"
         }
         // A letter neither sent by the caller nor to it (nor one its mission
         // node lets it read), or one gone from the ledger: the same refusal
@@ -5765,6 +5769,8 @@ mod tests {
             "spawn_busy",
             "workspace_closing",
             "machine_not_permitted",
+            "recipient_not_agent",
+            "sender_not_registered",
             "machine_unavailable",
             "repository_unavailable",
             "spawn_repo_required",

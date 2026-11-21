@@ -19913,3 +19913,501 @@ fn a_workers_unread_conflict_cell_keeps_its_round_failure_too() {
         cells[0].line
     );
 }
+
+const MACBOOK_KEY: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+
+/// A core whose agent in the pane `worker` was started for an agent of
+/// another machine: its registration names, as its origin, the identity
+/// the MacBook's core stands as here for that agent, as a start the
+/// MacBook asked for leaves it, and the MacBook opened this machine.
+fn started_for_another_machine() -> super::access_letters::Fixture {
+    use super::access_letters::Fixture;
+    use crate::address::{CoreAddress, CoreItem};
+    use crate::delivery::store;
+    // The ledger a start left, with the origin written between two starts.
+    let root = Fixture::start().stop();
+    let path = hide_kit::layout::delivery_store(&root.path().join("state"));
+    let mut ledger = store::load(&path).unwrap();
+    let asker = Actor::core(
+        CoreAddress::new("macbook", CoreItem::Agent, "agent-7"),
+        MACBOOK_KEY,
+        "MacBook",
+        "planner",
+        crate::node::TEST_NODE,
+    );
+    let id = format!("agent-{}", ledger.next_id);
+    ledger.next_id += 1;
+    let worker = ledger
+        .agents
+        .iter_mut()
+        .find(|record| record.pane == "worker")
+        .unwrap();
+    // The stand-in's record, as `coordination::register_code_owned` makes it.
+    let stand_in = crate::coordination::AgentRecord {
+        id: id.clone(),
+        name: Some(asker.name.clone()),
+        host_scope: asker.kind.clone(),
+        native_machine: asker.kind.clone(),
+        session: Actor::core_caller(MACBOOK_KEY, &asker.pane_id),
+        instance: asker.pane_id.clone(),
+        pane: asker.pane_id.clone(),
+        terminal_id: None,
+        actor: asker,
+        ..worker.clone()
+    };
+    worker.origin = Some(id);
+    ledger.agents.push(stand_in);
+    store::save(&path, &ledger).unwrap();
+    let fixture = with_a_project(Fixture::start_in(root));
+    macbook(&mut fixture.runtime.lock().unwrap(), true);
+    fixture
+}
+
+/// A core whose agent in the pane `worker` was started with no parent by
+/// the agent in the pane `other` of the same machine: its registration
+/// names that agent's as its origin, as a handed-off start leaves it.
+fn started_by_an_agent_here() -> super::access_letters::Fixture {
+    use super::access_letters::Fixture;
+    use crate::delivery::store;
+    let root = Fixture::start().stop();
+    let path = hide_kit::layout::delivery_store(&root.path().join("state"));
+    let mut ledger = store::load(&path).unwrap();
+    let of = |ledger: &crate::delivery::ledger::Ledger, pane: &str| {
+        ledger
+            .agents
+            .iter()
+            .position(|record| record.pane == pane)
+            .unwrap()
+    };
+    let asker = ledger.agents[of(&ledger, "other")].id.clone();
+    let worker = of(&ledger, "worker");
+    ledger.agents[worker].origin = Some(asker);
+    store::save(&path, &ledger).unwrap();
+    with_a_project(Fixture::start_in(root))
+}
+
+/// `fixture` with the thread a report is sent on and the project a mission
+/// is created in.
+fn with_a_project(fixture: super::access_letters::Fixture) -> super::access_letters::Fixture {
+    {
+        let mut guard = fixture.runtime.lock().unwrap();
+        guard.install_worker_context(Arc::downgrade(&fixture.runtime), ChangeNotifier::noop());
+        guard
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: PROJECT.into(),
+                ..Default::default()
+            });
+    }
+    fixture
+}
+
+/// Tells the core its pairing with the MacBook, as the daemon does: opened
+/// by it and connected, or paired with it no longer.
+fn macbook(runtime: &mut Runtime, paired: bool) {
+    let keys: &[&str] = if paired { &[MACBOOK_KEY] } else { &[] };
+    saying_macbook(runtime, keys);
+}
+
+/// Tells the core the connections it is paired on, each a machine that
+/// opens it, is connected and says it is the device `macbook`.
+fn saying_macbook(runtime: &mut Runtime, keys: &[&str]) {
+    let machines: Vec<Value> = keys
+        .iter()
+        .map(|key| {
+            json!({
+                "key": key, "device_id": "macbook", "name": "MacBook",
+                "opens": null, "opened_by": "active",
+                "connected": true, "path": "direct", "reason": null, "update": null,
+            })
+        })
+        .collect();
+    let event = serde_json::to_vec(&json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "peer_machines",
+        "payload": { "machines": machines },
+    }))
+    .unwrap();
+    assert!(runtime.dispatch_json(&event));
+}
+
+/// The worker creates a mission and closes it as cancelled; its id.
+fn closed_by_the_worker(runtime: &mut Runtime) -> String {
+    let (created, _) = command(
+        runtime,
+        "worker",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "worker",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    created["mission"]["id"].as_str().unwrap().to_owned()
+}
+
+fn origin_report(
+    fixture: &super::access_letters::Fixture,
+    id: &str,
+) -> Option<crate::missions::OriginReport> {
+    let runtime = fixture.runtime.lock().unwrap();
+    runtime.missions.book.get(id).unwrap().origin_report.clone()
+}
+
+fn report_letters(
+    fixture: &super::access_letters::Fixture,
+) -> Vec<crate::delivery::ledger::Letter> {
+    let runtime = fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    ledger
+        .letters
+        .iter()
+        .filter(|letter| letter.kind == "report")
+        .cloned()
+        .collect()
+}
+
+/// PRD device-connect-iroh B65: the report a close owes the agent of
+/// another machine that asked for the mission is part of the mission's
+/// record from the close on, so a core that ends between the close and the
+/// letter owes it again at its next start. A store that could not keep the
+/// letter leaves the debt, which is tried again later and settled only by
+/// the letter being kept, once.
+#[test]
+fn a_closes_report_is_owed_from_the_close_through_a_restart_and_a_failed_save_until_its_letter_is_kept()
+ {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::OriginReport;
+    let closed = started_for_another_machine();
+    let (book, id) = {
+        let mut runtime = closed.runtime.lock().unwrap();
+        let id = closed_by_the_worker(&mut runtime);
+        // The close and its debt are one record.
+        let mission = runtime.missions.book.get(&id).unwrap();
+        assert_eq!(mission.status, MissionStatus::Cancelled);
+        assert_eq!(mission.origin_report, Some(OriginReport::Owed));
+        (runtime.missions.book.clone(), id)
+    };
+    drop(closed);
+
+    // The core ended before any letter was written: the next start reads
+    // the debt from the stored mission.
+    let fixture = started_for_another_machine();
+    let folder = tempfile::tempdir().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let store = MissionStore::new(folder.path());
+        MissionFiles::new(store.dir().to_owned(), None)
+            .write(&book, &mut Vec::new())
+            .unwrap();
+        let Restored::Read(book) = store.restore() else {
+            panic!("the folder loads")
+        };
+        runtime.install_mission_store(store, Restored::Read(book));
+        assert_eq!(runtime.missions.reports_owed, std::slice::from_ref(&id));
+
+        // The store could not keep the letter: nothing is settled, and the
+        // report waits for its next try.
+        let close = runtime.missions.book.get(&id).unwrap().closed_at_unix_ms;
+        runtime.settle_mission_report(&id, close, Err("ledger_unavailable".into()), now);
+        assert_eq!(runtime.missions.reports_owed, std::slice::from_ref(&id));
+        runtime.drive_mission_reports(now + 1);
+        assert!(!runtime.missions.reporting, "not before its next try");
+    }
+    assert_eq!(origin_report(&fixture, &id), Some(OriginReport::Owed));
+    assert!(report_letters(&fixture).is_empty());
+
+    fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .drive_mission_reports(now + 60_000);
+    wait_for("the report's letter to be kept", || {
+        matches!(
+            origin_report(&fixture, &id),
+            Some(OriginReport::Sent { .. })
+        )
+    });
+    let letters = report_letters(&fixture);
+    assert_eq!(letters.len(), 1);
+    assert_eq!(
+        letters[0].body,
+        format!("Mission {id} \"Fix the bug\" closed as cancelled, with no report.")
+    );
+    assert_eq!(letters[0].from.as_ref(), Some(&fixture.ids["worker"]));
+    assert!(letters[0].recipient.core_of(MACBOOK_KEY));
+    assert_eq!(
+        origin_report(&fixture, &id),
+        Some(OriginReport::Sent {
+            letter: letters[0].id.clone()
+        })
+    );
+    wait_for("the sending thread to end", || {
+        !fixture.runtime.lock().unwrap().missions.reporting
+    });
+
+    // A core that ended after the letter was kept and before the mission
+    // said so owes it again, and writes the same letter, not a second.
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        assert!(runtime.missions.reports_owed.is_empty());
+        runtime.missions.book.get_mut(&id).unwrap().origin_report = Some(OriginReport::Owed);
+        runtime.owe_mission_report(&id);
+        runtime.drive_mission_reports(now + 120_000);
+    }
+    wait_for("the same letter to settle the debt", || {
+        matches!(
+            origin_report(&fixture, &id),
+            Some(OriginReport::Sent { .. })
+        )
+    });
+    assert_eq!(report_letters(&fixture), letters);
+}
+
+/// PRD device-connect-iroh B65: a report no letter can be written for ends
+/// as refused on the mission, with why, and its Conductor is told once, so
+/// it can still write the letter itself; a mission nobody on another
+/// machine asked for owes none.
+#[test]
+fn a_report_that_cannot_be_written_ends_refused_and_its_conductor_is_told() {
+    use crate::missions::OriginReport;
+    let fixture = started_for_another_machine();
+    let now = crate::runtime::unix_milliseconds();
+    let id = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        // The two machines are paired no longer when the mission closes.
+        macbook(&mut runtime, false);
+        let id = closed_by_the_worker(&mut runtime);
+        assert_eq!(runtime.missions.reports_owed, std::slice::from_ref(&id));
+        runtime.drive_mission_reports(now);
+        assert!(runtime.missions.reports_owed.is_empty());
+        let cells = runtime.cells_of(&fixture.ids["worker"]);
+        assert_eq!(cells.len(), 1, "{cells:?}");
+        assert_eq!(cells[0].subject, format!("mission-report:{id}"));
+        assert!(
+            cells[0].line.contains("machine_not_permitted"),
+            "{}",
+            cells[0].line
+        );
+        id
+    };
+    assert_eq!(
+        origin_report(&fixture, &id),
+        Some(OriginReport::Refused {
+            reason: "machine_not_permitted".into()
+        })
+    );
+    assert!(report_letters(&fixture).is_empty());
+
+    // A Conductor the operator typed owes no one a report.
+    let local = conducting();
+    let mut runtime = local.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .origin_report,
+        None
+    );
+    assert!(runtime.missions.reports_owed.is_empty());
+}
+
+/// PRD device-connect-iroh D-72: the agent that asked for a mission hears
+/// its close the same on the Conductor's own machine as on another: one
+/// `report` letter of the Conductor's, kept for the asker's registration.
+#[test]
+fn a_closes_report_goes_to_the_agent_of_this_machine_that_asked_for_the_mission() {
+    use crate::missions::OriginReport;
+    let fixture = started_by_an_agent_here();
+    let now = crate::runtime::unix_milliseconds();
+    let id = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        let id = closed_by_the_worker(&mut runtime);
+        runtime.drive_mission_reports(now);
+        id
+    };
+    wait_for("the report's letter to be kept", || {
+        matches!(
+            origin_report(&fixture, &id),
+            Some(OriginReport::Sent { .. })
+        )
+    });
+    let letters = report_letters(&fixture);
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].from.as_ref(), Some(&fixture.ids["worker"]));
+    assert_eq!(letters[0].to.as_ref(), Some(&fixture.ids["other"]));
+    assert_eq!(
+        letters[0].body,
+        format!("Mission {id} \"Fix the bug\" closed as cancelled, with no report.")
+    );
+    wait_for("the sending thread to end", || {
+        !fixture.runtime.lock().unwrap().missions.reporting
+    });
+}
+
+/// A core that starts again owing the report of a mission closed before it
+/// ended, paired on `connections`, each a machine that says it is the
+/// device `macbook`: the fixture, the mission store's folder and the
+/// mission's id.
+fn restarted_owing_a_report(
+    connections: &[&str],
+) -> (super::access_letters::Fixture, tempfile::TempDir, String) {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::OriginReport;
+    let closed = started_for_another_machine();
+    let (book, id) = {
+        let mut runtime = closed.runtime.lock().unwrap();
+        let id = closed_by_the_worker(&mut runtime);
+        (runtime.missions.book.clone(), id)
+    };
+    assert_eq!(
+        book.get(&id).unwrap().origin_report,
+        Some(OriginReport::Owed)
+    );
+    drop(closed);
+    let fixture = started_for_another_machine();
+    let folder = tempfile::tempdir().unwrap();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        saying_macbook(&mut runtime, connections);
+        let store = MissionStore::new(folder.path());
+        MissionFiles::new(store.dir().to_owned(), None)
+            .write(&book, &mut Vec::new())
+            .unwrap();
+        let Restored::Read(book) = store.restore() else {
+            panic!("the folder loads")
+        };
+        runtime.install_mission_store(store, Restored::Read(book));
+        assert_eq!(runtime.missions.reports_owed, std::slice::from_ref(&id));
+    }
+    (fixture, folder, id)
+}
+
+/// The report goes to the agent that asked on the connection its machine
+/// proved when it asked, read from the registration kept of it and never
+/// from its device id again, for a report a restart read back as owed too.
+/// A second paired connection that says the same device id neither makes
+/// the report's target ambiguous nor takes it, and once the asker's own
+/// connection is paired no longer the report is refused rather than handed
+/// to the one that says its id now.
+#[test]
+fn a_report_owed_across_a_restart_goes_only_to_the_connection_its_asker_was_registered_on() {
+    use crate::missions::OriginReport;
+    const OTHER_KEY: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+    let now = crate::runtime::unix_milliseconds();
+    let waiting = |fixture: &super::access_letters::Fixture, key: &str| {
+        fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .core_outbox(key)
+            .letters
+            .len()
+    };
+
+    let (fixture, _folder, id) = restarted_owing_a_report(&[OTHER_KEY, MACBOOK_KEY]);
+    fixture.runtime.lock().unwrap().drive_mission_reports(now);
+    wait_for("the report's letter to be kept", || {
+        matches!(
+            origin_report(&fixture, &id),
+            Some(OriginReport::Sent { .. })
+        )
+    });
+    let letters = report_letters(&fixture);
+    assert_eq!(letters.len(), 1);
+    assert!(letters[0].recipient.core_of(MACBOOK_KEY));
+    assert_eq!(
+        (waiting(&fixture, MACBOOK_KEY), waiting(&fixture, OTHER_KEY)),
+        (1, 0)
+    );
+    wait_for("the sending thread to end", || {
+        !fixture.runtime.lock().unwrap().missions.reporting
+    });
+    drop(fixture);
+
+    let (fixture, _folder, id) = restarted_owing_a_report(&[OTHER_KEY]);
+    fixture.runtime.lock().unwrap().drive_mission_reports(now);
+    assert_eq!(
+        origin_report(&fixture, &id),
+        Some(OriginReport::Refused {
+            reason: "machine_not_permitted".into()
+        })
+    );
+    assert!(report_letters(&fixture).is_empty());
+    assert_eq!(waiting(&fixture, OTHER_KEY), 0);
+}
+
+/// PRD device-connect-iroh B65 over the state folders released builds
+/// wrote: a close that owes its report, saved by this build beside the
+/// missions the release left, is read at the next start with every mission
+/// the release had, and is still owed.
+#[test]
+fn a_report_owed_over_a_released_state_folder_is_still_owed_at_the_next_start() {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::OriginReport;
+    use crate::node_migration::upgrade_tests::{fixtures, second_start, started};
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let store = MissionStore::new(state.path());
+        // A release before the folder book left one file, which the first
+        // save moves into the folder.
+        let restored = store.restore();
+        let (released, read) = match &restored {
+            Restored::Read(book) => (book.clone(), Some(book.clone())),
+            Restored::Moving(book) => (book.clone(), None),
+            Restored::Fresh => (Default::default(), None),
+            Restored::Unreadable(reason) => panic!("{tag}: {reason}"),
+        };
+        let fixture = started_for_another_machine();
+        let (book, id) = {
+            let mut runtime = fixture.runtime.lock().unwrap();
+            runtime.install_mission_store(MissionStore::new(state.path()), restored);
+            let id = closed_by_the_worker(&mut runtime);
+            (runtime.missions.book.clone(), id)
+        };
+        drop(fixture);
+        assert!(released.get(&id).is_none(), "{tag}: a mission of its own");
+        MissionFiles::new(store.dir().to_owned(), read.as_ref())
+            .write(&book, &mut Vec::new())
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+
+        assert_eq!(second_start(state.path()), Vec::<String>::new(), "{tag}");
+        let Restored::Read(next) = store.restore() else {
+            panic!("{tag}: the folder loads")
+        };
+        assert_eq!(
+            next.get(&id)
+                .and_then(|mission| mission.origin_report.clone()),
+            Some(OriginReport::Owed),
+            "{tag}"
+        );
+        for mission in &released.missions {
+            assert!(next.get(&mission.id).is_some(), "{tag}: {}", mission.id);
+        }
+        let fixture = started_for_another_machine();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.install_mission_store(MissionStore::new(state.path()), Restored::Read(next));
+        assert_eq!(runtime.missions.reports_owed, [id], "{tag}");
+    }
+}

@@ -8,6 +8,11 @@
 //! terminal router a node runs reads the same form, which is why this lives
 //! in the link crate the core and the node both depend on.
 //!
+//! Two more forms name what is not this core's on a device, and are read
+//! here too: `guest:<device>:pane:<id>`, another machine's pane running on
+//! this one ([`guest_pane_id`]), and `core:<device>:agent|pane:<id>`, an
+//! agent or a pane of another machine's own core ([`CoreAddress`]).
+//!
 //! The separator after the device is its first `:`, because the core
 //! registers and connects no device whose id holds `:`
 //! ([`device_id_is_unambiguous`]): an id holding `:pane:` would otherwise
@@ -106,6 +111,105 @@ pub fn guest_pane(id: &str) -> Option<(&str, &str)> {
     }
 }
 
+pub const CORE_PREFIX: &str = "core:";
+
+/// What an address of another core names: one of its agents, by the id or
+/// the name that core registered it under, or one of its panes, by the id
+/// its engine gives it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum CoreItem {
+    Agent,
+    Pane,
+}
+
+impl CoreItem {
+    pub const ALL: [CoreItem; 2] = [CoreItem::Agent, CoreItem::Pane];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            CoreItem::Agent => "agent",
+            CoreItem::Pane => "pane",
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|item| item.word() == word)
+    }
+}
+
+/// An agent or a pane of another machine's own core, reached through the
+/// grant that machine gave this one (PRD device-connect-iroh D-72):
+/// `core:<device>:agent:<id>` or `core:<device>:pane:<id>`.
+///
+/// It is not `remote:<device>:...`, which names what this core keeps on
+/// that machine, and not `guest:<device>:...`, which names that machine's
+/// work running here: the item is that core's own, so this core's ledger
+/// and engine hold nothing of it, and a command that names one is that
+/// core's to run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct CoreAddress<'a> {
+    /// The other machine's device id, which is its core's node id.
+    pub device: &'a str,
+    pub item: CoreItem,
+    /// That core's own id for the item.
+    pub id: &'a str,
+}
+
+/// An id spelled as another core's (`core:`) that names nothing there: its
+/// device, its kind or its own id is missing, or the kind is none a core
+/// address names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NotACoreItem(pub String);
+
+impl fmt::Display for NotACoreItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} names no agent or pane of another core", self.0)
+    }
+}
+
+impl std::error::Error for NotACoreItem {}
+
+impl<'a> CoreAddress<'a> {
+    pub fn new(device: &'a str, item: CoreItem, id: &'a str) -> Self {
+        Self { device, item, id }
+    }
+
+    /// What `id` names when it is spelled as another core's: `None` for any
+    /// id without the prefix, which is this core's to read, and an error for
+    /// one with it that names nothing.
+    pub fn parse(id: &'a str) -> Option<Result<Self, NotACoreItem>> {
+        let rest = id.strip_prefix(CORE_PREFIX)?;
+        let parsed = rest.split_once(':').and_then(|(device, rest)| {
+            let (item, own) = rest.split_once(':')?;
+            let item = CoreItem::from_word(item)?;
+            (!device.is_empty() && !own.is_empty()).then_some(Self {
+                device,
+                item,
+                id: own,
+            })
+        });
+        Some(parsed.ok_or_else(|| NotACoreItem(id.to_owned())))
+    }
+}
+
+impl fmt::Display for CoreAddress<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{CORE_PREFIX}{}:{}:{}",
+            self.device,
+            self.item.word(),
+            self.id
+        )
+    }
+}
+
+/// Whether `id` is spelled as another core's item, well formed or not
+/// ([`CoreAddress::parse`] says which).
+pub fn is_core_scoped(id: &str) -> bool {
+    id.starts_with(CORE_PREFIX)
+}
+
 /// An id the core scoped to a device: `remote:<device>:<kind>:<id>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Scoped<'a> {
@@ -165,9 +269,9 @@ pub enum PaneAddress<'a> {
     Guest { device: &'a str, pane: &'a str },
 }
 
-/// A pane id spelled as a device's (`remote:`) or a guest's (`guest:`)
-/// that names no such pane: its device or its own id is missing, or it
-/// names another kind.
+/// A pane id spelled as a device's (`remote:`), a guest's (`guest:`) or
+/// another core's (`core:`) that names no pane of this core: its device or
+/// its own id is missing, it names another kind, or it is another core's.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotAPane(pub String);
 
@@ -191,7 +295,8 @@ impl<'a> PaneAddress<'a> {
     }
 
     /// The pane an id names. An id without the device prefix is the core's
-    /// own node's; one with it must name a device's pane.
+    /// own node's; one with it must name a device's pane, and one spelled as
+    /// another core's names none of this core's.
     pub fn parse(id: &'a str) -> Result<Self, NotAPane> {
         if let Some(rest) = id.strip_prefix(GUEST_PREFIX) {
             return match rest.split_once(GUEST_PANE) {
@@ -204,6 +309,12 @@ impl<'a> PaneAddress<'a> {
                 }
                 _ => Err(NotAPane(id.to_owned())),
             };
+        }
+        // Another core's pane is none of this core's: a command that names
+        // one is that core's to run ([`CoreAddress`]), so where an id is read
+        // as a pane of this core it is no pane.
+        if is_core_scoped(id) {
+            return Err(NotAPane(id.to_owned()));
         }
         if !is_device_scoped(id) {
             return Ok(Self::Node(id));
@@ -528,6 +639,58 @@ mod tests {
             "w1:p1",
         ] {
             assert_eq!(guest_pane(id), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn another_cores_agent_and_pane_round_trip_and_are_no_pane_of_this_core() {
+        for (item, own) in [(CoreItem::Agent, "agent-12"), (CoreItem::Pane, "w1:p2")] {
+            let address = CoreAddress::new("mini", item, own);
+            let text = address.to_string();
+            assert_eq!(text, format!("core:mini:{}:{own}", item.word()));
+            assert_eq!(CoreAddress::parse(&text), Some(Ok(address)));
+            assert!(is_core_scoped(&text));
+            // Neither this core's own on that machine nor that machine's
+            // work here.
+            assert!(!is_device_scoped(&text));
+            assert_eq!(device_of(&text), None);
+            assert_eq!(guest_pane(&text), None);
+            assert_eq!(PaneAddress::parse(&text), Err(NotAPane(text.clone())));
+            assert_eq!(pane_device(&text), None);
+        }
+        // The other core's own id is everything after the kind, separators
+        // included.
+        assert_eq!(
+            CoreAddress::parse("core:mini:pane:remote:studio:pane:w1:p1"),
+            Some(Ok(CoreAddress::new(
+                "mini",
+                CoreItem::Pane,
+                "remote:studio:pane:w1:p1"
+            )))
+        );
+        // An id of this core's is not read here at all.
+        for id in [
+            "w1:p1",
+            "agent-12",
+            "remote:mini:pane:w1:p1",
+            "guest:mini:pane:w1:p1",
+        ] {
+            assert_eq!(CoreAddress::parse(id), None, "{id}");
+        }
+        for id in [
+            "core:",
+            "core:mini",
+            "core:mini:agent",
+            "core:mini:agent:",
+            "core::agent:agent-1",
+            "core:mini:tab:w1:t1",
+            "core:mini:workspace:w1",
+        ] {
+            assert_eq!(
+                CoreAddress::parse(id),
+                Some(Err(NotACoreItem(id.to_owned()))),
+                "{id}"
+            );
         }
     }
 

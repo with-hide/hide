@@ -34,7 +34,7 @@ use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc, watch};
 
 use crate::ending::Ending;
 
@@ -92,6 +92,8 @@ pub struct PeerHost {
     settings: Settings,
     handlers: Mutex<HashMap<StreamKind, Handler>>,
     opened: OnceCell<HostPeers>,
+    /// The open endpoint, for whoever waits for it ([`PeerHost::when_open`]).
+    opening: watch::Sender<Option<HostPeers>>,
     shutdown: Ending,
 }
 
@@ -175,6 +177,7 @@ impl PeerHost {
             settings,
             handlers: Mutex::new(HashMap::new()),
             opened: OnceCell::new(),
+            opening: watch::channel(None).0,
             shutdown,
         })
     }
@@ -241,6 +244,17 @@ impl PeerHost {
     /// The open endpoint's connections; `None` while it is not open.
     pub fn peers(&self) -> Option<HostPeers> {
         self.opened.get().cloned()
+    }
+
+    /// The endpoint once it is open, however long that takes: for a service
+    /// that follows every connection and starts none. `None` when the
+    /// daemon ends first.
+    pub async fn when_open(&self) -> Option<HostPeers> {
+        let mut opening = self.opening.subscribe();
+        tokio::select! {
+            () = self.shutdown.ended() => None,
+            open = opening.wait_for(Option::is_some) => open.ok().and_then(|open| (*open).clone()),
+        }
     }
 
     /// Where a peer reaches this machine now, in the order to try; empty
@@ -329,6 +343,7 @@ impl PeerHost {
             "direct": self.settings.direct.is_some(),
         }));
         tokio::spawn(Arc::clone(self).serve(peers.clone(), incoming));
+        self.opening.send_replace(Some(peers.clone()));
         Ok(peers)
     }
 

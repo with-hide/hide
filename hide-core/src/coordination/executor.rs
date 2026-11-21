@@ -767,7 +767,10 @@ pub(crate) fn run(
     command: Command,
 ) -> Result<Value, String> {
     match command {
-        Command::List { live } => {
+        // Another machine's list is asked of its core before this runs
+        // (`Runtime::core_delivery_forward`); a machine named here is this
+        // core's own.
+        Command::List { live, .. } => {
             let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
                 // A code-owned identity (Hide's own, such as Desk's, an
@@ -987,7 +990,7 @@ fn own_registration(
 /// Registers a code-owned identity, a Factory's or Hide's own, as the
 /// parent or origin of the agents it starts (D-14); converges on the
 /// existing record.
-fn register_code_owned(
+pub(crate) fn register_code_owned(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -1001,7 +1004,14 @@ fn register_code_owned(
         machine: actor.device_id.clone(),
         host_scope: actor.kind.clone(),
         native_machine: actor.kind.clone(),
-        session: actor.name.clone(),
+        // What the identity's session is the digest of: its name, and for
+        // another core's agent the caller it acts as, its machine's
+        // connection id and its address (`Actor::core_caller`), which stay
+        // whatever the agent or its machine is called later.
+        session: match actor.core_address() {
+            Some(_) => authority.caller.clone(),
+            None => actor.name.clone(),
+        },
         instance: actor.pane_id.clone(),
         pane: actor.pane_id.clone(),
         parent: None,
@@ -1833,6 +1843,21 @@ fn spawn(
                     &checkout,
                     agent.profile().map(|(id, _)| id).as_ref(),
                 )?;
+            }
+            // The spawn itself changed which worktrees this machine's
+            // repository has, so the core asks for the catalog rather than
+            // waiting to be told: a window's Git watch reports the change
+            // too, and with no window nothing else does
+            // (`WorktreeReader::read_unwatched_if_due`), which would leave a
+            // mission made in the new worktree without its project.
+            if made
+                && on_node
+                && let Some(runtime) = client.runtime.upgrade()
+            {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .worktree_made_here();
             }
             // The terminal is recorded with the pane, so a later attempt can
             // tell this pane from another terminal that later answers to the same id.

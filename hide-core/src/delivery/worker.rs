@@ -49,6 +49,26 @@ pub struct Prepared {
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
+    /// Another core runs the command (PRD device-connect-iroh D-72): a
+    /// read or a start with no parent that names another machine's core.
+    forward: Option<Forwarded>,
+}
+
+/// A command another core runs, with what this core records before it
+/// asks.
+struct Forwarded {
+    forward: crate::core_calls::Forward,
+    /// A start: its asker is remembered first, so the result report of what
+    /// starts there finds it (`ledger::CoreStart`).
+    start: Option<Start>,
+}
+
+/// A start asked of another core: the connection it is asked on, and the
+/// registration its asker is made with first when it has none
+/// (`Effect::CoreStart`).
+pub(crate) struct Start {
+    pub(crate) key: String,
+    pub(crate) registers: Option<Box<crate::coordination::AgentRecord>>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -178,7 +198,19 @@ impl Prepared {
             answered: None,
             then: None,
             forced: None,
+            forward: None,
         }
+    }
+
+    /// Has the core `forward` names run the command; `start` is what a
+    /// start records first.
+    pub(crate) fn forwarded(
+        mut self,
+        forward: crate::core_calls::Forward,
+        start: Option<Start>,
+    ) -> Self {
+        self.forward = Some(Forwarded { forward, start });
+        self
     }
 
     /// Words what the command hands over in `language`.
@@ -250,6 +282,36 @@ impl Prepared {
         });
         let mut result = if let Some(answer) = self.answered {
             Ok(answer)
+        } else if let Some(Forwarded { forward, start }) = self.forward {
+            match start {
+                // The start is asked as the agent the store registered.
+                Some(Start { key, registers }) => self
+                    .client
+                    .submit(
+                        Effect::CoreStart {
+                            origin: self.actor,
+                            key,
+                            registers,
+                        },
+                        timeout,
+                    )
+                    .and_then(|asker| {
+                        let party = |field: &str| {
+                            asker[field]
+                                .as_str()
+                                .map(str::to_owned)
+                                .ok_or("invalid_response")
+                        };
+                        forward
+                            .asked_by(crate::core_calls::Party {
+                                item: crate::core_calls::CoreItem::Agent,
+                                id: party("id")?,
+                                name: party("name")?,
+                            })
+                            .run(timeout)
+                    }),
+                None => forward.run(timeout),
+            }
         } else if let Command::Agents { command } = self.command {
             crate::coordination::run(self.client, self.authority, self.actor, command)
         } else if let (Some(engine), Some(target)) = (&self.forced, &self.target)
@@ -430,6 +492,36 @@ pub(crate) enum Effect {
     Owed {
         recipient: Actor,
         owed: hide_agent_hooks::owed::Owed,
+    },
+    /// The core on connection `key` took letter `id` for the agent it
+    /// calls `name` (`Ledger::settle_core`).
+    CoreSettled {
+        id: String,
+        key: String,
+        name: String,
+    },
+    /// The core on connection `key` keeps nothing of letter `id`, and why
+    /// (`Ledger::refuse_core`).
+    CoreRefused {
+        id: String,
+        key: String,
+        reason: String,
+    },
+    /// Letter `id`, which an agent of another core sent, is `core_id` in
+    /// its sender's ledger (`Ledger::name_core_letter`).
+    CoreName {
+        id: String,
+        core_id: String,
+    },
+    /// `origin` asks the core on connection `key` for a start
+    /// (`Ledger::note_core_start`), refused `capacity` when the ledger can
+    /// remember no more. It is registered first when it has no registration
+    /// (`registers`), since the start's report is a letter to it; the store
+    /// answers with the agent it is.
+    CoreStart {
+        origin: Actor,
+        key: String,
+        registers: Option<Box<crate::coordination::AgentRecord>>,
     },
 }
 
@@ -989,6 +1081,35 @@ fn apply(
             let changed = !confirmed.is_empty();
             return Ok((json!(confirmed), changed));
         }
+        Effect::CoreSettled { id, key, name } => {
+            let settled = ledger.settle_core(id, key, name, now);
+            return Ok((json!({ "settled": settled }), settled));
+        }
+        Effect::CoreRefused { id, key, reason } => {
+            let refused = ledger.refuse_core(id, key, reason, now);
+            return Ok((json!({ "refused": refused }), refused));
+        }
+        Effect::CoreName { id, core_id } => {
+            ledger.name_core_letter(id, core_id);
+            return Ok((Value::Null, false));
+        }
+        Effect::CoreStart {
+            origin,
+            key,
+            registers,
+        } => {
+            if let Some(record) = registers {
+                crate::coordination::register_party(ledger, record, holds)?;
+            }
+            let asker = ledger
+                .agents
+                .iter()
+                .find(|record| !record.ended && record.actor.same_identity(origin))
+                .ok_or(crate::runtime::SENDER_NOT_REGISTERED)?;
+            let (id, name) = (asker.id.clone(), asker.wire_name().to_owned());
+            ledger.note_core_start(&id, key, now)?;
+            return Ok((json!({ "id": id, "name": name }), registers.is_some()));
+        }
         Effect::BellRound { id, recipient } => {
             let renewed = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
@@ -1215,9 +1336,10 @@ fn run(
                     guard.delivery_successions(),
                     guard.delivery_closed(),
                     guard.delivery_tool_connections(),
+                    guard.delivery_core_machines(),
                 ))
             });
-        let (state, gone, rebinds, successions, closed, tools) = match state {
+        let (state, gone, rebinds, successions, closed, tools, cores) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -1239,6 +1361,9 @@ fn run(
                 && !tools
                     .as_deref()
                     .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
+                && !cores
+                    .as_deref()
+                    .is_some_and(|cores| crate::coordination::cores_left_behind(&state, cores))
                 && !state
                     .letters
                     .iter()
@@ -1253,6 +1378,7 @@ fn run(
             successions,
             closed,
             tools,
+            cores,
         };
         let Settled {
             ledger: candidate,
@@ -1541,10 +1667,15 @@ fn current(
                     // Only the core's code-owned callers
                     // hold this authority; neither has a pane to
                     // re-check.
-                    return guard
-                        .code_owned_authority_current(&authority.caller, actor)
-                        .then_some(())
-                        .ok_or_else(|| "caller_identity_changed".into());
+                    if !guard.code_owned_authority_current(&authority.caller, actor) {
+                        return Err("caller_identity_changed".into());
+                    }
+                    // What another core's agent changes is judged again
+                    // by how its machine stands now (D-72).
+                    if actor.core_address().is_some() {
+                        guard.core_mutation_current(actor, mutation)?;
+                    }
+                    return Ok(());
                 }
                 let context = guard
                     .workspace_control_query(&actor.device_id, &authority.caller, Query::Info)
@@ -1587,6 +1718,11 @@ fn current(
                         if !guard.code_owned_authority_current(&authority.caller, actor) {
                             return Err("caller_identity_changed".into());
                         }
+                        // What another core's agent asks is judged again
+                        // by how its machine stands now (D-72).
+                        if actor.core_address().is_some() {
+                            guard.core_command_current(actor, command)?;
+                        }
                     } else {
                         // The caller is the agent's own pane.
                         let current = guard
@@ -1610,7 +1746,12 @@ fn current(
                         if matches!(command, Command::Send { .. } | Command::WatchAssign { .. }) {
                             target.actor.require_native_identity()?;
                         }
-                        let current = if target.actor.code_owned() {
+                        let current = if target.actor.core_address().is_some() {
+                            // An agent of another core: its machine still
+                            // takes this caller's letter.
+                            matches!(command, Command::Send { .. })
+                                && guard.core_recipient_current(actor, &target.actor, command)
+                        } else if target.actor.code_owned() {
                             false
                         } else if matches!(command, Command::Send { .. }) {
                             // A sleeping recipient takes letters too.
@@ -1653,6 +1794,10 @@ struct Upkeep {
     /// is restored: what a tool not among them keeps ends
     /// (`coordination::end_gone_tools`).
     tools: Option<Vec<String>>,
+    /// The machines this core is paired with, by connection id, once it
+    /// was told them: what an agent of any other machine keeps ends
+    /// (`coordination::end_gone_cores`).
+    cores: Option<Vec<String>>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1722,13 +1867,17 @@ impl Upkeep {
             .tools
             .as_deref()
             .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now));
+        let cores = self
+            .cores
+            .as_deref()
+            .is_some_and(|cores| crate::coordination::end_gone_cores(ledger, cores, now));
         crate::coordination::shed_finished_briefs(ledger);
         Upkept {
             moved,
             succeeded,
             ended,
             closed,
-            tools,
+            tools: tools | cores,
         }
     }
 }
@@ -2797,6 +2946,7 @@ mod tests {
             successions: Default::default(),
             closed: Default::default(),
             tools: None,
+            cores: None,
         }
     }
 

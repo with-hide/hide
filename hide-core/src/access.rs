@@ -592,6 +592,122 @@ pub fn device_need(command: &crate::device_command::DeviceCommand) -> Need {
     }
 }
 
+/// How another machine's core stands toward this one (PRD
+/// device-connect-iroh D-72), read from the pairing facts hided tells the
+/// core (`crate::peer_machines`). Its agents' commands enter here as an
+/// external tool's do, at Act, and the same table judges them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoreStanding {
+    /// It holds an active grant to open this machine: what it asks runs as
+    /// a tool at Act would run it.
+    Opens,
+    /// Only this machine opens it. It asked for nothing here, so it writes
+    /// nothing first: it answers a letter it got and sends the result
+    /// report of what was started there, as a tool hears only what it
+    /// asked for.
+    Answers,
+}
+
+/// A machine with no active pairing in either direction asked, or this
+/// machine's agent named one it may not open.
+pub const MACHINE_NOT_PERMITTED: &str = "machine_not_permitted";
+
+/// What an agent refused with [`MACHINE_NOT_PERMITTED`] does next.
+pub const MACHINE_NOT_PERMITTED_NEXT: &str = "Another machine's core does this only for a machine it opened itself to: an agent on the machine that connected (hide device list) lists, shows, reads and starts agents there and writes to them; an agent there answers with hide request reply and reports to the agent that started it, and writes nothing first. hide pane send types into no pane of another machine's core, and an agent on a connected device cannot use --machine";
+
+/// Where `machine` stands: it opens this machine while its grant here is
+/// active, and otherwise it only answers while this machine's grant there
+/// is. A paused, unconfirmed or removed pairing stands nowhere.
+pub fn core_standing(machine: &crate::peer_machines::PeerMachine) -> Option<CoreStanding> {
+    use crate::peer_machines::{PeerOpenedBy, PeerOpens};
+    if machine.opened_by == Some(PeerOpenedBy::Active) {
+        Some(CoreStanding::Opens)
+    } else if machine.opens == Some(PeerOpens::Active) {
+        Some(CoreStanding::Answers)
+    } else {
+        None
+    }
+}
+
+/// Where this machine stands on `machine`, the mirror of
+/// [`core_standing`]: it opens that machine while its own grant there is
+/// active, and otherwise only answers it while that machine's grant here
+/// is. An agent's command for another core is judged by it before it
+/// leaves, so a letter the other core would refuse is refused at once.
+pub fn core_standing_there(machine: &crate::peer_machines::PeerMachine) -> Option<CoreStanding> {
+    use crate::peer_machines::{PeerOpenedBy, PeerOpens};
+    if machine.opens == Some(PeerOpens::Active) {
+        Some(CoreStanding::Opens)
+    } else if machine.opened_by == Some(PeerOpenedBy::Active) {
+        Some(CoreStanding::Answers)
+    } else {
+        None
+    }
+}
+
+/// What a delivery command another core's agent asks is, to a machine that
+/// only answers ([`CoreStanding::Answers`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoreAsk {
+    /// A reply to a letter.
+    Reply,
+    /// A `report` letter to an agent that asked that machine for a start
+    /// (`ledger::CoreStart`).
+    ResultReport,
+    /// Anything else, a first letter among them.
+    First,
+}
+
+/// Whether a core standing as `standing` runs `command` here, or the reason
+/// it is refused. A core that opens this machine is a tool at Act
+/// ([`admit`], [`delivery_need`]); one that only answers runs a reply and
+/// the result report of a start this core asked it for, and is refused the
+/// rest as a machine that may not write first.
+pub fn core_admit(
+    standing: CoreStanding,
+    command: &crate::delivery::Command,
+    ask: CoreAsk,
+) -> Result<(), &'static str> {
+    admit(Level::Act, delivery_need(command))?;
+    match (standing, ask) {
+        (CoreStanding::Opens, _)
+        | (CoreStanding::Answers, CoreAsk::Reply | CoreAsk::ResultReport) => Ok(()),
+        (CoreStanding::Answers, CoreAsk::First) => Err(MACHINE_NOT_PERMITTED),
+    }
+}
+
+/// Whether a core standing as `standing` runs the read or the start
+/// `asked` here. Only a core that opens this machine asks one, and only
+/// these: listing and showing agents, reading a pane, and a start, each as
+/// the tool table judges it at Act, so a start under a parent, beside a
+/// pane or for a plan step is refused as a tool's is. Typing into a pane
+/// and everything else a tool at Act may do is not another machine's.
+pub fn core_call_admit(
+    standing: CoreStanding,
+    asked: &crate::core_calls::Asked,
+) -> Result<(), &'static str> {
+    use crate::coordination::Command as Agents;
+    use crate::core_calls::Asked;
+    use crate::delivery::Command as Delivery;
+    if standing != CoreStanding::Opens {
+        return Err(MACHINE_NOT_PERMITTED);
+    }
+    match asked {
+        Asked::Delivery(command)
+            if matches!(
+                **command,
+                Delivery::Agents {
+                    command: Agents::List { .. } | Agents::Show { .. } | Agents::Spawn { .. },
+                }
+            ) =>
+        {
+            admit(Level::Act, delivery_need(command))
+        }
+        Asked::Pane(command) if pane_need(command) == Need::View => Ok(()),
+        _ => Err(MACHINE_NOT_PERMITTED),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,6 +854,110 @@ mod tests {
         assert_eq!(admit(Level::Act, Need::Act), Ok(()));
         assert_eq!(admit(Level::Act, Need::Agent), Err(NEEDS_AGENT));
         assert_eq!(admit(Level::Act, Need::Parent), Err(SPAWN_PARENT));
+    }
+
+    #[test]
+    fn another_core_runs_what_a_tool_at_act_runs_and_one_that_only_answers_writes_nothing_first() {
+        use crate::coordination::Command as Agents;
+        use crate::delivery::Command as Delivery;
+        use crate::peer_machines::{PeerMachine, PeerOpenedBy, PeerOpens};
+        let machine = |opens, opened_by| PeerMachine {
+            key: "a".repeat(64),
+            device_id: "mini".into(),
+            name: "Mac mini".into(),
+            opens,
+            opened_by,
+            connected: true,
+            path: None,
+            reason: None,
+            update: None,
+        };
+        // Standing follows the active pairings only.
+        for (opens, opened_by, standing) in [
+            (None, Some(PeerOpenedBy::Active), Some(CoreStanding::Opens)),
+            (
+                Some(PeerOpens::Active),
+                Some(PeerOpenedBy::Active),
+                Some(CoreStanding::Opens),
+            ),
+            (Some(PeerOpens::Active), None, Some(CoreStanding::Answers)),
+            (
+                Some(PeerOpens::Active),
+                Some(PeerOpenedBy::Paused),
+                Some(CoreStanding::Answers),
+            ),
+            (None, Some(PeerOpenedBy::Paused), None),
+            (Some(PeerOpens::Paused), None, None),
+            (Some(PeerOpens::PausedThere), None, None),
+            (Some(PeerOpens::Confirming), None, None),
+            (Some(PeerOpens::Removing), None, None),
+            (Some(PeerOpens::Unpaired), None, None),
+        ] {
+            assert_eq!(
+                core_standing(&machine(opens, opened_by)),
+                standing,
+                "{opens:?} {opened_by:?}"
+            );
+        }
+        let send = Delivery::Send {
+            target: "agent-1".into(),
+            intent: "i".into(),
+            body: "b".into(),
+            kind: "request".into(),
+            now: false,
+            force: false,
+        };
+        let reply = Delivery::Reply {
+            id: "letter-1".into(),
+            intent: "i".into(),
+            body: "b".into(),
+            now: false,
+        };
+        let list = Delivery::Agents {
+            command: Agents::List {
+                live: false,
+                machine: None,
+            },
+        };
+        let pull = Delivery::Inbox { bundle: false };
+        // A core that opens this machine: the tool table at Act.
+        assert_eq!(
+            core_admit(CoreStanding::Opens, &send, CoreAsk::First),
+            Ok(())
+        );
+        assert_eq!(
+            core_admit(CoreStanding::Opens, &reply, CoreAsk::Reply),
+            Ok(())
+        );
+        assert_eq!(
+            core_admit(CoreStanding::Opens, &list, CoreAsk::First),
+            Ok(())
+        );
+        assert_eq!(
+            core_admit(
+                CoreStanding::Opens,
+                &Delivery::Agents {
+                    command: Agents::Show { id: "here".into() }
+                },
+                CoreAsk::First
+            ),
+            Err(NEEDS_AGENT)
+        );
+        // One that only answers: a reply and a result report, nothing first.
+        assert_eq!(
+            core_admit(CoreStanding::Answers, &reply, CoreAsk::Reply),
+            Ok(())
+        );
+        assert_eq!(
+            core_admit(CoreStanding::Answers, &send, CoreAsk::ResultReport),
+            Ok(())
+        );
+        for first in [&send, &list, &pull] {
+            assert_eq!(
+                core_admit(CoreStanding::Answers, first, CoreAsk::First),
+                Err(MACHINE_NOT_PERMITTED)
+            );
+        }
     }
 
     #[test]
