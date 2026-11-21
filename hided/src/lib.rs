@@ -594,6 +594,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         boundary: Arc::clone(&boundary),
         roots: Arc::clone(&roots),
         browser_control: Arc::clone(&browser_control),
+        device_connect: env.device_connect,
     });
     seat.starting("core.peers");
     let peers = peer_host::PeerHost::new(

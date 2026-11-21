@@ -362,6 +362,10 @@ pub struct Config {
     /// The desktop windows' gateways, which a page View's screenshot goes
     /// through (`page_shot.rs`).
     pub browser_control: Arc<crate::browser_control::BrowserControl>,
+    /// Whether this build offers connections between two Hides
+    /// (`env::Env::device_connect`): what the phone gains with them (the
+    /// gathered view, `hide phone`) stays away until it does.
+    pub device_connect: bool,
 }
 
 pub struct Mobile {
@@ -622,6 +626,11 @@ impl Mobile {
     }
 
     /// The mac's name on the phone: its tailnet name, else the system's.
+    /// Whether this build offers connections between two Hides (`Config::device_connect`).
+    pub fn device_connect(&self) -> bool {
+        self.config.device_connect
+    }
+
     pub fn mac_name(&self) -> Option<String> {
         let inner = self.lock();
         inner
@@ -2960,6 +2969,7 @@ pub(super) fn test_mobile(
             Arc::new(crate::index::IndexService::new()),
         )),
         browser_control: Arc::default(),
+        device_connect: false,
     })
 }
 

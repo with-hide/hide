@@ -148,7 +148,8 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
   // A hosted phone paired with two computers or more chooses between all of them and this one (PRD device-connect-iroh B55).
   const hosts = useConnectableHosts();
   const activeRoom = gathered?.room ?? openRoom();
-  const computers = hosted && activeRoom && hosts && hosts.length > 1 && hosts.some((host) => host.room === activeRoom) ? hosts : null;
+  const deviceConnect = usePhone((s) => s.deviceConnect);
+  const computers = deviceConnect && hosted && activeRoom && hosts && hosts.length > 1 && hosts.some((host) => host.room === activeRoom) ? hosts : null;
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);

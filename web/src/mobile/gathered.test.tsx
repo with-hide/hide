@@ -58,7 +58,7 @@ beforeEach(() => {
     { group: "needs_you", count: 1, rows: [agent("mac", "mac-ask", 100)] },
     { group: "working", count: 1, rows: [agent("mac", "mac-work", 300, { group: "working", mark: "quiet" })] },
   ];
-  patch({ screen: "app", connected: true, groups, devices: [], listScope: "all" });
+  patch({ screen: "app", connected: true, groups, devices: [], listScope: "all", deviceConnect: true });
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -137,6 +137,18 @@ it("watches the other computers only while 모두 is on screen and the page is v
   // Another computer's chip opens that computer's own list.
   await act(async () => container.querySelector<HTMLElement>(`[data-phone-computer-choice="${MINI.room}"]`)!.click());
   expect(assign).toHaveBeenCalledWith(`/?host=${MINI.room}&one=1`);
+});
+
+// The gathered view stays behind the computer's release switch (HIDE_DEVICE_CONNECT): a computer that does not offer connections
+// between two Hides keeps today's list, however many computers the phone keeps.
+it("offers no gathered view on a computer whose build keeps connections off", async () => {
+  pair(MAC, MINI);
+  patch({ deviceConnect: false });
+  const { watch, opened } = watcher();
+  await render(watch);
+  expect(container.querySelector("[data-phone-computers]")).toBeNull();
+  expect(container.querySelector('[data-phone-agent="mac|mac-work"]')).not.toBeNull();
+  expect(opened).toEqual([]);
 });
 
 // B56, D-57: a phone paired with one computer opens as it did, with no computer row and no other connection.

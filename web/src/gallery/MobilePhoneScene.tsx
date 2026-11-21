@@ -66,7 +66,7 @@ export function MobilePhoneScene({ state, language, theme, scale, offline }: { s
     const prKey = PR_PAGE[state] ?? null;
     const page = prKey ? prs.items.find((candidate) => candidate.key === prKey) ?? null : null;
     patch({
-      screen: "app", connected: !offline, unreachable: offline, macName: PHONE_MAC, otherPhones: 0, groups, devices: phoneDevices(groups), childrenOpen: {}, foldsOpen: {}, listScope: "all",
+      screen: "app", connected: !offline, unreachable: offline, macName: PHONE_MAC, otherPhones: 0, groups, devices: phoneDevices(groups), childrenOpen: {}, foldsOpen: {}, listScope: "all", deviceConnect: state === "phone-gathered",
       detail: look ? phoneLookDetail(look) : null,
       agentsOmitted: cut ? CUT.agents : 0,
       tab: state.startsWith("phone-mission") ? "missions" : state.startsWith("phone-pr") ? "prs" : state.startsWith("phone-settings") ? "settings" : "agents",

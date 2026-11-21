@@ -3945,6 +3945,9 @@ The direct `/m/` socket keeps its existing handshake and UI.
 A relay socket owns its handshake deadline, chunk deadline check, and Noise memory; closing disposes all of them, and the browser send buffer is capped at 1 MiB with no retained application send queue.
 Reconnection keeps the existing command request identities and adds jitter; no action is automatically replayed by the transport.
 The host picker opens at most one extra read-only connection per other saved device only while its list is visible; it authenticates for counts but never opens an agent detail or sends an action.
+The gathered view (`web/src/mobile/Gathered.tsx`, its rules in `gather.ts`; PRD device-connect-iroh D-56, D-69) opens the same read-only observer (`presence.ts`) for each other saved computer only while 모두 is on screen and the page is visible, and keeps only each list's `needs_you` and `done` groups; it joins them newest first by each row's `changed_at_unix_ms` (a sleeping row's `since_unix_ms`), adds the groups' counts and keeps each core's own fold, so no phone constant repeats a core's cap.
+A computer whose relay announces another phone protocol is never authenticated to, by the observer's existing check, and shows as `<컴퓨터> 업데이트 필요`; one whose socket is closed shows 연결 안 됨 and its rows leave the view.
+The view is offered only when the open computer's `hello` carries `device_connect: true`, an addition hided makes from `HIDE_DEVICE_CONNECT` (`mobile::Config::device_connect`), so an older bundle ignores it and a build with the switch off keeps today's list.
 The in-app scanner uses bundled `jsqr`, one camera and at most 640 by 640 pixels at four scans per second; hiding or leaving it stops every track and timer.
 
 The hosted manifest starts at `/` so an installed app can add another device in its own storage.
