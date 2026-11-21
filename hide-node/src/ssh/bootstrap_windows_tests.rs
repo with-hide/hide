@@ -122,6 +122,8 @@ impl Device {
                     .chain(agent_home_variables().into_iter().map(|(name, _)| name))
                     .map(|name| (name, self.home().join("account").join(name))),
             )
+            // What Windows OpenSSH sets for the commands of a session.
+            .envs(SSH_SESSION_VARIABLES.map(|name| (name, "192.0.2.1 50000 192.0.2.2 22")))
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -194,13 +196,16 @@ impl Device {
     /// it was started with, in which of the device's folders (`home`, `own`
     /// or `other`), whether its per-user folders all follow the own home,
     /// which folder variables it was started with, whether every agent's
-    /// home is its folder under the own home, then repeats one line of its
-    /// input.
+    /// home is its folder under the own home, which of the ssh session's
+    /// variables it was started with, then repeats one line of its input.
     fn echoing_program(&self, path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let moved = HOME_FOLDER_VARIABLES
             .iter()
             .map(|name| format!("if defined {name} set moved=%moved% {name}"));
+        let session = SSH_SESSION_VARIABLES
+            .iter()
+            .map(|name| format!("if defined {name} set session=%session% {name}"));
         let agents = agent_home_variables().into_iter().map(|(name, folder)| {
             format!(
                 "if /i not \"%{name}%\"==\"%HIDE_TEST_OWN_HOME%\\{}\" set agents=other",
@@ -231,9 +236,16 @@ impl Device {
             .chain(moved)
             .chain(["echo moved:%moved%", "set agents=own"].map(str::to_owned))
             .chain(agents)
+            .chain(["echo agents:%agents%", "set session="].map(str::to_owned))
+            .chain(session)
             .chain(
-                ["echo agents:%agents%", "set /p line=", "echo carried:%line%", ""]
-                    .map(str::to_owned),
+                [
+                    "echo session:%session%",
+                    "set /p line=",
+                    "echo carried:%line%",
+                    "",
+                ]
+                .map(str::to_owned),
             )
             .collect::<Vec<_>>()
             .join("\r\n"),
@@ -731,6 +743,9 @@ fn the_helper_starts_on_the_same_pipes() {
         .collect();
     assert_eq!(line(&mut pipe), format!("moved:{all}"));
     assert_eq!(line(&mut pipe), "agents:other");
+    // The helper starts outside the ssh session the connection is
+    // (with-hide/hide#2776).
+    assert_eq!(line(&mut pipe), "session:");
     pipe.send(b"through the link\r\n", soon()).unwrap();
     assert_eq!(line(&mut pipe), "carried:through the link");
 
@@ -758,6 +773,7 @@ fn the_helper_starts_on_the_same_pipes() {
     assert_eq!(line(&mut pipe), "folders:own");
     assert_eq!(line(&mut pipe), "moved:");
     assert_eq!(line(&mut pipe), "agents:own");
+    assert_eq!(line(&mut pipe), "session:");
     for folder in [
         own.clone(),
         own.join(r"AppData\Roaming"),
