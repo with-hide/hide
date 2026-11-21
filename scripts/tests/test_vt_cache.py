@@ -25,7 +25,8 @@ ON_MAIN_ARM64 = "${{ github.ref == 'refs/heads/main' && runner.arch == 'ARM64' }
 # Every job that builds hide-vt with the shared inputs, and its exact `save`.
 USERS = {
     ('vt.yml', 'build'): ON_MAIN,
-    ('pr.yml', 'rust'): False,
+    ('rust.yml', 'build'): False,
+    ('rust.yml', 'lint'): False,
     ('pr.yml', 'merge-rust'): False,
     ('pr.yml', 'windows-check'): False,
     ('release.yml', 'test'): False,

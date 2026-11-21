@@ -225,9 +225,9 @@ jobs:
       fail-fast: false
       matrix:
         # A matrix cannot count to an input, so the list is picked by index; no
-        # shard count outside 1 to 8 has an entry, and a matrix without values
+        # shard count outside 1 to 9 has an entry, and a matrix without values
         # fails the lane.
-        shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8]]')[inputs.shards] }}
+        shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8], [1,2,3,4,5,6,7,8,9]]')[inputs.shards] }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false

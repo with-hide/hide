@@ -2,11 +2,14 @@
 import importlib.util
 from fnmatch import fnmatchcase
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 import subprocess
 import tempfile
 import unittest
+
+import yaml
 
 SPEC = importlib.util.spec_from_file_location("ci_plan", Path(__file__).parents[1] / "ci-plan.py")
 ci = importlib.util.module_from_spec(SPEC)
@@ -276,9 +279,10 @@ class Selection(unittest.TestCase):
             with self.subTest(event=event):
                 self.assertTrue(ci.plan(event, None, None, ROOT)["deny"])
                 self.assertTrue(ci.plan(event, None, None, ROOT, nightly_agent_checks=True)["deny"])
-        rust = pr_jobs()["rust"]
-        self.assertIn("DENY: ${{ needs.plan.outputs.deny }}", rust)
-        self.assertEqual(rust.count("if: env.DENY == 'true'"), 2)
+        self.assertIn("deny: ${{ needs.plan.outputs.deny }}", pr_jobs()["rust"])
+        lane = (ROOT / ".github/workflows/rust.yml").read_text()
+        self.assertIn("DENY: ${{ inputs.deny }}", lane)
+        self.assertEqual(lane.count("if: env.DENY == 'true'"), 2)
 
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
         pin = plan("contracts/conpty.json")
@@ -985,6 +989,10 @@ INCLUDE_MACOS = r"include-macos: \$\{\{ needs\.plan\.outputs\.macos == 'true' \}
 
 def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
+    if "uses: ./.github/workflows/rust.yml" in block:
+        rust = yaml.safe_load((ROOT / ".github/workflows/rust.yml").read_text())["jobs"]
+        # The build, its test shards and the lint beside them.
+        return sum(len(job.get("strategy", {}).get("matrix", {}).get("shard", [None])) for job in rust.values())
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
         # With more than one shard parallel daemon and web builds precede them.
@@ -1160,9 +1168,88 @@ class Workflows(unittest.TestCase):
         # to 62: one job held the suite at 22.4 minutes, the longest of a run,
         # and three shards plan 4.2 minutes of tests each (docs/TESTING.md,
         # "Balancing the e2e shards").
-        self.assertLessEqual(most, 62, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Rust lane's one job became its build, three test shards and its
+        # lint (seven with the web lane's nine shards, from 62 to 69), so the
+        # two longest Linux lines end about 13 minutes into a run, not 20
+        # (docs/TESTING.md, "The Rust lane's shards").
+        self.assertLessEqual(most, 69, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
+
+
+class RustLane(unittest.TestCase):
+    """The Rust lane is one `verify` lane over `rust.yml`'s jobs (docs/TESTING.md, The Rust lane's shards).
+
+    `verify` sees only the call's result, and a called workflow fails when one of
+    its jobs fails but not when one is skipped, so this holds what keeps a
+    skipped job from passing for a run test: every job runs unconditionally,
+    the shards wait on the build alone, and nothing ignores a failure.
+    """
+
+    def setUp(self):
+        self.lane = yaml.safe_load((ROOT / ".github/workflows/rust.yml").read_text())
+        self.jobs = self.lane["jobs"]
+
+    def test_the_build_three_shards_and_the_lint_each_run_or_fail_the_call(self):
+        self.assertEqual(set(self.jobs), {"build", "tests", "lint"})
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                # A job-level condition could skip it while the call passes.
+                self.assertNotIn("if", job)
+                self.assertFalse(job.get("continue-on-error", False))
+        # A shard is skipped only when the build failed or was cancelled,
+        # which fails the call.
+        self.assertEqual(self.jobs["tests"]["needs"], "build")
+        self.assertNotIn("needs", self.jobs["build"])
+        self.assertNotIn("needs", self.jobs["lint"])
+        strategy = self.jobs["tests"]["strategy"]
+        self.assertEqual(strategy["matrix"], {"shard": [1, 2, 3]})
+        self.assertFalse(strategy["fail-fast"])
+        run = next(step["run"] for step in self.jobs["tests"]["steps"] if "--archive-file" in step.get("run", ""))
+        self.assertIn("--partition 'slice:${{ matrix.shard }}/3'", run)
+
+    def test_the_call_passes_the_plan_and_ignores_no_failure(self):
+        call = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]["rust"]
+        self.assertEqual(call["uses"], "./.github/workflows/rust.yml")
+        self.assertFalse(call.get("continue-on-error", False))
+        self.assertEqual(call["with"], {"full": "${{ needs.plan.outputs.full }}",
+                                        "packages": "${{ needs.plan.outputs.rust-packages }}",
+                                        "deny": "${{ needs.plan.outputs.deny }}"})
+        # YAML 1.1 reads the `on` key as true.
+        self.assertEqual(set(self.lane[True]["workflow_call"]["inputs"]), {"full", "packages", "deny"})
+        self.assertEqual({name: self.lane["env"][name] for name in ("FULL", "PACKAGES", "DENY")},
+                         {"FULL": "${{ inputs.full }}", "PACKAGES": "${{ inputs.packages }}", "DENY": "${{ inputs.deny }}"})
+
+    def run_step(self, job, name, full, packages):
+        """The verify-cargo calls a step's script makes for a plan, with the script itself stood in."""
+        script = next(step["run"] for step in self.jobs[job]["steps"] if step.get("name") == name)
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "rust-tests.tar.zst").write_bytes(b"")
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", script.replace("bash scripts/verify-cargo.sh", "echo verify-cargo")],
+                # The runner's bash (5, for `mapfile`), found as the caller finds it.
+                env={"PATH": os.environ["PATH"], "FULL": full, "PACKAGES": packages,
+                     "RUNNER_TEMP": temp, "ARCHIVE": "rust-tests.tar.zst"},
+                capture_output=True, text=True)
+            calls = [line.replace(temp, "$RUNNER_TEMP") for line in result.stdout.splitlines() if line.startswith("verify-cargo")]
+        return result.returncode, calls
+
+    def test_both_plan_forms_reach_the_build_and_the_lint(self):
+        archive = "Build and pack the planned crates' tests"
+        lint = "Check formatting and lint the planned crates"
+        self.assertEqual(self.run_step("build", archive, "true", "[]"),
+                         (0, ["verify-cargo nextest-archive $RUNNER_TEMP/rust-tests.tar.zst --workspace"]))
+        self.assertEqual(self.run_step("build", archive, "false", '["hide-core","hided"]'),
+                         (0, ["verify-cargo nextest-archive $RUNNER_TEMP/rust-tests.tar.zst -p hide-core -p hided"]))
+        self.assertEqual(self.run_step("lint", lint, "true", "[]"), (0, ["verify-cargo lint"]))
+        self.assertEqual(self.run_step("lint", lint, "false", '["hide-core"]'),
+                         (0, ["verify-cargo fmt-check", "verify-cargo clippy -p hide-core --all-targets -- -D warnings"]))
+        # A plan that chose the lane but no crate stops both rather than test nothing.
+        for job, name in (("build", archive), ("lint", lint)):
+            with self.subTest(job=job):
+                status, calls = self.run_step(job, name, "false", "[]")
+                self.assertNotEqual(status, 0)
+                self.assertEqual(calls, [])
 
 
 def pr_plan(*paths, status="M"):

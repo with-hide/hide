@@ -58,7 +58,7 @@
 # `nightly.yml` runs the macOS web `@platform` tests, the macOS mailbox lane
 # and the performance lane, which no `pr.yml` run starts.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
-# checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
+# checks, the whole web end-to-end, dealt out to nine shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`, and on a
 # Linux ARM64 runner `remote-mailbox-arm`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
@@ -242,162 +242,25 @@ jobs:
           printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           python3 scripts/check-pr-screenshots.py --pr-body "$RUNNER_TEMP/pr-body.md" --range HEAD^1..HEAD
 
+  # The Rust workspace (`rust.yml`): the planned crates' tests built once and
+  # run on three runners, the real-shell tests on the build, and formatting,
+  # Clippy, the shared feature set and the license check beside the build
+  # (docs/TESTING.md, "The Rust lane's shards"). One job held all of it,
+  # 14 to 18 minutes and the longest Linux line of a run: about 4.5 minutes of
+  # build, 3 of lint and 13 of tests on one runner (main run 44905662162).
   rust:
     name: rust workspace
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'rust')
-    runs-on: ubuntu-latest
-    # The job's usual time (14 to 18 minutes, 17m47s on #2197) plus the
-    # shell install's 7-minute backstop, 25, with a minute of margin. The
-    # install ends inside its own 4 minutes on a slow mirror and takes seconds
-    # on a cache hit, so the mirror cannot take the job past this limit.
-    timeout-minutes: 26
+    uses: ./.github/workflows/rust.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-    env:
-      FULL: ${{ needs.plan.outputs.full }}
-      PACKAGES: ${{ needs.plan.outputs.rust-packages }}
-      DENY: ${{ needs.plan.outputs.deny }}
-    steps:
-      - uses: actions/checkout@v7
-      # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
-      # (`tests/it/opencode_plugin.rs`), and the pane holder's screen tests
-      # draw on a headless xterm under Node; the version is pinned, not the
-      # image's.
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      # The shells the real-shell tests below run in, installed first so a slow
-      # Ubuntu mirror fails here, by name and inside 4 minutes, before any
-      # test time is spent. The .deb files are cached, so a usual run does not
-      # ask the mirror (.github/actions/apt-install).
-      - name: Install the real shells
-        if: ${{ env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node') }}
-        timeout-minutes: 7
-        uses: ./.github/actions/apt-install
-        with:
-          packages: zsh fish tcsh csh
-          minutes: 4
-      - name: Install the holder tests' xterm
-        timeout-minutes: 3
-        run: bash scripts/verify-web.sh install holder
-      # Linux's one saver of the workspace set: it builds every member's tests,
-      # the most of any Linux job (docs/BUILD.md, "CI's Rust caches").
-      - uses: ./.github/actions/rust-cache
-        with:
-          set: workspace
-          save: ${{ github.ref == 'refs/heads/main' }}
-      # hide-vt's Zig inputs and caches, which the vt lane saves.
-      - uses: ./.github/actions/vt-cache
-        with:
-          save: false
-      # rustfmt and Clippy come with the version `rust-toolchain.toml` names,
-      # which rustup installs on the job's first `rustc` or `cargo` call; the
-      # image's own toolchain is never used. A full plan covers the whole
-      # workspace; otherwise the plan names the changed crates and every crate
-      # that depends on them.
-      - name: Install cargo-hakari
-        # The pinned release build, checked against its digest, so no compile.
-        timeout-minutes: 3
-        run: bash scripts/install-hakari.sh
-      - name: Check the shared feature set
-        # workspace-hack holds the features the manifests ask for and every
-        # member that should depends on it; when it does not, each cargo
-        # command that selects other members builds dependencies again
-        # (docs/BUILD.md, "One feature set per dependency").
-        run: bash scripts/verify-cargo.sh hakari
-      - name: Install cargo-deny
-        # The pinned release build, checked against its digest, so no compile.
-        if: env.DENY == 'true'
-        timeout-minutes: 3
-        run: bash scripts/install-cargo-deny.sh
-      - name: Check every crate's license and the advisory database
-        # For a pull request that changes the lockfile, and nightly: a crate
-        # under a license Hide does not ship, or with a known vulnerability,
-        # stops here (deny.toml; CONTRIBUTING.md, CI gates). It reads the
-        # advisory database from the network, which is why no other run does.
-        if: env.DENY == 'true'
-        timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh deny
-      - name: Check formatting and lint the planned crates
-        run: |
-          if [ "$FULL" = true ]; then
-            bash scripts/verify-cargo.sh lint
-          else
-            mapfile -t packages < <(jq -r '.[] | "-p", .' <<<"$PACKAGES")
-            (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
-            bash scripts/verify-cargo.sh fmt-check
-            bash scripts/verify-cargo.sh clippy "${packages[@]}" --all-targets -- -D warnings
-          fi
-      - name: Install cargo-nextest
-        # The pinned release build, so no compile. `.config/nextest.toml` holds
-        # the `ci` profile: one retry, and a JUnit report.
-        timeout-minutes: 3
-        run: bash scripts/install-nextest.sh
-      - name: Test the planned crates
-        # hide-ai drives its codex backend against a python fake app server.
-        # nextest runs no doc test; the workspace has none that runs.
-        run: |
-          if [ "$FULL" = true ]; then
-            bash scripts/verify-cargo.sh nextest --profile ci --workspace
-          else
-            mapfile -t packages < <(jq -r '.[] | "-p", .' <<<"$PACKAGES")
-            (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
-            bash scripts/verify-cargo.sh nextest --profile ci "${packages[@]}"
-          fi
-      - name: Shell integration and agent start in real shells
-        # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
-        # fish read the user's files in their order, zsh gives ZDOTDIR back,
-        # and the mark comes after them. hide-core's
-        # engine/own/shell_line.rs: zsh, bash and fish run the resume line
-        # the core's own engine types after a reboot. hide-core's
-        # engine/contract.rs: the core's own engine over pane holders started
-        # from the built holder meets the engine contract.
-        # hide-node's ssh/bootstrap_tests.rs: the one remote command a device's
-        # ssh runs starts the start script in zsh, bash, fish, tcsh and BSD csh
-        # login shells.
-        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
-        timeout-minutes: 15
-        run: |
-          # What these ignored tests need, in the one script the repeat lane
-          # calls too (docs/TESTING.md, "The repeat lane").
-          . scripts/prepare-ignored-tests.sh
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p hide-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
-      - name: Every gh command line on the oldest gh Hide supports
-        # hide-host/src/gh.rs: each command line the node runs `gh` with
-        # parses on `MINIMUM_VERSION` (hide-node-link/src/gh.rs), which
-        # scripts/fetch-gh.sh downloads against its pinned digest; a proxy
-        # that refuses every connection keeps every line off GitHub.
-        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
-        timeout-minutes: 10
-        run: |
-          gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
-          HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
-      - name: Mint the development issues token
-        # Development issues live in this repository (docs/TESTING.md,
-        # Flaky tests); the App's token reads this run and files them. A run
-        # without the App's key, such as a fork's, files nothing and stays green.
-        id: issues-token
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 2
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
-          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
-          owner: with-hide
-          repositories: hide
-      - name: Report flaky and failed tests
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        timeout-minutes: 5
-        env:
-          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
+    with:
+      full: ${{ needs.plan.outputs.full }}
+      packages: ${{ needs.plan.outputs.rust-packages }}
+      deny: ${{ needs.plan.outputs.deny }}
 
   checks:
     name: web and desktop checks
@@ -927,11 +790,15 @@ jobs:
     with:
       lane: linux
       runner: ubuntu-latest
-      # Median per test from twenty successful main runs, 2026-10-26..28:
-      # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
-      # six at most 641.9 s. Six is the smallest count within 720 s.
-      # Test-work weights exclude setup/queues; the step still caps at 20 min.
-      shards: 6
+      # Sized by when the lane ends, like the Windows lane: the median per
+      # test from twenty successful main runs (2026-11-20..21) puts the 478
+      # Linux tests at 3929.6 s, and the daemon build (194 s), a shard's setup
+      # (80 s) and its step's own listing and report (37 s) come before and
+      # after them whatever the count. Nine shards plan 437 s each and end
+      # near 748 s, inside the 762 s that keeps the lane within the Rust
+      # lane's 13 minutes of a run's start; eight plan 491 s and end near
+      # 802 s (docs/TESTING.md, "Balancing the e2e shards").
+      shards: 9
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
@@ -1187,8 +1054,9 @@ jobs:
       quick-build: ${{ github.event_name == 'pull_request' }}
 
   # A merge queue group's Rust check: formatting and Clippy over the whole
-  # workspace, without the tests the `rust` lane runs. It reads the workspace
-  # dependency set main's `rust` lane saves and saves nothing.
+  # workspace, without the tests the `rust` lane runs. It reads the lint set
+  # main's `rust` lane saves (Clippy's check of the dependencies) and saves
+  # nothing.
   merge-rust:
     name: merge check rust
     needs: plan
@@ -1199,7 +1067,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-cache
         with:
-          set: workspace
+          set: lint
           save: false
       - uses: ./.github/actions/vt-cache
         with:
