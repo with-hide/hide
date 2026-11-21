@@ -725,6 +725,44 @@ fn only_the_watched_pane_brings_its_open_forward() {
     );
 }
 
+/// A run the automation screen shows draws its tab's desk: what its agent
+/// opened while nobody watched comes onto that desk while it holds nothing,
+/// the last opened in front, and another agent's stays on no desk; a desk
+/// that holds a View is left as it is (operator decision 2026-11-21).
+#[test]
+fn a_shown_runs_desk_takes_what_its_agent_opened_unwatched() {
+    let (mut runtime, _checkout, directory) = setup("run-desk");
+    for (pane, name) in [
+        ("w-order:t2:p", "a.md"),
+        ("w-order:t3:p", "b.md"),
+        ("w-order:t2:p", "c.md"),
+    ] {
+        control_file(&mut runtime, pane, &directory, name, name);
+    }
+    runtime.sync_workspace_view();
+    assert_eq!(shelf(&runtime, &directory), ["a.md", "b.md", "c.md"]);
+
+    assert!(runtime.gather_run_views("w-order:t2:p"));
+    assert_eq!(desk(&runtime, &directory, TABS[1]), ["a.md", "c.md"]);
+    assert_eq!(
+        shelf(&runtime, &directory),
+        ["b.md"],
+        "another agent's stays"
+    );
+    let front = runtime
+        .view_layout_at(&key(&directory), &Place::Tray(TABS[1].to_owned()))
+        .and_then(|layout| layout.active_area().active.clone());
+    assert_eq!(front, Some(display_id(&runtime, &directory, "c.md")));
+
+    control_file(&mut runtime, "w-order:t2:p", &directory, "d.md", "later");
+    runtime.sync_workspace_view();
+    assert!(
+        !runtime.gather_run_views("w-order:t2:p"),
+        "a desk that holds a View is left as it is"
+    );
+    assert_eq!(shelf(&runtime, &directory), ["b.md", "d.md"]);
+}
+
 /// B7: a background `hide view select` moves nothing, and repeating it is no
 /// transition.
 #[test]
