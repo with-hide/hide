@@ -278,7 +278,13 @@ const frame = (over: Record<string, unknown>) => ({ state: "idle", direction: "f
 it("crowns the core's machine and offers the core to a connected device it dials, dimmed with why otherwise (PRD core-host-node-move B2)", async () => {
   const next = state([remote("mini"), remote("studio")]);
   next.rest.status.remote[1]!.state = "stale";
-  const { q, events, unmount } = await mount(next);
+  // The crown is the old model's, where one core serves every machine: a build
+  // that connects two Hides runs a core on each and marks none (PRD
+  // device-connect-iroh D-80).
+  const connected = await mount(next);
+  expect(connected.q("[data-device-core]")).toBeNull();
+  await connected.unmount();
+  const { q, events, unmount } = await mount({ ...next, daemon: { device_connect: false } } as never);
   expect(q('[data-device-core="local"]')?.textContent).toBe("core");
   expect(q('[data-device-core="mini"]')).toBeNull();
   await openMenu(q, "studio");
@@ -380,7 +386,7 @@ it("puts a node's own machine first as This Mac, with the core back and the end 
   const node = remote("mbp", { label: "MacBook Pro", dials_in: true, ssh_alias: null });
   const next = state([remote("mini"), node]);
   (next.rest.navigator.devices[0] as Record<string, unknown>).machine_name = "Mac Studio";
-  const { q, events, unmount } = await mount(next);
+  const { q, events, unmount } = await mount({ ...next, daemon: { device_connect: false } } as never);
   const names = [...document.querySelectorAll("[data-device-name]")].map((row) => row.textContent);
   expect(names).toEqual(["This Mac", "Mac Studio", "Mac mini"]);
   expect(q('[data-device-core="local"]')).not.toBeNull();

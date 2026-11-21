@@ -8,7 +8,7 @@ import { cn } from "../lib/utils";
 import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
 import { numberOf } from "../numbering";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
-import type { Peer } from "../pairing";
+import { deviceConnectOffered, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
@@ -57,9 +57,11 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const peers = useShellStore((s) => s.rest?.navigator?.peers);
   const computers = useMemo(() => computerTiles(useShellStore.getState().rest), [devices, peers]);
   const remoteScreen = useUiStore((s) => s.remoteScreen);
+  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const tiles = useMemo(() => {
     const own = windowDeviceId(devices);
-    const shared = coreShared(devices);
+    // Every computer runs a core of its own once two Hides connect: no tile names the core's (D-80).
+    const shared = !deviceConnect && coreShared(devices);
     return computers.map((computer): { tile: Tile; computer: ComputerTile } => ({
       computer,
       tile: devices?.some((device) => device.id === computer.id)
@@ -72,7 +74,7 @@ export function DeviceRail({ actions }: { actions: Actions }) {
           }
         : { id: computer.id, label: computer.screen?.name ?? computer.id, icon: "remote", core: false },
     }));
-  }, [computers, devices, t]);
+  }, [computers, devices, deviceConnect, t]);
   // A ⌥⌘ hold numbers the tiles ⌥⌘n selects (`computers.ts`).
   const numbered = useUiStore((s) => s.hint === "devices");
   const numbers = useMemo(() => (numbered ? numberedComputers(computers) : null), [numbered, computers]);
