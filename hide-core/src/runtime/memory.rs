@@ -369,6 +369,23 @@ pub(crate) fn project_sessions(
     identity: &hide_project::ProjectIdentity,
     timeout: std::time::Duration,
 ) -> Result<Vec<ProjectSession>, String> {
+    project_session_read(sessions_node, identity, timeout).map(|(rows, _)| rows)
+}
+
+/// [`project_sessions`], with the agents whose store the node read only to
+/// its newest sessions ([`hide_session::SESSIONS_CUT`]): no failure, and
+/// logged by the Memory pass once per crossing, which owns that episode.
+pub(crate) fn project_session_read(
+    sessions_node: &dyn NodeLink,
+    identity: &hide_project::ProjectIdentity,
+    timeout: std::time::Duration,
+) -> Result<
+    (
+        Vec<ProjectSession>,
+        std::collections::BTreeSet<&'static str>,
+    ),
+    String,
+> {
     let page = hide_node_link::readers::project_sessions(sessions_node, identity.clone(), timeout)
         .map_err(|error| error.to_string())?;
     if page.refused > 0 {
@@ -377,12 +394,10 @@ pub(crate) fn project_sessions(
             "project_id": identity.id, "sessions": page.refused,
         }));
     }
-    // A store cut to its newest sessions is no failure: it is logged once
-    // when the project's read first comes back cut, not on every read.
     let mut cut = std::collections::BTreeSet::new();
     for refusal in &page.store_refusals {
         if refusal.reason == hide_session::SESSIONS_CUT {
-            cut.insert(format!("{:?}", refusal.agent));
+            cut.insert(refusal.agent.as_str());
             continue;
         }
         crate::diagnostic!(serde_json::json!({
@@ -390,27 +405,8 @@ pub(crate) fn project_sessions(
             "project_id": identity.id, "agent": refusal.agent, "reason": refusal.reason,
         }));
     }
-    let mut known = CUT_STORES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let before = known.remove(&identity.id).unwrap_or_default();
-    for agent in cut.difference(&before) {
-        crate::diagnostic!(serde_json::json!({
-            "component": "memory", "kind": "sessions.cut", "project_id": identity.id,
-            "agent": agent, "limit": hide_session::SESSION_DISCOVERY_LIMIT,
-        }));
-    }
-    if !cut.is_empty() {
-        known.insert(identity.id.clone(), cut);
-    }
-    Ok(page.rows)
+    Ok((page.rows, cut))
 }
-
-/// Each project whose last session read came back cut, with the agents it
-/// was cut for; an entry lives only while its project stays over the cap.
-static CUT_STORES: std::sync::Mutex<
-    std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// How far `session`'s conversation reaches and when it was last written:
 /// a session file's size and modification time, or for OpenCode, which

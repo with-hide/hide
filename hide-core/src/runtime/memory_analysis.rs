@@ -16,8 +16,10 @@
 //! the same [`record_receipt`] the walk uses, so a session handed from one
 //! reader to the other names each receipt by the same turn and never doubles.
 
+#[cfg(test)]
+use super::memory::project_sessions;
 use super::memory::{
-    MemoryReceipt, SESSION_CALL_TIMEOUT, digest, now_ms, project_identity, project_sessions,
+    MemoryReceipt, SESSION_CALL_TIMEOUT, digest, now_ms, project_identity, project_session_read,
     session_conversation, session_stat, trusted_memory_receipts,
 };
 use super::memory_evidence::{CheckoutFacts, check_evidence};
@@ -121,6 +123,11 @@ pub(super) struct MemoryWork {
     /// that left nothing to do; the next pass skips a walk whose inputs are
     /// the same. One entry per enabled Project at most.
     walks: HashMap<String, WalkMemo>,
+    /// The agents whose session store each Project's last walk read only to
+    /// its newest sessions ([`hide_session::SESSIONS_CUT`]), so a store that
+    /// stays over its cap is logged once, when it crosses. One entry per
+    /// Project the last pass walked, at most.
+    cut_stores: HashMap<String, BTreeSet<&'static str>>,
 }
 
 /// A Project's walk that found nothing to read, record or analyze: what its
@@ -195,6 +202,8 @@ struct PassOutcome {
     /// The memos of the walks this pass skipped or made with nothing left to
     /// do; every other Project is walked by the next pass.
     walks: HashMap<String, WalkMemo>,
+    /// The agents each walked Project's session read was cut for.
+    cut_stores: HashMap<String, BTreeSet<&'static str>>,
 }
 
 impl PassOutcome {
@@ -568,6 +577,7 @@ impl Runtime {
             cancel,
             failed_reads: work.failed_reads.clone(),
             walks: work.walks.clone(),
+            cut_stores: work.cut_stores.clone(),
             suggestions: self.suggestions_work.client.clone(),
         };
         let report_context = context.clone();
@@ -620,6 +630,7 @@ impl Runtime {
             .retain(|session| !outcome.settled.contains(session));
         work.failed_reads = outcome.failed_reads;
         work.walks = outcome.walks;
+        work.cut_stores = outcome.cut_stores;
         if outcome.wants_usage {
             work.usage_wanted_until_unix_ms = now_ms().saturating_add(USAGE_WANTED_MS);
         }
@@ -1011,6 +1022,8 @@ struct PassInput {
     failed_reads: FailedReads,
     /// What the last pass's walks left nothing to do in, by Project.
     walks: HashMap<String, WalkMemo>,
+    /// The agents each Project's session read was cut for in the last pass.
+    cut_stores: HashMap<String, BTreeSet<&'static str>>,
     /// Where the cards a session taught go as the operator's corrections
     /// (PRD hide-ai-suggestions B4, D-23: only a Project with Memory on has
     /// them).
@@ -1518,7 +1531,22 @@ fn walk_project(
             .reader_features()
             .is_some_and(|readers| readers.supports(session.agent.as_str(), feature))
     };
-    let sessions = project_sessions(sessions_node, &identity, SESSION_CALL_TIMEOUT)?
+    let (sessions, cut) = project_session_read(sessions_node, &identity, SESSION_CALL_TIMEOUT)?;
+    // A store read only to its newest sessions is no failure: it is logged
+    // when this Project's walk first finds it cut, not on every pass.
+    let before = input.cut_stores.get(project_id);
+    for agent in &cut {
+        if !before.is_some_and(|known| known.contains(agent)) {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "sessions.cut", "project_id": project_id,
+                "agent": agent, "limit": hide_session::SESSION_DISCOVERY_LIMIT,
+            }));
+        }
+    }
+    if !cut.is_empty() {
+        outcome.cut_stores.insert(project_id.to_owned(), cut);
+    }
+    let sessions = sessions
         .into_iter()
         .filter(|session| {
             reads(session, ReaderFeature::Memory) && reads(session, ReaderFeature::Conversation)
@@ -3941,6 +3969,7 @@ mod tests {
                 cancel: CancelToken::new(),
                 failed_reads: self.failed_reads.borrow().clone(),
                 walks: self.walks.borrow().clone(),
+                cut_stores: HashMap::new(),
                 suggestions: None,
             };
             let mut reports = Vec::new();
@@ -4000,6 +4029,7 @@ mod tests {
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
                 walks: HashMap::new(),
+                cut_stores: HashMap::new(),
                 suggestions: None,
             };
             let mut store = self.store();
@@ -6141,6 +6171,7 @@ mod tests {
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
             walks: HashMap::new(),
+            cut_stores: HashMap::new(),
             suggestions: None,
         };
         let outcome = run_pass(&input, &mut |report| {
@@ -6461,6 +6492,7 @@ mod tests {
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
             walks: HashMap::new(),
+            cut_stores: HashMap::new(),
             suggestions: None,
         };
         let tasks = || {
@@ -6585,6 +6617,7 @@ mod tests {
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
                 walks: HashMap::new(),
+                cut_stores: HashMap::new(),
                 suggestions: None,
             };
             let tasks = || {
@@ -6730,6 +6763,7 @@ mod tests {
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
             walks: HashMap::new(),
+            cut_stores: HashMap::new(),
             suggestions: None,
         };
         let tasks = || {

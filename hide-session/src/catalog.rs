@@ -28,8 +28,15 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 pub const SESSION_DISCOVERY_LIMIT: usize = 10_000;
 
 /// Why an agent's older sessions are left out of a read past
-/// [`SESSION_DISCOVERY_LIMIT`].
+/// [`SESSION_DISCOVERY_LIMIT`], or past [`SESSION_WALK_LIMIT`].
 pub const SESSIONS_CUT: &str = "only the newest sessions were read";
+
+/// Most directory entries the walk of one agent's stores looks at, a bound
+/// on the work of one read and on the paths it holds, apart from the cap on
+/// sessions: ten times that cap, so a store whose folders hold other files
+/// beside its sessions still reaches it. Past it the walk stops with what it
+/// found and the read says it was cut ([`SESSIONS_CUT`]), never failing.
+const SESSION_WALK_LIMIT: usize = 10 * SESSION_DISCOVERY_LIMIT;
 
 /// The agents that keep a file per session, in the order the walk reads them.
 const FILE_AGENTS: [Agent; 6] = [
@@ -186,6 +193,8 @@ pub struct SessionCatalog {
     device_id: String,
     /// [`SESSION_DISCOVERY_LIMIT`], smaller in a test.
     limit: usize,
+    /// [`SESSION_WALK_LIMIT`], smaller in a test.
+    walk_limit: usize,
 }
 
 impl SessionCatalog {
@@ -195,12 +204,18 @@ impl SessionCatalog {
             accounts: accounts.clone(),
             device_id: device_id.into(),
             limit: SESSION_DISCOVERY_LIMIT,
+            walk_limit: SESSION_WALK_LIMIT,
         }
     }
 
     #[cfg(test)]
     fn with_limit(self, limit: usize) -> Self {
         Self { limit, ..self }
+    }
+
+    #[cfg(test)]
+    fn with_walk_limit(self, walk_limit: usize) -> Self {
+        Self { walk_limit, ..self }
     }
 
     pub fn project_sessions(
@@ -349,21 +364,27 @@ impl SessionCatalog {
     /// both the project's sessions and the folders agents worked in read, so
     /// an agent whose sessions Hide learns to read shows in both (PRD
     /// device-add-project D-10): at most the catalog's limit, the newest by
-    /// modification time, and `true` when older ones were left out. The walk
-    /// itself is bounded by each store's depth, not by a count.
+    /// modification time, and `true` when some were left out, older ones or
+    /// ones the walk did not reach by its bound ([`SESSION_WALK_LIMIT`]).
     fn agent_files(&self, agent: Agent) -> Result<(Vec<PathBuf>, bool), SessionCatalogError> {
         let mut files = Vec::new();
+        let mut walk = Walk {
+            left: self.walk_limit,
+            stopped: false,
+        };
         for root in self.agent_stores(agent) {
             match agent {
-                Agent::Claude | Agent::Cursor => collect_jsonl(&root, agent, 2, &mut files)?,
-                Agent::Codex => collect_jsonl(&root, agent, 4, &mut files)?,
-                Agent::Pi | Agent::Omp => collect_jsonl(&root, agent, 1, &mut files)?,
-                Agent::Grok => collect_grok(&root, &mut files)?,
+                Agent::Claude | Agent::Cursor => {
+                    collect_jsonl(&root, agent, 2, &mut files, &mut walk)?
+                }
+                Agent::Codex => collect_jsonl(&root, agent, 4, &mut files, &mut walk)?,
+                Agent::Pi | Agent::Omp => collect_jsonl(&root, agent, 1, &mut files, &mut walk)?,
+                Agent::Grok => collect_grok(&root, &mut files, &mut walk)?,
                 Agent::OpenCode | Agent::Antigravity => {}
             }
         }
         if files.len() <= self.limit {
-            return Ok((files, false));
+            return Ok((files, walk.stopped));
         }
         let mut dated = files
             .into_iter()
@@ -562,11 +583,31 @@ impl SessionCatalog {
     }
 }
 
+/// The work bound of one agent's walk: how many more entries it may look
+/// at, and whether it stopped for want of more.
+struct Walk {
+    left: usize,
+    stopped: bool,
+}
+
+impl Walk {
+    /// Takes one entry, or answers `false` once the bound is spent.
+    fn visit(&mut self) -> bool {
+        if self.left == 0 {
+            self.stopped = true;
+            return false;
+        }
+        self.left -= 1;
+        true
+    }
+}
+
 fn collect_jsonl(
     root: &Path,
     agent: Agent,
     depth: usize,
     output: &mut Vec<PathBuf>,
+    walk: &mut Walk,
 ) -> Result<(), SessionCatalogError> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
@@ -580,6 +621,9 @@ fn collect_jsonl(
         }
     };
     for entry in entries {
+        if !walk.visit() {
+            return Ok(());
+        }
         let path = entry
             .map_err(|source| SessionCatalogError::Io {
                 operation: "read_entry",
@@ -593,7 +637,7 @@ fn collect_jsonl(
             continue;
         }
         if path.is_dir() && depth > 0 {
-            collect_jsonl(&path, agent, depth - 1, output)?;
+            collect_jsonl(&path, agent, depth - 1, output, walk)?;
         } else if (agent == Agent::Cursor
             && path.file_name().is_some_and(|name| name == "store.db"))
             || (agent != Agent::Cursor
@@ -609,7 +653,11 @@ fn collect_jsonl(
 
 /// Grok keeps a folder per session, grouped by cwd; only its conversation
 /// file is a session, and a folder's other files are never visited.
-fn collect_grok(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), SessionCatalogError> {
+fn collect_grok(
+    root: &Path,
+    output: &mut Vec<PathBuf>,
+    walk: &mut Walk,
+) -> Result<(), SessionCatalogError> {
     // Grok's own sweep may remove a folder between two listings.
     let entries = |directory: &Path| match fs::read_dir(directory) {
         Ok(entries) => Ok(Some(entries)),
@@ -620,9 +668,12 @@ fn collect_grok(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), SessionCat
             source,
         }),
     };
-    let folders = |entries: fs::ReadDir| {
+    let folders = |entries: fs::ReadDir, walk: &mut Walk| {
         let mut folders = Vec::new();
         for entry in entries {
+            if !walk.visit() {
+                break;
+            }
             let entry = entry.map_err(|source| SessionCatalogError::Io {
                 operation: "read_entry",
                 path: root.to_path_buf(),
@@ -640,11 +691,11 @@ fn collect_grok(root: &Path, output: &mut Vec<PathBuf>) -> Result<(), SessionCat
     let Some(groups) = entries(root)? else {
         return Ok(());
     };
-    for group in folders(groups)? {
+    for group in folders(groups, walk)? {
         let Some(sessions) = entries(&group)? else {
             continue;
         };
-        for session in folders(sessions)? {
+        for session in folders(sessions, walk)? {
             output.push(session.join(crate::grok::UPDATES));
         }
     }
@@ -1445,6 +1496,39 @@ mod tests {
                 reason: SESSIONS_CUT.to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn a_walk_past_its_bound_answers_what_it_found_and_says_it_was_cut() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let project_root = root.path().join("project");
+        fs::create_dir_all(&project_root).unwrap();
+        let project = hide_project::resolve(&project_root, "local").unwrap();
+        claude_session(&home, "only", &project_root, 1);
+        // A folder wide with other files, walked after the session's.
+        let other = home.join(".claude/projects/q");
+        fs::create_dir_all(&other).unwrap();
+        for index in 0..30 {
+            fs::write(other.join(format!("result-{index}.txt")), "").unwrap();
+        }
+        let catalog = SessionCatalog::new(&Accounts::new(&home), "local");
+
+        let whole = catalog.project_sessions(&project).unwrap();
+        assert!(whole.refusals.is_empty(), "{:?}", whole.refusals);
+
+        let read = SessionCatalog::new(&Accounts::new(&home), "local")
+            .with_walk_limit(3)
+            .project_sessions(&project)
+            .unwrap();
+        assert_eq!(
+            read.refusals,
+            vec![SessionStoreRefusal {
+                agent: Agent::Claude,
+                reason: SESSIONS_CUT.to_owned(),
+            }]
+        );
+        assert!(read.sessions.len() <= 1);
     }
 
     #[test]
