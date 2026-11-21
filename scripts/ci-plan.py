@@ -681,20 +681,22 @@ class Change:
                 self.hunks[name][-1][4 if row[0] == "-" else 5].append(row[1:])
 
     def text(self, side, name):
-        """The file's text at the base (`old`) or the head (`new`); empty when
-        the commit has no such file. Raises Unreadable when git cannot read
-        the commit, which is no answer about the file."""
+        """The file's text at the base (`old`) or the head (`new`); empty only
+        when the commit's tree lists no such path. Any other failure to read
+        it (the commit, the tree or the blob) raises Unreadable, which is no
+        answer about the file."""
         key = (side, name)
         if key not in self.texts:
             revision = self.base if side == "old" else self.head
             done = subprocess.run(["git", "show", f"{revision}:{name}"], cwd=self.root, capture_output=True)
             if done.returncode == 0:
                 self.texts[key] = done.stdout.decode("utf-8", errors="replace")
-            elif subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"],
-                                cwd=self.root, capture_output=True).returncode == 0:
-                self.texts[key] = ""
             else:
-                raise Unreadable(f"git cannot read {revision}")
+                # The tree says whether the path is there without reading its blob.
+                listed = subprocess.run(["git", "ls-tree", revision, "--", name], cwd=self.root, capture_output=True)
+                if listed.returncode != 0 or listed.stdout.strip():
+                    raise Unreadable(f"git cannot read {name} at {revision}")
+                self.texts[key] = ""
         return self.texts[key]
 
 

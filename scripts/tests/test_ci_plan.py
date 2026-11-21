@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 SPEC = importlib.util.spec_from_file_location("ci_plan", Path(__file__).parents[1] / "ci-plan.py")
 ci = importlib.util.module_from_spec(SPEC)
@@ -1852,12 +1853,25 @@ class RustChange(unittest.TestCase):
             base, head = pr.git("rev-parse", "main").strip(), pr.git("rev-parse", "topic").strip()
             change = ci.Change(base, head, Path(directory))
             self.assertIn("a change inside a Windows item", ci.windows_change(name, change))
-            # The base's blob cannot be read: no answer about the file, so Windows runs.
+            # A commit that cannot be read is no answer about the file, so Windows runs.
             broken = ci.Change(base, head, Path(directory))
             broken.base = "0" * 40
             self.assertIn("cannot place the change", ci.windows_change(name, broken))
             # A file the commit does not hold is empty, which is an answer.
             self.assertEqual(change.text("old", "hide-core/src/none.rs"), "")
+            # The commit is there but its blob cannot be read: the plan still runs Windows.
+            pr.check_out_merge()
+            self.assertEqual(set(pr.plan(None)["windows"]["lanes"]), {"windows-check", "os-contract"})
+            run = subprocess.run
+
+            def blob_unreadable(command, *args, **kwargs):
+                if command[:2] == ["git", "show"] and command[2] == f"HEAD^1:{name}":
+                    return subprocess.CompletedProcess(command, 128, b"", b"fatal: unable to read blob\n")
+                return run(command, *args, **kwargs)
+            with unittest.mock.patch.object(ci.subprocess, "run", blob_unreadable):
+                result = pr.plan(None)
+            self.assertEqual(set(result["windows"]["lanes"]), {"windows-check", "os-contract"})
+            self.assertIn(f"cannot read {name} at HEAD^1", " ".join(result["windows"]["why"]))
 
     def test_the_windows_layer_is_read_a_whole_file_at_a_time(self):
         # `hide-platform` writes each system's form: any change to a file with Windows code runs Windows.
