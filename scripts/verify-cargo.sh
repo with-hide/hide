@@ -4,6 +4,8 @@
 # Usage: verify-cargo.sh test [args...] | lint | release | cli
 # CI-scoped lanes: test-scoped | check | build | clippy | metadata [cargo arguments...]
 #                  nextest [cargo nextest run arguments...] (the CI Rust lane; .config/nextest.toml)
+#                  nextest-archive <archive.tar.zst> [cargo nextest archive arguments...] (build the tests once, for shards)
+#                  nextest --archive-file <archive.tar.zst> [run arguments...] (run a shard from that archive, no build)
 #                  nextest-list [cargo nextest list arguments...] (the tests `nextest` would run, which the repeat lane counts)
 #                  fmt-check (cargo fmt --all --check alone)
 #                  hakari (workspace-hack is current; scripts/install-hakari.sh)
@@ -119,9 +121,15 @@ selects_vt() {
 # Scoped modes cannot move the checkout or its artifacts through cargo flags.
 # Keep the legacy modes unchanged for sealed verification commands.
 case "${1:-}" in
-    test-scoped|check|build|clippy|metadata|nextest|nextest-list)
+    test-scoped|check|build|clippy|metadata|nextest|nextest-list|nextest-archive)
         mode=$1
         shift
+        archive=
+        if [[ "$mode" == nextest-archive ]]; then
+            (( $# >= 1 )) || { printf 'usage: %s nextest-archive <archive.tar.zst> [cargo nextest archive arguments...]\n' "$0" >&2; exit 2; }
+            archive=$1
+            shift
+        fi
         (( $# <= 128 )) || { printf 'too many cargo arguments\n' >&2; exit 2; }
         for argument in "$@"; do
             case "$argument" in
@@ -129,8 +137,33 @@ case "${1:-}" in
                     printf 'cargo argument may not redirect verification: %s\n' "$argument" >&2
                     exit 2
                     ;;
+                --extract-to|--extract-to=*|--workspace-remap|--workspace-remap=*|--target-dir-remap|--target-dir-remap=*)
+                    printf 'an archive run extracts where it was built; argument refused: %s\n' "$argument" >&2
+                    exit 2
+                    ;;
+                --archive-file|--archive-file=*)
+                    [[ "$mode" == nextest ]] || { printf '%s takes no --archive-file\n' "$mode" >&2; exit 2; }
+                    archive=run
+                    ;;
             esac
         done
+        # A shard of the CI Rust lane runs the tests one job built and packed
+        # with `nextest-archive` (docs/TESTING.md, "The Rust lane's shards").
+        # It builds nothing, so it needs no toolchain: cargo-nextest runs the
+        # archive itself, and `cargo` (rustup's proxy) is never called, which
+        # would install the pinned toolchain on a runner that has no use for
+        # it. The archive is extracted into this checkout, so `target/` lands
+        # where the build job had it: a test reads paths the compiler wrote
+        # into it (`CARGO_BIN_EXE_*`, `CARGO_MANIFEST_DIR`, `OUT_DIR`), and
+        # every Linux runner checks the repository out at the same path.
+        if [[ "$mode" == nextest && "$archive" == run ]]; then
+            isolate_git_config
+            status=0
+            cargo-nextest nextest run --extract-to "$PWD" --extract-overwrite "$@" || status=$?
+            report=target/nextest/ci/junit.xml
+            [[ ! -f "$report" ]] || mv "$report" "target/nextest/ci/junit.$$.$RANDOM.xml"
+            exit "$status"
+        fi
         report_toolchain
         if [[ "$mode" != metadata ]] && selects_vt "$@"; then prepare_vt_inputs; fi
         case "$mode" in test-scoped|nextest) isolate_git_config ;; esac
@@ -145,6 +178,7 @@ case "${1:-}" in
             exit "$status"
         fi
         [[ "$mode" != nextest-list ]] || exec cargo nextest list --locked "$@"
+        [[ "$mode" != nextest-archive ]] || exec cargo nextest archive --locked --archive-file "$archive" "$@"
         [[ "$mode" != test-scoped ]] || mode=test
         exec cargo "$mode" --locked "$@"
         ;;
@@ -197,7 +231,7 @@ case "${1:-}" in
         exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     *)
-        printf 'usage: %s test [args...]|lint|fmt-check|hakari|deny|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list [args...]\n' "$0" >&2
+        printf 'usage: %s test [args...]|lint|fmt-check|hakari|deny|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list|nextest-archive [args...]\n' "$0" >&2
         exit 2
         ;;
 esac

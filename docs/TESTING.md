@@ -899,16 +899,17 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 62 jobs.
+A run that plans every lane a pull request can plan starts at most 69 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
-| `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `plan`, `policy`, `checks`, `windows check`, `verify` | 5 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `rust workspace` | 5 | one build of the planned crates' tests, three shards that run them from its archive, and the lint beside the build ([The Rust lane's shards](#the-rust-lanes-shards)): one job held all of it for 14 to 18 minutes, the longest Linux line of a run |
 | `windows e2e` | 5 | the `@platform` suite in three shards dealt by the Windows table, with the daemon and web shell builds in their own parallel jobs as on Linux: one job held all 88 tests and took 22.4 minutes at the median of 65 successful jobs, the longest of a run, while three shards plan 4.2 minutes of tests each; the reusable workflow starts no `plan` job, since a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 8 | parallel daemon and web shell builds and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `web e2e` (Linux) | 11 | parallel daemon and web shell builds and nine shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and went to nine in 2026-11 so the lane ends beside the Rust lane, 13 minutes into a run ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -922,10 +923,34 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `hide-core` or `hided` change starts 31 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 35, a `hide-kit` or `hide-agent-hooks` change 39, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller, counted with `runner_jobs` over the pull request plan of one changed file, each lane's macOS leg left out as such a plan leaves it, with `plan` and `verify`: `hide-core/src/lib.rs` starts 31 jobs, `hided/src/lib.rs` 36 (it holds tests, so it plans the repeat lane), `web/src/Overview.tsx` 21, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), `hide-platform/src/lib.rs` 35, `hide-kit/src/lib.rs` or `hide-agent-hooks/src/lib.rs` 39 (the package lane's seven jobs among them), all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A change to a test file adds the repeat lane's jobs to these.
 A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 37 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
+
+### The Rust lane's shards
+
+The `rust` lane is `.github/workflows/rust.yml`, which `pr.yml` calls, so `verify` and the plan still see one `rust` lane.
+It has three kinds of job, and the tests are built once.
+
+- `build tests` compiles the planned crates' tests (the whole workspace in a full plan) and packs them with `scripts/verify-cargo.sh nextest-archive <file>`, `cargo nextest archive`, kept as the run's `rust-tests` artifact for a day.
+  It is Linux's saver of the `workspace` set ([BUILD.md](BUILD.md#cis-rust-caches)).
+- `tests 1/3` to `tests 3/3` each download the archive and run their slice with `scripts/verify-cargo.sh nextest --profile ci --archive-file <file> --partition slice:N/3`.
+  No shard builds: the script runs `cargo-nextest` itself for an archive, so `cargo`, rustup's proxy, never installs the toolchain on a shard.
+  `slice` deals the tests round-robin across every binary, so each shard holds a third of each binary, and the three shards' counts add up to the tests one runner ran before the split (9298 on main run [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162)).
+- `lint` checks the shared feature set, the licenses and advisories when the plan's `deny` says so, formatting and Clippy beside the build, not before the tests; it saves the `lint` set, Clippy's check of the dependencies, which no test build makes.
+
+The archive is extracted into the checkout, where `target/` was when it was built, and the script refuses `--extract-to` and the remap options.
+A test reads paths the compiler wrote into it (`CARGO_BIN_EXE_*` for a binary it starts, `CARGO_MANIFEST_DIR`, a build script's `OUT_DIR`), and every Linux runner checks the repository out at the same path, so those paths hold on a shard; the archive carries the binaries and the build script output the tests link.
+A trial before the split ran every test of `hide-agent-hooks` and `hide-shell` (489, among them the ones that start the `hide-agent-hooks` binary by `CARGO_BIN_EXE_`) from an archive extracted into a checkout whose own `target/` had been removed, with no `cargo` on `PATH`, and the three slices together ran each test once.
+
+The ignored tests the lane runs, the real-shell tests and the oldest gh (below), run in `build tests` after the archive is uploaded.
+They need the built pane holder, which `scripts/prepare-ignored-tests.sh` builds with cargo, and the login shells: a shard has no compiler, and `lint` compiles no test, so either would build again what the build job already has, while the build job runs them in about 20 seconds.
+Each job that runs tests files the flaky ones it saw from its own JUnit report (`scripts/ci-flaky-report.py --suite rust`).
+
+Three shards come from main's single runner: a warm build of 4m26s and 779 seconds of tests (run [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162)), so a shard runs about 260 seconds of tests after a minute of setup and the archive's download, and the lane ends about 13 minutes into a run, beside the web lane ([Balancing the e2e shards](#balancing-the-e2e-shards)).
+Locally, `bash scripts/verify-cargo.sh nextest-archive target/rust-tests.tar.zst -p <crate>` and then `bash scripts/verify-cargo.sh nextest --archive-file target/rust-tests.tar.zst --partition slice:1/3` run one shard as CI does.
 
 ### Balancing the e2e shards
 
@@ -952,14 +977,13 @@ A lane sizes its shards to plan at most 60 % of that cap, and `split --budget <s
 Both lanes pass 720 seconds.
 A macOS shard costs one of the five macOS runners the organization runs at once and about 4.5 minutes of its own setup (checkout, the caches, the cargo build of the CLI binaries and the web build), so the macOS lanes add the fewest shards that keep that margin.
 
-The current web table is the median per listed test from the Linux web e2e jobs of twenty successful main `verify` runs, collected on 2026-10-28.
-The runs range from [40285086262](https://github.com/with-hide/hide/actions/runs/40285086262) (2026-10-26) through [40612941430](https://github.com/with-hide/hide/actions/runs/40612941430) (2026-10-28), including the audit baseline [40569996553](https://github.com/with-hide/hide/actions/runs/40569996553).
-All 385 currently listed tests have a passing observation: 379 have twenty runs, one has nineteen, three have nine and two have six because they were added later.
-The existing `durations` command takes the median of passing lines, including a passing retry, and rounds to 0.1 second; no test in this refresh uses the unknown-test fallback.
-The table totals 3851.3 seconds; the unchanged splitter plans at most 962.9 seconds with four shards, 770.3 with five and 641.9 with six.
-Six is the smallest count within the unchanged 720-second test-work budget; the e2e step still caps a stalled run at 1200 seconds.
+The current web table is the median per listed test from the Linux web e2e jobs of twenty successful main `verify` runs, collected on 2026-11-21: 120 shard jobs, from [44682548621](https://github.com/with-hide/hide/actions/runs/44682548621) (2026-11-20) through [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162) (2026-11-21).
+It lists 478 tests that total 3929.6 seconds; the table it replaced (2026-10-28) knew 354 of them, and the 124 it lacked each weighed its median.
+The existing `durations` command takes the median of passing lines, including a passing retry, and rounds to 0.1 second.
 These weights include fixture setup and teardown charged to a test, but exclude report overhead, runner setup and queues; medians are neither a wall-time forecast nor p95 or causal speedup evidence.
-This refresh replaces the approved single-run recording from 2026-10-25, whose five-shard plan had drifted below actual test time, without changing assertions, retries, timeouts or test selection.
+The Linux lane is sized by when it ends, as the Windows lane is: the daemon build (194 seconds), a shard's setup (80) and its step's listing and report around the tests (37, the step's 692 less the 655 it planned) come first and last whatever the count, medians of the same twenty runs.
+Its target is to end within the Rust lane's 13 minutes of a run's start, less the plan job's 18 seconds, 762 seconds, so neither of a run's two longest Linux lines sets its length alone ([The Rust lane's shards](#the-rust-lanes-shards)).
+Nine shards plan 437 seconds each and end near 748; eight plan 491 and end near 802, so nine is the fewest that meets it, and `scripts/tests/test_e2e_shard.py` holds the count to that measurement.
 The Linux web lane deals by this table, and the Windows pull request lane by its own, `web/e2e/shard-durations-windows.json`: the median per listed test from the logs of 22 successful `web e2e windows` jobs, all on 2026-11-14.
 All 88 listed tests have a passing observation, seven at least.
 That table totals 763.8 seconds, and the Windows lane is sized by when it finishes rather than by its test work: the daemon build precedes the shards and each shard adds its own setup, about 288 and 114 seconds at the median of 115 jobs, so two shards plan 383 seconds each and finish near 785, over the 720 the lane targets, while three plan 255 and finish near 657.

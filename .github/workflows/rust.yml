@@ -1,0 +1,297 @@
+# The Rust lane, `pr.yml`'s `rust` job (`rust workspace` on a pull request's
+# checks): the planned crates' tests built once and run on three runners, with
+# the lint beside them. docs/TESTING.md, "The Rust lane's shards", owns the
+# layout and the measurements it was sized from.
+#
+# `build` compiles every planned crate's tests once and packs them with
+# `cargo nextest archive` (scripts/verify-cargo.sh nextest-archive). Each
+# `tests` shard downloads that archive and runs its slice of it
+# (`--partition slice:N/3`) with no compiler, so no shard builds. The archive
+# is extracted where it was built: every Linux runner checks the repository out
+# at the same path, so the paths the compiler wrote into a test
+# (`CARGO_BIN_EXE_*`, `CARGO_MANIFEST_DIR`, a build script's `OUT_DIR`) hold
+# on the shard.
+#
+# `lint` (the shared feature set, licenses and advisories, formatting and
+# Clippy) runs beside `build` rather than before the tests: it reads nothing
+# the tests build, and a lint failure still fails the lane.
+#
+# The real-shell tests and the oldest-gh test are ignored tests that need the
+# built pane holder and the login shells (scripts/prepare-ignored-tests.sh,
+# which builds the holder with cargo); they run in `build`, after the archive
+# is uploaded, where both are at hand. A shard has no compiler, and `lint`
+# compiles no test, so either would build what `build` already has.
+#
+# A flaky test does not fail the lane: nextest's `ci` profile retries a failed
+# test once, and each job that runs tests files the ones that passed their
+# retry with scripts/ci-flaky-report.py from its own JUnit report.
+name: rust lane
+
+on:
+  workflow_call:
+    inputs:
+      full:
+        description: "`true` when the plan covers the whole workspace."
+        type: string
+        required: true
+      packages:
+        description: The planned crates and their dependents, a JSON list, when not full.
+        type: string
+        required: true
+      deny:
+        description: "`true` when the lockfile or what the license check holds it to changed."
+        type: string
+        required: true
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FULL: ${{ inputs.full }}
+  PACKAGES: ${{ inputs.packages }}
+  DENY: ${{ inputs.deny }}
+  ARCHIVE: rust-tests.tar.zst
+
+jobs:
+  build:
+    name: build tests
+    runs-on: ubuntu-latest
+    # A warm build took 4m26s on main (run 44905662162) and a cold one takes
+    # several times that; with the real shells' 7-minute install backstop and
+    # the ignored tests' 15, 26 minutes as before.
+    timeout-minutes: 26
+    steps:
+      - uses: actions/checkout@v7
+      # The shells the real-shell tests below run in, installed first so a
+      # slow Ubuntu mirror fails here, by name and inside 4 minutes, before
+      # any build time is spent. The .deb files are cached, so a usual run
+      # does not ask the mirror (.github/actions/apt-install).
+      - name: Install the real shells
+        if: ${{ env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node') }}
+        timeout-minutes: 7
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh fish tcsh csh
+          minutes: 4
+      # Linux's one saver of the workspace set: it builds every member's tests,
+      # the most of any Linux job (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches, which the vt lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - name: Install cargo-nextest
+        # The pinned release build, so no compile.
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - name: Build and pack the planned crates' tests
+        id: archive
+        # A full plan covers the whole workspace; otherwise the plan names the
+        # changed crates and every crate that depends on them. nextest runs no
+        # doc test; the workspace has none that runs.
+        run: |
+          if [ "$FULL" = true ]; then
+            bash scripts/verify-cargo.sh nextest-archive "$RUNNER_TEMP/$ARCHIVE" --workspace
+          else
+            mapfile -t packages < <(jq -r '.[] | "-p", .' <<<"$PACKAGES")
+            (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
+            bash scripts/verify-cargo.sh nextest-archive "$RUNNER_TEMP/$ARCHIVE" "${packages[@]}"
+          fi
+          ls -l "$RUNNER_TEMP/$ARCHIVE"
+      - name: Keep the tests for the shards
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: rust-tests
+          path: ${{ runner.temp }}/${{ env.ARCHIVE }}
+          if-no-files-found: error
+          # The archive is zstd already.
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+      - name: Shell integration and agent start in real shells
+        # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
+        # fish read the user's files in their order, zsh gives ZDOTDIR back,
+        # and the mark comes after them. hide-core's
+        # engine/own/shell_line.rs: zsh, bash and fish run the resume line
+        # the core's own engine types after a reboot. hide-core's
+        # engine/contract.rs: the core's own engine over pane holders started
+        # from the built holder meets the engine contract.
+        # hide-node's ssh/bootstrap_tests.rs: the one remote command a device's
+        # ssh runs starts the start script in zsh, bash, fish, tcsh and BSD csh
+        # login shells. They run on the build the archive holds, so not after
+        # a failed one, which they would only compile again.
+        if: ${{ !cancelled() && steps.archive.outcome == 'success' && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
+        timeout-minutes: 15
+        run: |
+          # What these ignored tests need, in the one script the repeat lane
+          # calls too (docs/TESTING.md, "The repeat lane").
+          . scripts/prepare-ignored-tests.sh
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p hide-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+      - name: Every gh command line on the oldest gh Hide supports
+        # hide-host/src/gh.rs: each command line the node runs `gh` with
+        # parses on `MINIMUM_VERSION` (hide-node-link/src/gh.rs), which
+        # scripts/fetch-gh.sh downloads against its pinned digest; a proxy
+        # that refuses every connection keeps every line off GitHub.
+        if: ${{ !cancelled() && steps.archive.outcome == 'success' && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
+        timeout-minutes: 10
+        run: |
+          gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
+          HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
+      - name: Mint the development issues token
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide
+      - name: Report flaky and failed tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
+
+  tests:
+    name: tests ${{ matrix.shard }}/3
+    needs: build
+    runs-on: ubuntu-latest
+    # The setup and the archive's download take about a minute and a shard's
+    # third of the suite about five (docs/TESTING.md, "The Rust lane's
+    # shards"); nextest's `ci` profile ends a hung test inside 260 s.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Three, sized from main's 779 s single-runner test run (docs/TESTING.md).
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
+      # (`tests/it/opencode_plugin.rs`), and the pane holder's screen tests
+      # draw on a headless xterm under Node; the version is pinned, not the
+      # image's.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The shells the tests found on the runner before the lane was split,
+      # so a shard runs each test where it ran then.
+      - name: Install the real shells
+        if: ${{ env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node') }}
+        timeout-minutes: 7
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh fish tcsh csh
+          minutes: 4
+      - name: Install the holder tests' xterm
+        timeout-minutes: 3
+        run: bash scripts/verify-web.sh install holder
+      - name: Install cargo-nextest
+        # The pinned release build; `.config/nextest.toml` holds the `ci`
+        # profile: one retry, and a JUnit report.
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - name: Fetch the tests from the build job
+        uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: rust-tests
+          path: ${{ runner.temp }}
+      - name: Test this shard's slice
+        # hide-ai drives its codex backend against a python fake app server.
+        # `slice` deals the tests round-robin across every binary, so each
+        # shard holds a third of each binary's tests.
+        run: bash scripts/verify-cargo.sh nextest --profile ci --archive-file "$RUNNER_TEMP/$ARCHIVE" --partition 'slice:${{ matrix.shard }}/3'
+      - name: Mint the development issues token
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide
+      - name: Report flaky and failed tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # Clippy over the workspace took about 3 minutes on a warm cache; a cold
+    # check of the dependencies adds a few.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      # Linux's one saver of the lint set: Clippy's check of the dependencies,
+      # which no test build makes (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: lint
+          save: ${{ github.ref == 'refs/heads/main' }}
+      # hide-vt's Zig inputs and caches, which the vt lane saves.
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      # rustfmt and Clippy come with the version `rust-toolchain.toml` names,
+      # which rustup installs on the job's first `rustc` or `cargo` call; the
+      # image's own toolchain is never used.
+      - name: Install cargo-hakari
+        # The pinned release build, checked against its digest, so no compile.
+        timeout-minutes: 3
+        run: bash scripts/install-hakari.sh
+      - name: Check the shared feature set
+        # workspace-hack holds the features the manifests ask for and every
+        # member that should depends on it; when it does not, each cargo
+        # command that selects other members builds dependencies again
+        # (docs/BUILD.md, "One feature set per dependency").
+        run: bash scripts/verify-cargo.sh hakari
+      - name: Install cargo-deny
+        # The pinned release build, checked against its digest, so no compile.
+        if: env.DENY == 'true'
+        timeout-minutes: 3
+        run: bash scripts/install-cargo-deny.sh
+      - name: Check every crate's license and the advisory database
+        # For a pull request that changes the lockfile, and nightly: a crate
+        # under a license Hide does not ship, or with a known vulnerability,
+        # stops here (deny.toml; CONTRIBUTING.md, CI gates). It reads the
+        # advisory database from the network, which is why no other run does.
+        if: env.DENY == 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh deny
+      - name: Check formatting and lint the planned crates
+        run: |
+          if [ "$FULL" = true ]; then
+            bash scripts/verify-cargo.sh lint
+          else
+            mapfile -t packages < <(jq -r '.[] | "-p", .' <<<"$PACKAGES")
+            (( ${#packages[@]} )) || { echo 'the plan chose the rust lane but no crate' >&2; exit 1; }
+            bash scripts/verify-cargo.sh fmt-check
+            bash scripts/verify-cargo.sh clippy "${packages[@]}" --all-targets -- -D warnings
+          fi
