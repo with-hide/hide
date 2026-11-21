@@ -5,14 +5,14 @@
 // worker that exits first, and the first compile on Windows, which runs
 // before anything can own a tree (with-hide/hide-private#324). Each but the
 // first runs real processes.
-import { beforeAll, expect, test } from "vitest";
+import { beforeAll, expect, test, vi } from "vitest";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BoundedChildError, runAlone, runBounded, supervise, type BoundedResult, type Bounds } from "./bounded-child";
-import { buildFixtureShims, compileInSteps, fixtureShimPath } from "./shims/build";
+import { buildFixtureShims, fixtureBuildTimeout, compileInSteps, fixtureShimPath } from "./shims/build";
 import { stopEveryOwned } from "./worker-owned";
 
 const windows = process.platform === "win32";
@@ -22,7 +22,7 @@ beforeAll(async () => {
   if (!windows) return;
   await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["hide-processes", "noop"]);
   bounds.processTool = fixtureShimPath("hide-processes");
-}, 120_000);
+}, fixtureBuildTimeout(["hide-processes", "noop"]));
 
 /**
  * A Node script whose child starts a grandchild, which writes its pid to
@@ -189,7 +189,7 @@ test("a first-compile step that does not end by its deadline is ended, with noth
 // CI image may set it: the variables, and a default config file turning on
 // `-fproc-stat-report` in the folder clang searches first, which the same
 // compile without `--no-default-config` shows is read.
-test("each step of the first compile on Windows runs a single process", { timeout: 120_000 }, async (context) => {
+test("each step of the first compile on Windows runs a single process", { timeout: fixtureBuildTimeout(["noop"]) }, async (context) => {
   if (!windows) return context.skip();
   const dir = scratch();
   const source = fileURLToPath(new URL("./shims/noop.c", import.meta.url));
@@ -207,8 +207,8 @@ test("each step of the first compile on Windows runs a single process", { timeou
     Object.assign(process.env, spawning);
     const output = path.join(dir, "noop.exe");
     const steps: BoundedResult[] = [];
-    const linked = await compileInSteps("clang.exe", source, output, async (program, args, env) => {
-      const step = await runBounded(program, program === "clang.exe" ? [searched, ...args] : args, { ...compile, env });
+    const linked = await compileInSteps("clang.exe", source, output, async (program, args, env, _stage, timeoutMs) => {
+      const step = await runBounded(program, program === "clang.exe" ? [searched, ...args] : args, { ...compile, timeoutMs, env });
       steps.push(step);
       return step;
     });
@@ -220,6 +220,32 @@ test("each step of the first compile on Windows runs a single process", { timeou
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The runner's cold compiler may exceed a minute. A later linker still owns
+// its whole wait: no time already spent in clang may be charged to lld-link.
+// The clock and external compiler are controlled; no real minute is waited.
+test("a cold compile cannot spend the linker's time budget", async () => {
+  const dir = scratch();
+  const output = path.join(dir, "program.exe");
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(0);
+  const origin = Date.now();
+  try {
+    const result = await compileInSteps("clang.exe", "fixture.c", output, async (_program, _args, _env, stage, timeoutMs) => {
+      const duration = stage === "compile" ? 55_000 : stage === "plan-link" ? 2_000 : 40_000;
+      if (duration > timeoutMs) throw new Error(`${stage} did not end within ${timeoutMs} ms`);
+      vi.setSystemTime(Date.now() + duration);
+      if (stage === "compile") fs.writeFileSync(`${output}.trace.json`, JSON.stringify({ traceEvents: [{ name: "Total ExecuteCompiler", dur: 150_000 }] }));
+      return { status: 0, signal: null, stdout: "", stderr: stage === "plan-link" ? ' "lld-link.exe" "fixture.obj"' : "" };
+    });
+    expect(result.status).toBe(0);
+    expect(Date.now() - origin).toBe(97_000);
+    expect(fs.existsSync(`${output}.trace.json`)).toBe(false);
+  } finally {
+    vi.useRealTimers();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
