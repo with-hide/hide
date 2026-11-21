@@ -65,6 +65,10 @@ const ASSET_STREAMS: usize = 6;
 pub const VIEW_READS: usize = 4;
 /// How long a guest waits for a host's answer to open a view.
 const OPEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long one page or asset may take to arrive whole: `MAX_ASSET` at
+/// about 0.5 MiB/s, so a host that sends slowly or stops holds a request's
+/// place no longer than this.
+const ASSET_WITHIN: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -536,11 +540,14 @@ where
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_owned();
-    let body = Limited::new(response.into_body(), MAX_ASSET)
-        .collect()
-        .await
-        .map_err(drop)?
-        .to_bytes();
+    let body = tokio::time::timeout(
+        ASSET_WITHIN,
+        Limited::new(response.into_body(), MAX_ASSET).collect(),
+    )
+    .await
+    .map_err(drop)?
+    .map_err(drop)?
+    .to_bytes();
     drop(driver);
     Ok((status, kind, body))
 }
