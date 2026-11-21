@@ -3282,6 +3282,7 @@ The split is `moved_core::split`, and every step before its last leaves M the no
 
 The link thread then ends and the supervisor's `node_turn` starts the core role in the same process, on the same seat, so M's windows reconnect to M's own core; their address loses the node's name once `/health` answers `core` (`addressForRole` in `web/src/ws.ts`).
 M's core dials C and confirms, C's core registers M's connection, and on C the registration M held as a node that dials in becomes the paired machine's device in place (`reconcile_peer_devices`, `LinkOrigin::becomes_peer`, `switch_device_link`): the id, the name and every record that names the device stay.
+A node that dialed in held no consent of C's, since it ran C's node itself; the switch gives the registration the consent a paired machine's device has (`register_peer_device`), without which C would never dial M and its work there would stay out of reach.
 C's work on M then runs in C's own node there, a `hided` of C's build that M's daemon starts from C's guest install root on the handed-over folder ([A guest's panes on the host](#a-guests-panes-on-the-host)), which takes up the holders as on any new link, so the terminals carry on and nothing closes.
 C keeps everything a core holds: projects, missions, letters, work started from M's window while the core was moved, and the phone pairing, which names C's core.
 No work is divided between the two cores, since no record says which machine started it.

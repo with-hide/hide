@@ -285,7 +285,10 @@ impl Runtime {
     /// node from.
     /// A node that dialed this core is taken over the same way once its
     /// machine runs a core of its own (D-46): what it ran for this core
-    /// goes on in the folder its node kept.
+    /// goes on in the folder its node kept. Such a node ran this core's
+    /// node itself and holds no consent of this core's; the pairing its
+    /// split made is the consent this core's node runs there under, as for
+    /// any paired machine (`register_peer_device`), so the core dials it.
     pub(super) fn switch_device_link(&mut self, device_id: &str, key: &str) -> bool {
         // Rewritten already and waiting for its save: the paired machines
         // changing again meanwhile asks for nothing more.
@@ -298,6 +301,7 @@ impl Runtime {
             .device_registrations
             .iter()
             .any(|registration| registration.origin.peer_key() == Some(key));
+        let paired = self.new_host_consent();
         let Some(registration) = self
             .snapshot
             .ui_state
@@ -324,6 +328,9 @@ impl Runtime {
                 switched: true,
             },
         );
+        if was == LinkOrigin::Inbound {
+            registration.host_consent = Some(paired);
+        }
         let needs = self
             .device_switches
             .get_mut(device_id)
@@ -444,6 +451,9 @@ impl Runtime {
         else {
             return false;
         };
+        if saving.was == LinkOrigin::Inbound {
+            registration.host_consent = None;
+        }
         registration.origin = saving.was;
         self.snapshot.ui_state.device_switch_opens.remove(device_id);
         crate::diagnostic!(serde_json::json!({

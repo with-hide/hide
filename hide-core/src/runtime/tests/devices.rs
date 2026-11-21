@@ -1987,7 +1987,10 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
 /// node. Once that machine runs a core of its own and is paired with this
 /// one, the same registration is its device (PRD device-connect-iroh D-46,
 /// B45): the id and the name stay and nothing is registered beside it, and
-/// until the grant is active the node's registration is untouched.
+/// until the grant is active the node's registration is untouched. The
+/// pairing is the consent this core's node runs there under, without which
+/// the core would never dial the machine and its work there would stay
+/// unreachable.
 #[test]
 fn a_node_that_dialed_in_becomes_its_machines_device_once_paired() {
     use crate::model::{DeviceRegistration, LinkOrigin};
@@ -2034,6 +2037,10 @@ fn a_node_that_dialed_in_becomes_its_machines_device_once_paired() {
     assert_eq!(
         device.label, "MacBook",
         "the name it was registered under stays"
+    );
+    assert!(
+        device.host_consent.is_some(),
+        "the pairing is the consent this core's node runs there under"
     );
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }
@@ -2121,13 +2128,17 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
         .expect("event");
         runtime.dispatch_json(&paired);
 
-        // The same registration, by its machine's key now and nothing else.
+        // The same registration, by its machine's key now, with the
+        // pairing's consent and nothing else.
         let mut expected = node;
         expected.origin = LinkOrigin::Peer {
             key: key.clone(),
             switched: true,
         };
-        assert_eq!(runtime.device_registration(&id), Some(&expected), "{tag}");
+        let switched = runtime.device_registration(&id).cloned().unwrap();
+        assert!(switched.host_consent.is_some(), "{tag}");
+        expected.host_consent = switched.host_consent.clone();
+        assert_eq!(switched, expected, "{tag}");
         let left: Vec<_> = runtime
             .snapshot
             .ui_state
