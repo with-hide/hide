@@ -422,26 +422,20 @@ fn newest_write(
 
 /// The folders OpenCode's root sessions worked in since `since_unix_ms`,
 /// each with when its newest session there last changed, for the folders
-/// agents worked in (`SessionCatalog::worked_folders`). Each folder is one
-/// row counted with the catalog's other entries, at most `limit`; crossing
-/// it is the catalog's capacity failure. No database means no folders, and
-/// a database Hide cannot open or list answers the inner `Err` with why.
+/// agents worked in (`SessionCatalog::worked_folders`): the newest `limit`
+/// folders, and `true` when older ones were left out. No database means no
+/// folders, and a database Hide cannot open or list answers `Err` with why.
 pub(crate) fn worked_directories(
     accounts: &Accounts,
     since_unix_ms: u64,
-    visited: &mut usize,
     limit: usize,
-) -> Result<Result<Vec<(PathBuf, u64)>, String>, crate::SessionCatalogError> {
-    let database = match database_path(accounts) {
-        Ok(database) => database,
-        Err(reason) => return Ok(Err(reason)),
-    };
+) -> Result<(Vec<(PathBuf, u64)>, bool), String> {
+    let database = database_path(accounts)?;
     if std::fs::symlink_metadata(database)
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     {
-        return Ok(Ok(Vec::new()));
+        return Ok((Vec::new(), false));
     }
-    let remaining = limit.saturating_sub(*visited);
     let rows = with_read(accounts, |connection, schema| {
         let mut statement = connection
             .prepare(&format!(
@@ -456,7 +450,7 @@ pub(crate) fn worked_directories(
                 params![
                     DIRECTORY_LIMIT_BYTES,
                     i64::try_from(since_unix_ms).unwrap_or(i64::MAX),
-                    remaining as i64 + 1
+                    limit as i64 + 1
                 ],
                 |row| {
                     Ok((
@@ -469,55 +463,47 @@ pub(crate) fn worked_directories(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| refusal(&error))
     });
-    let rows = match rows {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(reason)) => return Ok(Err(reason)),
-        Err(refused) => return Ok(Err(refused.into())),
-    };
-    if rows.len() > remaining {
-        return Err(crate::SessionCatalogError::Capacity { limit });
-    }
-    *visited += rows.len();
-    Ok(Ok(rows
-        .into_iter()
-        .map(|(directory, at)| (PathBuf::from(directory), at))
-        .filter(|(directory, _)| directory.is_absolute())
-        .collect()))
+    let mut rows = rows.map_err(String::from)??;
+    let cut = rows.len() > limit;
+    rows.truncate(limit);
+    Ok((
+        rows.into_iter()
+            .map(|(directory, at)| (PathBuf::from(directory), at))
+            .filter(|(directory, _)| directory.is_absolute())
+            .collect(),
+        cut,
+    ))
 }
 
 /// The project's root OpenCode sessions, as the session catalog lists them:
 /// each one's checkout is the `directory` its own row records, resolved to
-/// the project like a file reader's `cwd`. At most `limit` session rows
-/// are visited, counted with the catalog's other entries; crossing it is the
-/// catalog's capacity failure. No database means no OpenCode sessions.
+/// the project like a file reader's `cwd`. Only the newest `limit` root
+/// sessions are read, and `true` says older ones were left out. No database
+/// means no OpenCode sessions.
 ///
 /// OpenCode's database failing never takes the other agents' sessions with
 /// it: a database Hide cannot open or list contributes no rows and answers
-/// the inner `Err` with why, for the caller to report; a session whose proof
+/// `Err` with why, for the caller to report; a session whose proof
 /// or first request cannot be read is listed unavailable with why. Each
 /// session's proof has its own SQL work cap.
 pub(crate) fn catalog(
     accounts: &Accounts,
     device_id: &str,
     project: &hide_project::ProjectIdentity,
-    visited: &mut usize,
     limit: usize,
-) -> Result<Result<Vec<crate::ProjectSession>, String>, crate::SessionCatalogError> {
+) -> Result<(Vec<crate::ProjectSession>, bool), String> {
     // Only an answer that the file is not there is no OpenCode; a folder
     // Hide may not look into is a store it could not read.
-    let database = match database_path(accounts) {
-        Ok(database) => database,
-        Err(reason) => return Ok(Err(reason)),
-    };
+    let database = database_path(accounts)?;
     if std::fs::symlink_metadata(database)
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
     {
-        return Ok(Ok(Vec::new()));
+        return Ok((Vec::new(), false));
     }
     with_read(accounts, |connection, schema| {
-        catalog_connection(connection, schema, device_id, project, visited, limit)
+        catalog_connection(connection, schema, device_id, project, limit)
     })
-    .unwrap_or_else(|refusal| Ok(Err(refusal.into())))
+    .map_err(String::from)?
 }
 
 fn catalog_connection(
@@ -525,18 +511,11 @@ fn catalog_connection(
     schema: Schema,
     device_id: &str,
     project: &hide_project::ProjectIdentity,
-    visited: &mut usize,
     limit: usize,
-) -> Result<Result<Vec<crate::ProjectSession>, String>, crate::SessionCatalogError> {
-    let remaining = limit.saturating_sub(*visited);
-    let rows = match root_sessions(connection, schema, remaining) {
-        Ok(rows) => rows,
-        Err(reason) => return Ok(Err(reason)),
-    };
-    if rows.len() > remaining {
-        return Err(crate::SessionCatalogError::Capacity { limit });
-    }
-    *visited += rows.len();
+) -> Result<(Vec<crate::ProjectSession>, bool), String> {
+    let mut rows = root_sessions(connection, schema, limit)?;
+    let cut = rows.len() > limit;
+    rows.truncate(limit);
     // One resolution per checkout: a project's sessions share a few.
     let mut projects = std::collections::HashMap::new();
     let mut sessions = Vec::new();
@@ -592,11 +571,11 @@ fn catalog_connection(
         }
         sessions.push(session);
     }
-    Ok(Ok(sessions))
+    Ok((sessions, cut))
 }
 
 /// Up to `remaining + 1` root sessions, newest first, as `(id, directory,
-/// updated)`; one past `remaining` proves the catalog's cap was crossed.
+/// updated)`; one past `remaining` proves older ones are left out.
 fn root_sessions(
     connection: &Connection,
     schema: Schema,

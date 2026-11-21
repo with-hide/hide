@@ -85,8 +85,9 @@ pub use conversation_cursor::{
 };
 
 pub use catalog::{
-    ProjectSession, ProjectSessions, SESSION_DISCOVERY_LIMIT, SessionAvailability, SessionCatalog,
-    SessionCatalogError, SessionFilter, SessionStoreRefusal, WorkedFolder, WorkedFolders,
+    ProjectSession, ProjectSessions, SESSION_DISCOVERY_LIMIT, SESSIONS_CUT, SessionAvailability,
+    SessionCatalog, SessionCatalogError, SessionFilter, SessionStoreRefusal, WorkedFolder,
+    WorkedFolders,
 };
 
 /// Number of recent day directories used when the engine has not reported a Codex
