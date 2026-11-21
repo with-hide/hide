@@ -7,6 +7,7 @@ import { HouseIcon } from "lucide-react";
 import { useLayoutEffect, useMemo, type ReactNode } from "react";
 import { AgentMark, ProfileBadge } from "../AgentMark";
 import { LetterTag, PaneLetterButton, RowLetterMark } from "../components/letter-mark";
+import { LookChip } from "../components/linked-view";
 import { MentionChip } from "../components/mention-chip";
 import { MissionChip } from "../components/mission-chip";
 import { PlanChecklist } from "../components/plan-checklist";
@@ -102,6 +103,10 @@ export function SharedPartsScene({ params }: { params: URLSearchParams }) {
           <State name="Logos hidden"><ol><SessionRow mark={<><StatusMark mark="going" /><ProfileBadge profile="work" standalone /></>} title="Fix login redirect" right={time("2m")} /></ol></State>
           <State name="Hide AI keeps its owl"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" hideAi="card" profile="work" /><span>Hide AI · Claude · work</span></span></State>
           <State name="Korean name"><span className="flex items-center gap-xs text-caption"><AgentMark kind="claude" profile="회사" /><span>블로그 초안 개요</span></span></State>
+        </Part>
+        <Part name="An automation run · StatusMark automation, LookChip">
+          <State name="Marks: turn, read turn, look"><span className="flex items-center gap-sm"><StatusMark mark="turn" automation /><StatusMark mark="turn" automation read /><StatusMark mark="look" automation /></span></State>
+          <State name="Needs You row"><ol><SessionRow mark={<><StatusMark mark="turn" automation /><AgentMark kind="claude" /></>} title="Hide 사용 지표·주요 이슈 HTML 보고서" right={time("2s")} /></ol><div className="flex flex-col gap-xxs pl-(--size-agent-mark) text-micro"><span className="text-muted-foreground">↻ 자동화: Hide 지표 + 이슈 모니터링 <span className="text-warning">결정 필요: 주요 이슈 4건 방향 정하기</span></span><span className="flex min-w-0"><LookChip look={{ group: "needs_you", count: 2, view_id: "d1", label: "hide-daily-2026-11-21.html", workspace_id: null, checkout_id: null }} onOpen={open} /></span></div></State>
         </Part>
         <Part name="To look at · LookButton">
           <State name="Pane header"><span className="flex min-w-0 items-center gap-sm text-caption"><LookButton label="볼 것 · boundary-final.html" onLook={open} /><AgentMark kind="claude" /><span className="truncate">미션 상태 단순화 경계 목업</span></span></State>
