@@ -115,6 +115,17 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
       </div>
     </>
   ),
+  // Two terminals side by side; one stays on the left, the page it made stands at the right and its heading changes.
+  focus: () => (
+    <>
+      <Side />
+      <div className="pv-main">
+        <div className="pv-pane pv-half-l"><Line width={60} /><Line width={35} /></div>
+        <div className="pv-pane pv-half-r pv-fb"><Line width={50} /><Line width={70} /></div>
+        <div className="pv-pane pv-half-r pv-page"><i className="pv-hd" /><Line width={75} /><Line width={50} /></div>
+      </div>
+    </>
+  ),
 };
 
 /** The chapter's picture; `playing` runs its move, and a still one holds the move's middle. */
@@ -207,4 +218,11 @@ export const PREVIEW_CSS = `
 .pv-bars{display:flex;align-items:flex-end;gap:var(--spacing-xxs);height:45%;margin-top:var(--spacing-sm)}
 .pv-bars i{flex:1;border-radius:var(--radius-xs) var(--radius-xs) 0 0;background:var(--practice-accent-strong);transform-origin:bottom;animation-name:pv-bar}
 @keyframes pv-bar{0%,28%{transform:scaleY(0)}40%,86%{transform:scaleY(1)}96%,100%{transform:scaleY(0)}}
+
+.pv-fb{animation-name:pv-fb}
+@keyframes pv-fb{0%,20%{opacity:1}30%,86%{opacity:0}96%,100%{opacity:1}}
+.pv-page{opacity:0;animation-name:pv-page}
+@keyframes pv-page{0%,20%{opacity:0;transform:translateX(30%)}32%,86%{opacity:1;transform:none}96%,100%{opacity:0;transform:translateX(30%)}}
+.pv-hd{height:var(--spacing-xs);width:60%;border-radius:var(--radius-xs);margin-bottom:var(--spacing-xs);background:color-mix(in srgb,var(--foreground) 14%,transparent);animation-name:pv-hd}
+@keyframes pv-hd{0%,48%{background:color-mix(in srgb,var(--foreground) 14%,transparent)}58%,100%{background:var(--practice-accent)}}
 `;

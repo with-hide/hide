@@ -29,23 +29,23 @@
         },
         {
           "drawing": "pair",
-          "chapter": null,
+          "chapter": "focus",
           "text": {
             "en": {
-              "title": "Pair view, for when you want to focus on one agent",
-              "line": "Press Pair view on a pane to see its terminal beside what the agent is making, a website or a slide deck, and watch it change as the agent works."
+              "title": "Focus mode, for when you want to focus on one agent",
+              "line": "Press Focus mode on a pane to see its terminal beside what the agent is making, a website or a slide deck, and watch it change as the agent works."
             },
             "ko": {
-              "title": "한 에이전트의 일에 집중하고 싶을 때는 짝 보기",
-              "line": "패널의 짝 보기 버튼을 누르면 터미널과 그 에이전트가 만드는 웹사이트나 발표 자료가 나란히 보여요. 고치는 대로 옆에서 바로 바뀌어요."
+              "title": "한 에이전트의 일에 집중하고 싶을 때는 집중 모드",
+              "line": "패널의 집중 모드 버튼을 누르면 터미널과 그 에이전트가 만드는 웹사이트나 발표 자료가 나란히 보여요. 고치는 대로 옆에서 바로 바뀌어요."
             },
             "zh-CN": {
-              "title": "想专注于一个智能体时，用并排查看",
-              "line": "按窗格上的“并排查看”，它的终端和智能体正在做的网站或幻灯片会并排显示，修改的同时就能在旁边看到变化。"
+              "title": "想专注于一个智能体时，用专注模式",
+              "line": "按窗格上的“专注模式”，它的终端和智能体正在做的网站或幻灯片会并排显示，修改的同时就能在旁边看到变化。"
             },
             "ja": {
-              "title": "一つのエージェントに集中したいときはペア表示",
-              "line": "ペインの「ペア表示」を押すと、ターミナルとそのエージェントが作っているウェブサイトやスライドが並んで表示され、直したそばから変わるのが見えます。"
+              "title": "一つのエージェントに集中したいときは集中モード",
+              "line": "ペインの「集中モード」を押すと、ターミナルとそのエージェントが作っているウェブサイトやスライドが並んで表示され、直したそばから変わるのが見えます。"
             }
           }
         },
