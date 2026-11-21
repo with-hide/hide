@@ -265,6 +265,12 @@ struct Inner {
     /// The last code a phone paired with, by its `command::code_id`, and
     /// that phone's name: what `hide phone pair` waits for.
     paired_code: Option<(String, String)>,
+    /// New phones whose "새 폰이 연결됐어요" the phones already paired are still
+    /// owed (PRD device-connect-iroh D-70), oldest first. `observe_loop` sends
+    /// them, one batch at a time; a computer keeps no more than
+    /// `phones::MAX_PHONES` phones, so no more are owed, and at that cap the
+    /// oldest is dropped.
+    paired_notices: VecDeque<PhoneRecord>,
 }
 
 /// A change of hide's own settings, or the start, that no pass has read yet.
@@ -487,6 +493,7 @@ impl Mobile {
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
                 paired_code: None,
+                paired_notices: VecDeque::new(),
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
@@ -1307,10 +1314,29 @@ impl Mobile {
         let mut since_background = Duration::ZERO;
         let mut since_delivery = BACKGROUND_INTERVAL;
         let mut pending_delivery: Option<tokio::task::JoinHandle<()>> = None;
+        let mut pending_paired: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(OBSERVE_INTERVAL) => {}
                 _ = stopping.changed() => break,
+            }
+            if pending_paired
+                .as_ref()
+                .is_some_and(tokio::task::JoinHandle::is_finished)
+            {
+                pending_paired = None;
+            }
+            if pending_paired.is_none() {
+                let owed: Vec<PhoneRecord> = self.lock().paired_notices.drain(..).collect();
+                if !owed.is_empty() {
+                    let mobile = Arc::clone(&self);
+                    // One batch at a time, joined below before this owner ends.
+                    pending_paired = Some(tokio::task::spawn_blocking(move || {
+                        for phone in &owed {
+                            mobile.push_phone_paired(phone);
+                        }
+                    }));
+                }
             }
             if pending_delivery
                 .as_ref()
@@ -1349,7 +1375,7 @@ impl Mobile {
                 self.reconcile().await;
             }
         }
-        if let Some(pending) = pending_delivery {
+        for pending in [pending_delivery, pending_paired].into_iter().flatten() {
             // The stop flag prevents another channel call, and this owner
             // joins the one already started before releasing its resources.
             let _ = pending.await;
@@ -1490,6 +1516,9 @@ impl Mobile {
     /// is seen (PRD device-connect-iroh D-70). The notice names this computer
     /// and the new phone, and opens this computer's list.
     fn push_phone_paired(&self, phone: &PhoneRecord) {
+        if *self.stopping.borrow() {
+            return;
+        }
         let title = self.mac_name().unwrap_or_else(|| "Hide".to_owned());
         let (targets, subject) = {
             let inner = self.lock();
@@ -1525,6 +1554,21 @@ impl Mobile {
                 "phone_id": phone.id, "reason": reason,
             }));
         }
+    }
+
+    /// Owes the phones already paired the notice of `phone` (D-70), for
+    /// `observe_loop` to send; at the cap the oldest owed one is dropped and
+    /// the log says which.
+    fn owe_paired_notice(&self, phone: PhoneRecord) {
+        let mut inner = self.lock();
+        if inner.paired_notices.len() >= phones::MAX_PHONES
+            && let Some(dropped) = inner.paired_notices.pop_front()
+        {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_pairing", "kind": "phone.paired_notice_dropped", "phone_id": dropped.id,
+            }));
+        }
+        inner.paired_notices.push_back(phone);
     }
 
     /// Sends one notice to `targets`: `Ok` when a phone got it, else why
@@ -1857,8 +1901,7 @@ impl Mobile {
                     );
                 }
                 if self.config.device_connect {
-                    let (mobile, phone) = (Arc::clone(self), phone.clone());
-                    tokio::task::spawn_blocking(move || mobile.push_phone_paired(&phone));
+                    self.owe_paired_notice(phone.clone());
                 }
             }
             Err(refusal) => hide_core::diagnostic!(json!({

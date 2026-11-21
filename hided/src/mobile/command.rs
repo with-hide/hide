@@ -340,6 +340,35 @@ mod tests {
         assert!(!mobile.lock().settings.enabled);
     }
 
+    /// The new-phone notices owed to the phones already paired stay as many
+    /// as a computer keeps phones: past that the oldest owed one is dropped
+    /// (PRD device-connect-iroh D-70).
+    #[tokio::test]
+    async fn owed_new_phone_notices_stay_within_the_phones_a_computer_keeps() {
+        let directory = tempfile::tempdir().unwrap();
+        let mobile = mobile(directory.path());
+        let mut paired = Vec::new();
+        for index in 0..phones::MAX_PHONES {
+            let (code, _) = exposed_code(&mobile);
+            paired.push(mobile.pair(&code, &format!("Phone {index}")).unwrap().0);
+        }
+        for phone in &paired {
+            mobile.owe_paired_notice(phone.clone());
+        }
+        let mut one_more = paired[0].clone();
+        one_more.id = "one-more".to_owned();
+        mobile.owe_paired_notice(one_more);
+        let owed: Vec<String> = mobile
+            .lock()
+            .paired_notices
+            .iter()
+            .map(|phone| phone.id.clone())
+            .collect();
+        assert_eq!(owed.len(), phones::MAX_PHONES);
+        assert_eq!(owed[0], paired[1].id);
+        assert_eq!(owed.last().unwrap(), "one-more");
+    }
+
     #[tokio::test]
     async fn a_full_computer_refuses_before_it_turns_anything_on() {
         let directory = tempfile::tempdir().unwrap();
