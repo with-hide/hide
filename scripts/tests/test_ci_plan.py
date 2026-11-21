@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 SPEC = importlib.util.spec_from_file_location("ci_plan", Path(__file__).parents[1] / "ci-plan.py")
 ci = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ci)
@@ -276,9 +278,10 @@ class Selection(unittest.TestCase):
             with self.subTest(event=event):
                 self.assertTrue(ci.plan(event, None, None, ROOT)["deny"])
                 self.assertTrue(ci.plan(event, None, None, ROOT, nightly_agent_checks=True)["deny"])
-        rust = pr_jobs()["rust"]
-        self.assertIn("DENY: ${{ needs.plan.outputs.deny }}", rust)
-        self.assertEqual(rust.count("if: env.DENY == 'true'"), 2)
+        self.assertIn("deny: ${{ needs.plan.outputs.deny }}", pr_jobs()["rust"])
+        lane = (ROOT / ".github/workflows/rust.yml").read_text()
+        self.assertIn("DENY: ${{ inputs.deny }}", lane)
+        self.assertEqual(lane.count("if: env.DENY == 'true'"), 2)
 
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
         pin = plan("contracts/conpty.json")
@@ -985,6 +988,10 @@ INCLUDE_MACOS = r"include-macos: \$\{\{ needs\.plan\.outputs\.macos == 'true' \}
 
 def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
+    if "uses: ./.github/workflows/rust.yml" in block:
+        rust = yaml.safe_load((ROOT / ".github/workflows/rust.yml").read_text())["jobs"]
+        # The build, its test shards and the lint beside them.
+        return sum(len(job.get("strategy", {}).get("matrix", {}).get("shard", [None])) for job in rust.values())
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
         # With more than one shard parallel daemon and web builds precede them.
@@ -1160,7 +1167,11 @@ class Workflows(unittest.TestCase):
         # to 62: one job held the suite at 22.4 minutes, the longest of a run,
         # and three shards plan 4.2 minutes of tests each (docs/TESTING.md,
         # "Balancing the e2e shards").
-        self.assertLessEqual(most, 62, "a run starts more jobs than the suites and native SDK contracts need")
+        # The Rust lane's one job became its build, three test shards and its
+        # lint (seven with the web lane's nine shards, from 62 to 69), so the
+        # two longest Linux lines end about 13 minutes into a run, not 20
+        # (docs/TESTING.md, "The Rust lane's shards").
+        self.assertLessEqual(most, 69, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

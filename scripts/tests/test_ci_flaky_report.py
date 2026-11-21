@@ -288,7 +288,9 @@ class Workflows(unittest.TestCase):
                 if re.search(r"ci-flaky-report\.py --(suite|measurement)", step):
                     steps += 1
                     self.assertEqual(step.count("ci-flaky-report.py"), 1, f"{workflow.name}: {step.splitlines()[0]}")
-        self.assertEqual(steps, 15)
+        # The Rust lane reports from its build job's ignored tests and from
+        # each shard, two steps where its one job had one.
+        self.assertEqual(steps, 16)
 
 
 class Annotating(unittest.TestCase):
