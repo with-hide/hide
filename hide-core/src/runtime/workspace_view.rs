@@ -155,12 +155,13 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
-    /// The desks the published snapshot drew pair view on since the mode
-    /// last moved or ended, which fold when it leaves them (D-44); a desk
-    /// the mode passed drawing its tab's usual screen is never here (D-45).
-    /// Runtime only, and at most the desk drawn now and the one it came
-    /// from: every move folds and drops the others.
-    pub(super) pair_drawn: Vec<(WorkspaceKey, String)>,
+    /// The desks pair view drew since the mode last moved or ended, each
+    /// with how it was before the mode first drew it, which it gets back
+    /// when the mode leaves it (D-51); a desk the mode passed drawing its
+    /// tab's usual screen is never here (D-45). Runtime only, and at most
+    /// the desk drawn now and the one it came from: every move restores and
+    /// drops the others.
+    pub(super) pair_drawn: Vec<super::pair_view::PairDrawn>,
     /// The desk that floats with the tool now (PRD lane-desk-pair-view
     /// D-50): a View came onto that tab's desk while the lane showed a tool
     /// and not the desk, so the desk is drawn beside the tool over the
@@ -1520,6 +1521,8 @@ impl Runtime {
             self.snapshot.ui_state.right_panel_section = section;
         }
         self.snapshot.workspace_view = published;
+        // A pair drawn without the mode moving onto it (after a restart)
+        // is recorded as it is now.
         let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
             let pair = view.tray.pair.as_ref()?;
             Some((
@@ -1527,11 +1530,8 @@ impl Runtime {
                 pair.tab_id.clone(),
             ))
         });
-        if let Some(desk) = drawn
-            && let Some(store) = self.workspace_views.as_mut()
-            && !store.pair_drawn.contains(&desk)
-        {
-            store.pair_drawn.push(desk);
+        if let Some((key, tab)) = drawn {
+            self.note_pair_desk(&key, &tab);
         }
     }
 

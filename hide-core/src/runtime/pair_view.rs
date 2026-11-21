@@ -10,7 +10,9 @@
 //! touched, and the shell draws the pane's terminal over them (D-26). It ends
 //! only on ⌘., the pressed ◧ or the strip's way back (`PairEnd::Left`), when
 //! the drawn pane closes (`end_pairs_of_gone_panes`) or when the drawn desk's
-//! last View closes or moves away (D-46); ending folds that desk (D-44).
+//! last View closes or moves away (D-46). Every desk the mode leaves, by a
+//! move or its end, gets back the lane as it was before the mode drew it:
+//! open or closed, the desk shown or folded, the same View in front (D-51).
 
 use serde::Deserialize;
 
@@ -26,6 +28,18 @@ pub(super) struct PairLeft {
     pub(super) key: WorkspaceKey,
     pub(super) tab: String,
     pub(super) pane: String,
+}
+
+/// A desk pair view drew, with its lane as it was before the mode first
+/// drew it: whether the lane was open, whether it showed this desk, and
+/// the View in front of the desk (D-51).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PairDrawn {
+    key: WorkspaceKey,
+    tab: String,
+    open: bool,
+    shown: bool,
+    front: Option<String>,
 }
 
 impl PairLeft {
@@ -173,7 +187,10 @@ impl Runtime {
     fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
         let place = Place::Tray(left.tab.clone());
-        self.fold_drawn_pair_desk(Some((&left.key, &left.tab)));
+        self.restore_pair_desks(Some((&left.key, &left.tab)));
+        if content.is_some() {
+            self.note_pair_desk(&left.key, &left.tab);
+        }
         if let Some(store) = self.workspace_views.as_mut() {
             store.pair_left = Some(left);
             store.generation += 1;
@@ -214,14 +231,14 @@ impl Runtime {
         });
     }
 
-    /// Turns the mode off, everywhere (D-45); whether it was on. The desk it
-    /// drew folds, and the lane closes when nothing else is in it, so the
-    /// screen it leaves shows no View on the right (D-44).
+    /// Turns the mode off, everywhere (D-45); whether it was on. The screen
+    /// goes back to how it was before the mode drew it: the lane open or
+    /// closed, its desk shown or folded, the same View in front (D-51).
     pub(super) fn end_pair_view(&mut self, cause: PairEnd) -> bool {
         if !self.pair_mode_on() {
             return false;
         }
-        self.fold_drawn_pair_desk(None);
+        self.restore_pair_desks(None);
         let Some(store) = self.workspace_views.as_mut() else {
             return false;
         };
@@ -250,32 +267,74 @@ impl Runtime {
         true
     }
 
-    /// Folds every desk the screen drew pair view on (`pair_drawn`) but the
-    /// one the mode stays on (`staying`), and closes a lane left with no
-    /// column, so leaving a desk, for another tab or Workspace or out of the
-    /// mode, leaves no View over the agents there (D-44). A tab the mode
-    /// passed drawing its usual screen (a shell, an agent with no View)
-    /// keeps the lane and desk the operator left there (D-45).
-    fn fold_drawn_pair_desk(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
+    /// Records `tab`'s desk of `key` as pair view draws it, with how it is
+    /// now, unless it is recorded already: the state it gets back (D-51).
+    pub(super) fn note_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) {
+        let front = self
+            .view_layout_at(key, &Place::Tray(tab.to_owned()))
+            .and_then(|layout| layout.active_area().active.clone());
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
-        let stays = |(key, tab): &(WorkspaceKey, String)| {
-            staying.is_some_and(|(at, at_tab)| at == key && at_tab == tab)
+        if store
+            .pair_drawn
+            .iter()
+            .any(|desk| desk.key == *key && desk.tab == tab)
+        {
+            return;
+        }
+        let view = store.views.get(&key.0, &key.1);
+        let open = view.is_some_and(|view| view.open);
+        let shown = view
+            .and_then(|view| view.tray(tab))
+            .is_some_and(|tray| tray.shown);
+        store.pair_drawn.push(PairDrawn {
+            key: key.clone(),
+            tab: tab.to_owned(),
+            open,
+            shown,
+            front,
+        });
+    }
+
+    /// Gives every desk pair view drew (`pair_drawn`) but the one the mode
+    /// stays on (`staying`) back the state it had before the mode drew it:
+    /// shown or folded, with the same View in front if it is still there,
+    /// so a desk the mode leaves, for another tab or Workspace or out of the
+    /// mode, is as the operator left it (D-51). A tab the mode passed
+    /// drawing its usual screen (a shell, an agent with no View) was never
+    /// drawn, so its lane and desk stay as the operator left them (D-45).
+    fn restore_pair_desks(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
         };
         let (kept, left): (Vec<_>, Vec<_>) = std::mem::take(&mut store.pair_drawn)
             .into_iter()
-            .partition(|desk| stays(desk));
+            .partition(|desk| {
+                staying.is_some_and(|(key, tab)| desk.key == *key && desk.tab == tab)
+            });
         store.pair_drawn = kept;
-        for (key, tab) in left {
-            let Some(view) = store.views.get_mut(&key.0, &key.1) else {
+        for desk in left {
+            let place = Place::Tray(desk.tab.clone());
+            if let Some(store) = self.workspace_views.as_mut()
+                && let Some(view) = store.views.get_mut(&desk.key.0, &desk.key.1)
+            {
+                view.open = desk.open;
+                if let Some(tray) = view.tray_mut(&desk.tab) {
+                    // A desk the mode emptied has nothing to show again.
+                    tray.shown = desk.shown && tray.layout.display_count() > 0;
+                }
+            }
+            let Some(front) = desk.front else {
                 continue;
             };
-            if let Some(tray) = view.tray_mut(&tab) {
-                tray.shown = false;
-            }
-            if !view.has_column(Some(&tab)) {
-                view.open = false;
+            let there = self
+                .view_layout_at(&desk.key, &place)
+                .is_some_and(|layout| layout.displays().any(|display| display.id == front));
+            if there {
+                let _ = self.change_view_layout(&desk.key, &place, |layout, stamp| {
+                    layout.focus(&front, stamp).map(|changed| ((), changed))
+                });
             }
         }
     }

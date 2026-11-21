@@ -9,7 +9,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { quietFor } from "./wait";
 import { chooseExpand, enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
 
-// Pair view (PRD lane-desk-pair-view B16-B29, D-44..D-47): one mode for the
+// Pair view (PRD lane-desk-pair-view B16-B29, D-45..D-47, D-51): one mode for the
 // window that draws the pane the operator is on beside its Agent tab's desk,
 // under the tab row, split at a divider the operator drags, told from the
 // usual screen by the strip, the tab mark, the sidebar mark and a pressed ◧;
@@ -87,9 +87,8 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await page.locator(`[data-pane-views="${other}"]`).click();
     await page.getByRole("menuitem", { name: /b\.md/ }).click();
     await expect(deskTabs(page)).toHaveCount(2);
-    // The desk stands beside the panes; closed, they have the body before pair view as after it, which closes the desk (D-44, D-50).
-    await page.keyboard.press(chord("toggle_lane"));
-    await page.locator('[data-workspace-screen][data-lane-mode="closed"]').waitFor();
+    // The desk stands beside the panes, b.md in front; leaving pair view brings this screen back (D-50, D-51).
+    await page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"][aria-label*="/b.md"]').waitFor();
     await quietFor(page, 500, "every pane's first fit has landed");
 
     // The keyboard goes to the shell, so ◧ is pressed on a pane that does not hold it.
@@ -148,13 +147,13 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(page.locator(`[data-pair-pane="${left}"] .xterm-helper-textarea`), "the keys follow the pane chosen").toBeFocused();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
-    // B26: ⌘. brings the tab's own layout back, every pane at the place and grid it had, one resize for the left terminal.
+    // B26, D-51: ⌘. brings the screen before back, the desk standing with the View then in front and every pane at the place and grid it had, one resize for the left terminal.
     const beforeLeave = new Map(resizes);
     await page.keyboard.press(chord("pair_view"));
-    await expect(screen(page)).not.toHaveAttribute("data-lane-mode", "pair");
     // B26: the keyboard goes back to the pane that held it before entering.
     await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
     for (const pane of [left!, other!, shell]) await expect(paneView(page, pane)).toBeVisible();
+    await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect.poll(() => (resizes.get(left!) ?? 0) - (beforeLeave.get(left!) ?? 0)).toBe(1);
     await quietFor(page, 500, "no second resize follows the return");
     for (const pane of [left!, other!, shell]) {
@@ -235,17 +234,24 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await enterWorkspace(page, "fixture");
     await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible({ timeout: 20_000 }); // wait-ok: the restarted daemon reads the saved mode and the page draws it again
 
-    // D-44, D-45: the strip's way back ends it everywhere, with no desk left on the right; nothing turns it on again on the way back to a tab.
+    // D-45, D-51: the strip's way back ends it everywhere; the second tab's desk, which only the mode brought up, folds, and nothing turns the mode on again on the way back to a tab.
     await page.locator("[data-pair-leave]").click();
     await expect(strip(page)).toHaveCount(0);
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
     await expect(paneView(page, other!)).toBeVisible();
     await expect(strip(page)).toHaveCount(0);
+    // D-51: the first tab's desk is back as the operator left it before the mode drew it, standing with a.md in front.
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     await page.locator(`[data-agent-tab-bar] [data-tab="${second.tab}"]`).click();
     await expect(paneView(page, second.pane)).toBeVisible();
     await expect(strip(page)).toHaveCount(0);
     await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
+    // The desk closed, the panes are wide enough for the head's ◧.
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await page.keyboard.press(chord("toggle_lane"));
+    await page.locator('[data-workspace-screen][data-lane-mode="closed"]').waitFor();
 
     // B26: the pressed ◧ toggles it.
     await pairButton(page, left!).click();
@@ -354,7 +360,7 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
     expect(resizes.get(left!) ?? 0, "expanding and back resizes no terminal").toBe(beforeExpand);
 
-    // D-44: ⌘. leaves, with no desk on the right; entering again draws the same split.
+    // D-51: ⌘. leaves to the screen before, here the lane closed; entering again draws the same split.
     await page.keyboard.press(chord("pair_view"));
     await expect(strip(page)).toHaveCount(0);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");

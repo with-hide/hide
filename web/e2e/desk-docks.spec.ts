@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { agentPane } from "./agent-pane";
 import { fixtureExecutable } from "./platform-fixture";
 import { runInPane } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
@@ -206,6 +207,38 @@ test("coming back to a Workspace whose desk stands fits each terminal to its nar
     await quietFor(page, 500, "every terminal's fit has landed");
     // Pins the count: each terminal attaches again with one fit at its narrowed width.
     expect(resizes(stack)).toBe(before + stack.fixture.panes.length);
+  } finally {
+    stack.daemon.stop();
+    stack.fixture.stop();
+  }
+});
+
+test("the pane head's eye stands the desk with the View to look at, both panes in sight, and does not enter pair view (D-52) @platform", async ({ page }) => {
+  test.setTimeout(120_000);
+  const stack = await startStack(page, "desk-docks-eye");
+  try {
+    const [left, right] = stack.fixture.panes;
+    const agent = await agentPane(stack.fixture, stack.daemon.stateDir, left!);
+    // With the keyboard in the other pane, the agent's open waits as a View to look at.
+    await page.locator(`[data-pane-view="${right}"] .xterm-screen`).click();
+    await expect(page.locator(`[data-pane-view="${right}"]`)).toHaveAttribute("data-focused", "true");
+    const full = await widths(stack);
+    const answer = await agent(["file", "open", "a.md"]);
+    expect(answer.status, answer.out).toBe(0);
+    const eye = page.locator(`[data-pane-view="${left}"] button[data-pane-status-mark="look"]`);
+    await expect(eye).toBeVisible();
+
+    await eye.click();
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /\/a\.md/);
+    // Both panes stay in sight, narrowed beside the desk.
+    const lane = await laneBox(page);
+    const rightPane = await paneBox(page, right!);
+    expect(rightPane.x + rightPane.width).toBeLessThanOrEqual(lane.x);
+    const narrowed = await widths(stack);
+    expect(narrowed[0]).toBeLessThan(full[0]!);
+    expect(narrowed[1]).toBeLessThan(full[1]!);
+    await expect(page.locator("[data-pair-pane]")).toHaveCount(0);
   } finally {
     stack.daemon.stop();
     stack.fixture.stop();
