@@ -2790,8 +2790,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
-      // An automation run's row opens its terminal in the automation screen, where the run is; a View it opened opens as any row's does (PRD automations B15).
-      const run = agent?.look ? null : automationOpening(state.automations, agent);
+      // An automation run's row opens the run in the automation screen, where opening it puts the row away; a View it opened has its own chip (operator decision 2026-11-21).
+      const run = automationOpening(state.automations, agent);
       if (run) return this.openAutomation(run.id, run.run);
       this.openAgent(paneId, agent?.look);
     },

@@ -126,7 +126,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     const editor = page.locator("[data-view-area] .cm-content").first();
     await editor.click();
     await page.keyboard.press("Escape");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await page.keyboard.press("Tab");
     await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".cm-editor") === null)).toBe(true);
     await page.keyboard.press("Escape");

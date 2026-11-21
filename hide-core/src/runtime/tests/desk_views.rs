@@ -1781,7 +1781,7 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     );
 }
 
-// Pair view (PRD lane-desk-pair-view D-08, D-22, D-44..D-47): one mode for
+// Pair view (PRD lane-desk-pair-view D-08, D-22, D-45..D-47, D-51): one mode for
 // the window that draws the pane the operator is on beside its tab's desk.
 
 fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
@@ -1820,10 +1820,10 @@ fn paired(tab: &str, pane: &str) -> Pair {
 
 /// D-45, B18: entering puts the pane's agent's View in front of its tab's
 /// desk; a tab switch keeps the mode, drawing the new tab's pane beside its
-/// own desk, and so does a restart. D-44: leaving folds the desk and closes
-/// the lane, and D-45: off stays off everywhere.
+/// own desk, and so does a restart. D-51: leaving gives back the lane the
+/// operator had, and D-45: off stays off everywhere.
 #[test]
-fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_folds_the_desk() {
+fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_gives_the_lane_back() {
     let (mut runtime, checkout, directory) = setup("pair-mode");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "b.md");
@@ -1870,8 +1870,10 @@ fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_folds_the_desk() 
     pair_event(&mut runtime, None);
     assert_eq!(drawn_pair(&runtime), None);
     assert!(!mode_on(&runtime));
-    assert!(!lane_documents(&runtime), "D-44: no View on the right");
-    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().open);
+    assert!(
+        lane_documents(&runtime),
+        "D-51: the desk the operator had is back"
+    );
     assert_eq!(
         desk(&runtime, &directory, TABS[0]),
         ["a.md", "b.md"],
@@ -2015,11 +2017,12 @@ fn lane_of(runtime: &Runtime, directory: &Path, tab: &str) -> (bool, bool) {
     (view.open, view.tray(tab).is_some_and(|tray| tray.shown))
 }
 
-/// D-44: the desk pair view drew folds when the mode moves on to another
-/// tab, a lane the operator had open there included, and leaving folds the
-/// last one and closes the lane, so no View is left over the agents.
+/// D-51: each desk pair view drew gets its lane back as it was when the
+/// mode moves on to another tab, and leaving does the same for the last
+/// one: a desk the operator had standing stands again, one the mode
+/// brought up folds.
 #[test]
-fn pair_view_folds_each_desk_it_drew_as_it_moves_on() {
+fn pair_view_gives_each_desk_it_drew_its_lane_back_as_it_moves_on() {
     let (mut runtime, checkout, directory) = setup("pair-folds-drawn");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
@@ -2028,12 +2031,52 @@ fn pair_view_folds_each_desk_it_drew_as_it_moves_on() {
     pair_event(&mut runtime, Some("w-order:t1:p"));
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
-    assert!(
-        !lane_of(&runtime, &directory, TABS[0]).1,
-        "the desk left folds"
+    assert_eq!(
+        lane_of(&runtime, &directory, TABS[0]),
+        (true, true),
+        "the desk left is as the operator had it"
     );
     pair_event(&mut runtime, None);
-    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (false, false));
+    assert_eq!(
+        lane_of(&runtime, &directory, TABS[1]),
+        (true, false),
+        "the desk the mode brought up folds, the lane as it was"
+    );
+    focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
+    assert!(lane_documents(&runtime), "the first desk still stands");
+}
+
+/// D-51: leaving pair view puts back the View that was in front of the
+/// desk when the mode began, and a lane that was closed stays closed.
+#[test]
+fn leaving_pair_view_puts_back_the_front_view_and_a_closed_lane() {
+    let (mut runtime, checkout, directory) = setup("pair-gives-back");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    let before = fronts(&runtime, &directory);
+    assert_eq!(before, ["c.md"], "the operator's file in front");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["a.md"],
+        "B18: its agent's View"
+    );
+    pair_event(&mut runtime, None);
+    assert_eq!(
+        fronts(&runtime, &directory),
+        before,
+        "the View in front then"
+    );
+    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (true, true));
+
+    view_event(&mut runtime, serde_json::json!({"open": false}));
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert!(drawn_pair(&runtime).is_some());
+    pair_event(&mut runtime, None);
+    assert!(
+        !runtime.snapshot.workspace_view.as_ref().unwrap().open,
+        "a closed lane stays closed"
+    );
 }
 
 /// D-45: a tab the mode passes while it draws that tab's usual screen (an
@@ -2056,8 +2099,8 @@ fn a_lane_opened_where_pair_view_draws_nothing_stays_as_the_operator_left_it() {
 }
 
 /// D-46 by the pane: the left agent closing its last View ends the mode
-/// even with the operator's own file still on the desk, and leaving closes
-/// the lane (D-44).
+/// even with the operator's own file still on the desk, which stands again
+/// as the operator had it (D-51).
 #[test]
 fn pair_view_ends_when_the_left_agent_closes_its_last_view_beside_an_operators_file() {
     let (mut runtime, checkout, directory) = setup("pair-ends-by-pane");
@@ -2078,7 +2121,7 @@ fn pair_view_ends_when_the_left_agent_closes_its_last_view_beside_an_operators_f
     runtime.sync_workspace_view();
     assert!(!mode_on(&runtime));
     assert_eq!(desk(&runtime, &directory, TABS[0]), vec!["c.md".to_owned()]);
-    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (false, false));
+    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (true, true));
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the
@@ -2548,4 +2591,98 @@ fn split_and_move_apply_to_a_desk_view_and_refuse_one_on_no_desk() {
         "split-desk",
     );
     assert_eq!(fronts(&runtime, &directory), ["a.md", "b.md"]);
+}
+
+fn desk_floats(runtime: &Runtime) -> bool {
+    runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .unwrap()
+        .tray
+        .floats
+}
+
+/// D-50: a file opened while the Explorer floats shows its desk floating
+/// with the Explorer; the tool closing settles the desk, which then stands
+/// with the lane open. A tool opened beside a standing desk leaves it
+/// standing, and ⌘E bringing back a lane that closed while the desk floated
+/// stands it.
+#[test]
+fn a_file_opened_beside_a_floating_tool_floats_with_it_until_the_tool_closes() {
+    let (mut runtime, checkout, directory) = setup("desk-floats");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(lane_documents(&runtime) && desk_floats(&runtime));
+    open(&mut runtime, &checkout, &directory, "b.md");
+    runtime.sync_workspace_view();
+    assert!(desk_floats(&runtime), "a second file keeps it floating");
+
+    view_event(&mut runtime, serde_json::json!({"tool": null}));
+    assert!(lane_documents(&runtime), "the desk stays");
+    assert!(!desk_floats(&runtime), "and settles");
+
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "c.md");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        lane_tool(&runtime),
+        Some(crate::workspace_views::Tool::Explorer)
+    );
+    assert!(!desk_floats(&runtime), "a standing desk keeps standing");
+
+    // A lane closed while the desk floats comes back with the desk standing.
+    view_event(
+        &mut runtime,
+        serde_json::json!({"tool": null, "documents": false}),
+    );
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "d.md");
+    runtime.sync_workspace_view();
+    assert!(desk_floats(&runtime));
+    view_event(&mut runtime, serde_json::json!({"open": false}));
+    view_event(&mut runtime, serde_json::json!({"open": true}));
+    assert!(lane_documents(&runtime) && lane_tool(&runtime).is_some());
+    assert!(!desk_floats(&runtime));
+}
+
+/// D-50: a desk left shown with no View on it (a back tab's desk emptied,
+/// which `close_emptied_lane` does not fold) is not drawn, so a file opened
+/// beside the floating Explorer floats with it rather than standing while
+/// the operator is still choosing.
+#[test]
+fn a_shown_desk_with_no_view_floats_when_a_file_comes_beside_a_floating_tool() {
+    let (mut runtime, checkout, directory) = setup("desk-floats-empty");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    let key = runtime.front_workspace_key().unwrap();
+    let tab = runtime.front_tab(&key);
+    let store = runtime.workspace_views.as_mut().unwrap();
+    store.views.entry(&key.0, &key.1).tray_entry(&tab).shown = true;
+    // The operator's screen has the shown, empty desk: published, not drawn.
+    runtime.sync_workspace_view();
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(lane_documents(&runtime), "the desk is drawn");
+    assert!(desk_floats(&runtime), "and floats with the Explorer");
+}
+
+/// D-50: the desk shown for a file that is still loading, no View on it
+/// yet, already floats with the Explorer, since the shell draws it then; a
+/// snapshot without the flag would stand it for a moment and resize every
+/// terminal twice.
+#[test]
+fn a_desk_shown_for_a_file_still_loading_floats_with_the_tool() {
+    let (mut runtime, _checkout, _directory) = setup("desk-floats-loading");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    let key = runtime.front_workspace_key().unwrap();
+    let tab = runtime.front_tab(&key);
+    runtime.open_tray_for(&key, &Place::Tray(tab));
+    runtime.sync_workspace_view();
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.count,
+        0
+    );
+    assert!(lane_documents(&runtime), "the desk is shown");
+    assert!(desk_floats(&runtime), "and floats with the Explorer");
 }

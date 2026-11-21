@@ -293,19 +293,32 @@ test("dropping onto another area's bar collapses the areas, and the other edges 
   } finally { group.stop(); }
 });
 
-test("a tab dragged onto the lane over Agent Views is refused and the areas stay as they were", async ({ page }) => {
+test("a press on a tab closes a floating tool, and a tab dragged onto the standing desk is refused, the areas staying as they were (D-50)", async ({ page }) => {
   const group = await startGroups(page, "agent-groups-panel");
   try {
+    const screen = page.locator("[data-workspace-screen]");
+    // A tool floats over the panes; pressing a tab is a press outside it, which closes it.
     await showTool(page, "changes");
-    const panel = page.locator('[data-lane-frame="overlay"]');
-    await expect(panel).toBeVisible();
-    const floating = await box(panel);
-    const beforePanelDrop = await shape(page);
-    await drag(page, tab(page, group.first), { x: floating.x + floating.width - 5, y: floating.y + floating.height / 2 }, async () => {
+    await expect(screen).toHaveAttribute("data-lane-mode", "overlay");
+    await tab(page, group.second).click();
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await tab(page, group.first).click();
+    // A file opened from the Explorer settles beside the panes when the Explorer closes.
+    fs.writeFileSync(path.join(group.stack.folder, "notes.md"), "# notes\n");
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
+    await expect(screen).toHaveAttribute("data-lane-mode", "overlay");
+    await page.locator('[data-lane="explorer"] [data-explorer-tree]').focus();
+    await page.keyboard.press("Escape");
+    await expect(screen).toHaveAttribute("data-lane-mode", "docked");
+    const desk = await box(page.locator('[data-lane-frame="docked"]'));
+    const beforeDeskDrop = await shape(page);
+    await drag(page, tab(page, group.first), { x: desk.x + desk.width - 5, y: desk.y + desk.height / 2 }, async () => {
       await expect(page.locator("[data-agent-drop]")).toHaveCount(0);
       await expect(page.locator("html")).toHaveAttribute("data-agent-drag", "forbidden");
     });
-    expect(await shape(page)).toEqual(beforePanelDrop);
+    expect(await shape(page)).toEqual(beforeDeskDrop);
   } finally { group.stop(); }
 });
 

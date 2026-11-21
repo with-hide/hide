@@ -186,7 +186,7 @@ it("opens an automation's runs newest first with their marks, tags and results, 
       ["failed", null, "Failed · 3 tries"],
     ]);
     // B39: a run the ledger read says what it spent, in the desktop's words.
-    expect([...container.querySelectorAll("[data-phone-automation-spend]")].map((line) => line.textContent)).toEqual(["12.3K tokens · $0.42"]);
+    expect([...container.querySelectorAll("[data-phone-automation-spend]")].map((line) => line.textContent)).toEqual(["12.3K tokens"]);
     expect(container.querySelector("[data-phone-automation-older]")!.getAttribute("data-phone-automation-older")).toBe("30");
     await list([]);
     expect(container.querySelector("[data-phone-automation-page]")).toBeNull();

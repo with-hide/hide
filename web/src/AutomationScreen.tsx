@@ -10,6 +10,7 @@ import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
 import { lastResult, pauseReasonText, recentSpendText, recordText, scheduleText, skippedFolded, spendText, whenText, type RecordTone } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
+import { LookChip } from "./components/linked-view";
 import { formatElapsed, useMinuteClock } from "./components/elapsed";
 import { EmptyWelcome } from "./components/empty-welcome";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
@@ -537,12 +538,16 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
   const when = recordWhen(record);
   const whenWords = when === null ? null : whenText(when, words.now, words.zone, words.language, t);
   const shown = recordText(record, words.now, words.zone, words.language, t);
+  // What the run's agent opened that the operator has not looked at (operator decision 2026-11-21).
+  const paneId = record.kind === "run" ? record.pane_id : undefined;
+  const look = useShellStore((s) => (paneId ? s.agents.find((row) => row.pane_id === paneId)?.look : undefined));
   const body = (
     <>
       {whenWords ? <span className="w-(--size-mission-table-project) shrink-0 truncate text-caption tabular-nums text-subtle-foreground">{whenWords}</span> : null}
       <span className="flex min-w-0 flex-1 items-center gap-xs">
         <RecordWords tone={shown.tone} text={shown.text} />
         {record.kind === "run" ? <RunTags run={record} /> : null}
+        {look && paneId ? <LookChip look={look} onOpen={() => actions.openAgent(paneId, look)} /> : null}
       </span>
       {record.kind === "run" && record.spend ? <RunSpend spend={record.spend} words={words} /> : null}
     </>
@@ -552,16 +557,19 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
   // The run's view opens a finished run's conversation again as it arrives (B17).
   const open = () => actions.openAutomation(automation.id, record.number);
   return (
-    <RowButton className="gap-md rounded-none px-md py-sm" aria-label={t("automationScreen.run.open", { when: whenWords ?? "" })} onClick={open} data-automation-run-open={record.number} {...data}>
-      {body}
-      <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-    </RowButton>
+    <div className="relative flex min-w-0" {...data}>
+      <RowOverlayButton className="rounded-none" aria-label={t("automationScreen.run.open", { when: whenWords ?? "" })} onClick={open} data-automation-run-open={record.number} />
+      <div className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-md px-md py-sm">
+        {body}
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      </div>
+    </div>
   );
 }
 
-/** What a run's conversation spent, `토큰 12.3K · $0.42`, once the ledger read it (B39). */
+/** What a run's conversation spent, `토큰 12.3K`, once the ledger read it (B39). */
 function RunSpend({ spend, words }: { spend: AutomationSpend; words: Words }) {
-  return <span className="shrink-0 text-caption tabular-nums text-muted-foreground" data-automation-run-spend={spend.micro_usd}>{spendText(spend, words.language, words.t)}</span>;
+  return <span className="shrink-0 text-caption tabular-nums text-muted-foreground" data-automation-run-spend={spend.tokens}>{spendText(spend, words.language, words.t)}</span>;
 }
 
 /** `수동`, `놓친 회차`, `이어서 대화 중`, `대화를 찾을 수 없음` (B17-B20). */

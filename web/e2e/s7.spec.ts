@@ -78,7 +78,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 }
 
-/** Drags the lane's edge divider over the agents to `x`, where a minimum stops it, and waits for the release to land (PRD lane-two-columns B17). */
+/** Drags the lane's edge divider to `x`, where a minimum stops it, and waits for the release to land (PRD lane-two-columns B17). */
 async function dragLaneTo(page: Page, x: (body: Box) => number): Promise<void> {
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   const divider = page.locator('[data-lane-divider="lane"]');
@@ -101,7 +101,7 @@ async function narrowLane(page: Page): Promise<void> {
 }
 
 /**
- * Gives the lane the body's width over the agents, so several View areas fit
+ * Gives the lane all the width the agents leave it, so several View areas fit
  * side by side.
  */
 async function widenLane(page: Page): Promise<void> {
@@ -738,7 +738,7 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
 /**
  * Moves the keyboard with Tab or Shift+Tab until `target` has it. An editor
  * keeps Tab for indenting, and the Escape CodeMirror offers to let Tab leave
- * it would also put the lane over the agents away (PRD right-lane B3), so the
+ * it would also put the lane away (PRD right-lane B3), so the
  * keyboard steps out of an editor to the element Tab would reach next.
  */
 async function tabTo(page: Page, target: Locator, key: "Tab" | "Shift+Tab"): Promise<void> {
@@ -1202,7 +1202,7 @@ test("a window too narrow for both columns stacks them with one area and a way t
   await page.setViewportSize({ width: 1920, height: 1080 });
   const stack = await startStack(page, "s7-narrow", { "a.txt": "a\n", "b.txt": "b\n" });
   try {
-    // Two areas in the lane over the agents.
+    // Two areas in the lane.
     await keepOpenInTurn(page, ["a.txt", "b.txt"], (name) => explorerRow(page, stack, name));
     await widenLane(page);
     await tabMenu(page, page, "b.txt", "split_right");
@@ -1353,9 +1353,10 @@ test("a restart brings the View areas back as they were, and a file gone meanwhi
 
     // The same Workspace, not Main: the tree, ratios, order, preview, each
     // area's view, the area in use, and the lane with the Explorer
-    // beside the documents (B14; PRD right-lane B22; lane-two-columns B17).
+    // beside the documents, the desk standing, since whether it floated with
+    // the Explorer is not kept (B14; PRD right-lane B22; lane-two-columns B17; D-50).
     const workspace = page.locator("[data-workspace-screen]");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay", { timeout: 20_000 });
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(page.locator("[data-main-screen]")).toHaveCount(0);
@@ -1453,7 +1454,7 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed", { timeout: 20_000 });
     await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("3");
     await showDocuments(page);
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => shape(page), { timeout: 15_000 }).toBe("@(a.txt >b.txt c.txt*)");
     await expect(editor(page, 0)).toContainText("b text");
     await expect.poll(() => stack.diagnostics.has("workspace_views.migrated")).toBe(true);
@@ -1535,7 +1536,7 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     await expect(page.locator('[data-lane="changes"]')).toBeVisible();
     await page.locator('[data-lane-tool="changes"]').click();
     await expect(workspace).toHaveAttribute("data-lane-shows", "none");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await page.locator('[data-lane-tool="explorer"]').click();
     await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
     expect(laneSent()).toBe(toolsBefore + 3);
@@ -1557,7 +1558,7 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     const row = page.locator(`[data-palette-row="${stack.root}/c.txt"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
     await row.click();
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => shape(page)).toBe("(a.txt >a.txt) | @(b.txt >c.txt*)");
     await expect(area(page, 1)).toHaveAttribute("data-active-area", "true");
     expect(laneSent()).toBe(sentBefore);
