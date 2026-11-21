@@ -47,10 +47,10 @@ function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
  * schedule the form opens on, with the name and task the screen words; the
  * operator reads, changes and makes it like any new automation.
  */
-export type AutomationExample = "issues" | "deps" | "ci";
+export type AutomationExample = "report" | "briefing" | "ci";
 export const AUTOMATION_EXAMPLES: Record<AutomationExample, AutomationSchedule> = {
-  issues: { kind: "weekdays", time: "09:00" },
-  deps: { kind: "weekly", days: ["mon"], time: "10:00" },
+  report: { kind: "weekly", days: ["mon"], time: "09:00" },
+  briefing: { kind: "weekdays", time: "09:00" },
   ci: { kind: "every_hours", hours: 6, time: "00:00" },
 };
 export const AUTOMATION_EXAMPLE_KEYS = Object.keys(AUTOMATION_EXAMPLES) as AutomationExample[];
