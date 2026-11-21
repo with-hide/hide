@@ -1,8 +1,8 @@
 // The window after an update and the update history (docs/UI_BEHAVIOR.md,
 // What's new and Update history). The window opens once, on the first launch
 // of a stable version whose release names main features, over the dimmed
-// shell: a large drawing of the chosen feature (the practice cards' own,
-// `PracticePreview`), the features with a 체험하기 into the practice window
+// shell: a large drawing of the chosen feature (its own scene,
+// `whats-new-scenes/`, else a practice card's move, `PracticePreview`), the features with a 체험하기 into the practice window
 // where a chapter teaches one, the changes and fixes folded behind 더 보기,
 // the history link and OK. The history lists every version the app knows up
 // to the one in use, newest first. What decides and what is kept is
@@ -17,6 +17,8 @@ import { openPractice } from "../practice/channel";
 import { CHAPTERS } from "../practice/chapters";
 import type { PracticePreviewKind } from "../practice/chapter";
 import { PracticePreview, PREVIEW_CSS } from "../practice/PracticePreview";
+import { SCENES, type SceneName } from "./whats-new-scenes";
+import { useSceneTime } from "./whats-new-scenes/scene";
 import { historyVersions, inLanguage, RELEASE_DRAWINGS, unseen, type ReleaseDrawing, whatsNewOffer, type Change, type Offer, type OfferHighlight, type RecordUpdate, type ReleaseEntry, type WhatsNewRecord } from "../releases";
 import { releaseNotesUrl } from "../updates";
 import { chooseUpdateHistoryVersion, closeUpdateHistory, openUpdateHistory, saveWhatsNew, useUpdateHistory, useWhatsNewState } from "../whatsNew";
@@ -27,14 +29,30 @@ import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
 import { RowButton } from "./ui/row-button";
 
-/** How long the window waits on one feature before it moves to the next, the drawing's own loop. */
+/** How long the window waits on a feature drawn by a practice move before it moves to the next, the move's own loop; a scene waits its own loop. */
 const ADVANCE_MS = 6000;
 
-// The release file's drawing names are exactly the practice cards' moves.
-type SameKinds = [PracticePreviewKind] extends [ReleaseDrawing] ? ([ReleaseDrawing] extends [PracticePreviewKind] ? true : false) : false;
+// The release file's drawing names are exactly the scenes and the practice cards' moves.
+type Drawn = PracticePreviewKind | SceneName;
+type SameKinds = [Drawn] extends [ReleaseDrawing] ? ([ReleaseDrawing] extends [Drawn] ? true : false) : false;
 const sameKinds: SameKinds = true;
 void sameKinds;
-const isDrawing = (name: string): name is PracticePreviewKind => (RELEASE_DRAWINGS as readonly string[]).includes(name);
+const isDrawing = (name: string): name is ReleaseDrawing => (RELEASE_DRAWINGS as readonly string[]).includes(name);
+const isScene = (name: string): name is SceneName => Object.hasOwn(SCENES, name);
+const isMove = (name: string): name is PracticePreviewKind => isDrawing(name) && !isScene(name);
+const advanceMs = (drawing: string) => (isScene(drawing) ? SCENES[drawing].loopMs : ADVANCE_MS);
+
+function SceneDrawing({ name, playing }: { name: SceneName; playing: boolean }) {
+  const scene = SCENES[name];
+  const at = useSceneTime(scene, playing);
+  return <scene.Draw at={at} />;
+}
+
+/** A highlight's drawing: its feature's scene, or the practice move it names; nothing for a name this app does not have. */
+function Drawing({ drawing, playing }: { drawing: string; playing: boolean }) {
+  if (isScene(drawing)) return <SceneDrawing name={drawing} playing={playing} />;
+  return isMove(drawing) ? <PracticePreview kind={drawing} playing={playing} large /> : null;
+}
 const chapterKnown = (id: string | null): id is string => id !== null && CHAPTERS.some((chapter) => chapter.id === id);
 
 /** A drawing or chapter the release names that this app does not have: shown without it, and noted for the log (B14). */
@@ -76,7 +94,7 @@ function ChangeList({ changes, language }: { changes: readonly Change[]; languag
 function Stage({ drawing, playing }: { drawing: string; playing: boolean }) {
   return isDrawing(drawing) ? (
     <div className="shrink-0 overflow-hidden rounded-md border border-border" data-whats-new-stage={drawing}>
-      <PracticePreview kind={drawing} playing={playing} large />
+      <Drawing drawing={drawing} playing={playing} />
     </div>
   ) : null;
 }
@@ -104,9 +122,9 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
   const titleId = useId();
   useEffect(() => {
     if (!advancing) return;
-    const timer = window.setTimeout(() => setChosen((at) => (at + 1) % offer.highlights.length), ADVANCE_MS);
+    const timer = window.setTimeout(() => setChosen((at) => (at + 1) % offer.highlights.length), advanceMs(offer.highlights[chosen]!.drawing));
     return () => window.clearTimeout(timer);
-  }, [advancing, chosen, offer.highlights.length]);
+  }, [advancing, chosen, offer.highlights]);
   useEffect(() => {
     for (const row of offer.highlights) noteMissing(row);
   }, [offer.highlights]);
@@ -266,7 +284,7 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose
                 const words = inLanguage(row.text, language);
                 return (
                   <li key={index} className="flex flex-col overflow-hidden rounded-lg border border-border" data-update-history-feature={index}>
-                    {isDrawing(row.drawing) ? <PracticePreview kind={row.drawing} playing large /> : null}
+                    <Drawing drawing={row.drawing} playing />
                     <div className="flex flex-1 flex-col gap-xxs p-sm">
                       <span className="text-body font-medium text-foreground">{words.title}</span>
                       <span className="flex-1 break-keep text-caption text-muted-foreground">{words.line}</span>
