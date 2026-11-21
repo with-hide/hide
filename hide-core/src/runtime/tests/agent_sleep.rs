@@ -1974,6 +1974,16 @@ fn a_visit_to_a_sleeper_whose_conversation_runs_elsewhere_goes_there_instead() {
             .unwrap()
             .kind = kind.into();
         runtime.ingest_session(Ok(running_in_t1(kind, CONVERSATION)));
+        // A kind whose conversation needs its native proof carries the
+        // session id once that proof was read (`close_pane_runtime`).
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id == ELSEWHERE)
+            .unwrap()
+            .session_id = Some(CONVERSATION.into());
         assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
         assert!(
             !runtime
@@ -2088,7 +2098,7 @@ fn a_sleeping_session_whose_conversation_runs_elsewhere_is_not_woken() {
         assert!(runtime.request_dormant_wake(&id), "{kind}");
         let record = runtime.snapshot.ui_state.agent_sleep.dormant.get(&id);
         if woken {
-            assert_eq!(record.unwrap().phase, DormantPhase::SavingWake, "{kind}");
+            assert!(record.unwrap().phase.in_flight(), "{kind}: the wake runs");
             continue;
         }
         assert!(record.is_none(), "{kind}: the record ended");

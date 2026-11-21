@@ -866,7 +866,7 @@ impl Runtime {
 
     /// Asks the session of `pane_id`'s machine again, so its rows are drawn
     /// from the sleep records as they are now.
-    fn read_session_of(&self, pane_id: &str) {
+    fn read_session_of(&mut self, pane_id: &str) {
         match crate::address::pane_device(pane_id) {
             None if self.runs_own_engine() => self.request_republish(),
             None => {}
