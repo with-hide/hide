@@ -3389,7 +3389,7 @@ A guest's node runs from the guest's own build, which the host has only once the
 The guest asks on the management stream for its node (`node_start`, naming the build by its id); a host that lacks the build answers `build_missing`, the guest sends it once on a file stream, the list of its files and then each file's bytes in that order, and asks again when the host says it is placed (`hided/src/peer_dial.rs`, `ready` and `upload`; `Guests::file`).
 The host takes the bytes a piece at a time (`hide_node::ssh::host::guest_build::place`): each file is written to `<name>.part` beside its place with its hash counted as the bytes arrive, and takes its name only when they are the bytes the build names, so no file is held in memory and a part an earlier try left is replaced.
 A file already there with those bytes is kept, and its bytes in the upload are read past and checked the same way, so the files after it stay where the list says.
-A build is never too slow to arrive, only silent: each read of the upload has 30 s (`UPLOAD_QUIET_WITHIN`), because a relay carries about 2 MiB a second and the largest build, 256 MiB, takes two minutes.
+A build is never too slow to arrive, only silent: each read of the upload has 30 s (`UPLOAD_QUIET_WITHIN`), because a relay carries about 2 MiB a second and the largest build, 512 MiB, takes four minutes.
 The guest in turn waits `READY_WITHIN` for each stretch that is the host's own, from its ask and again from the build being placed, and 120 s after its last byte for the host to say so; the time the upload takes is counted by neither.
 Nothing resumes: a link that drops part way costs the whole build again at the next try, on a relay against its monthly limit.
 Before a build is placed the host makes room for it (`Guests::make_room`), keeping only that build and the one the guest's node last ran from, so a build that never brings a node up goes when the next arrives.
@@ -3425,7 +3425,7 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 | Events a node hands the host before the guest's stream takes them | 64 | the node's output is left unread, which holds its next event in its box | `guests/node.rs`, `EVENTS_WAITING` |
 | Crashes of a node the host starts again | 5 in 600 s | the node is left stopped and the guest's device shows the reason with a retry | `launch::CRASHES`, `launch::CRASH_WINDOW_SECS` |
 | Starts of a node for a holder it lost | 1 in 600 s | a pane lost sooner stays unreachable until the node's next start; the host's own daemon never restarts for it | `launch::HOLDER_LOST_RESTART_SECS`, `launch::EXIT_RESTART` |
-| One build a guest sends | 256 MiB in 64 files | the build is refused before a byte of it is placed | `build::MAX_BYTES`, `build::MAX_FILES` |
+| One build a guest sends | 512 MiB in 64 files | the build is refused before a byte of it is placed | `build::MAX_BYTES`, `build::MAX_FILES` |
 | Builds of one guest a host keeps | 2 | room is made before a build is placed: every build goes but that one and the one the node last ran from | `launch::BUILDS_KEPT`, `Guests::make_room` |
 
 The first row is set by the hook entries.
