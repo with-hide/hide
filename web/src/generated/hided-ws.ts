@@ -132,7 +132,11 @@ export type SnapshotSections =
   | DesktopActivityPayload
   | HumanTurnDonePayload
   | AutomationCall
-  | AutomationResult;
+  | AutomationResult
+  | AccessSnapshot
+  | AccessApprovePayload
+  | AccessModePayload
+  | AccessIdPayload;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -149,6 +153,17 @@ export type PaneTurnRowMode = "one_line" | "two_lines" | "off";
  * The palette every window draws in, `ui_state.color_theme`: hide is the landing page's Owl Field colors and the default (a store without the field opens hide), neutral the grey chrome. Independent of `ui_state.theme`, which picks light, dark or system. A stored value the core does not know opens hide with the diagnostic ui_state.color_theme_unknown.
  */
 export type ColorTheme = "hide" | "neutral";
+/**
+ * What an approved bot reaches (mission-87 D2): `all` is the whole Hide; `workspace` is one workspace, Hide's project, by the id `navigator.workspaces` gives it, with every checkout inside it, which the core holds the bot's commands, lists and reads to. A window names the workspace from `navigator.workspaces`; an id no longer there is a workspace since removed, where the bot reaches nothing.
+ */
+export type AccessMode =
+  | {
+      kind: "all";
+    }
+  | {
+      kind: "workspace";
+      workspace_id: string;
+    };
 
 export interface HideWireTypes {
   frame?: HidedWs;
@@ -806,7 +821,7 @@ export interface AgentNotice {
      */
     detail?: string | null;
     /**
-     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on with the count of open Views linked to it (`views`, absent at 0), `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json; `unmet`, for a refused close, is how many finished nodes have a line empty, absent otherwise), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth` or `permission`, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine, `open_ask` is a question the agent put to the operator that still waits, as the session record's 나를 기다리는 것 lists it: the record's `id` for it and its words `line` (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on with the count of open Views linked to it (`views`, absent at 0), `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json; `unmet`, for a refused close, is how many finished nodes have a line empty, absent otherwise), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth`, `permission`, or `install` for a `hide skill` / `hide mcp` install or update waiting on the operator's confirm, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine, `open_ask` is a question the agent put to the operator that still waits, as the session record's 나를 기다리는 것 lists it: the record's `id` for it and its words `line` (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
      */
     subject?:
       | null
@@ -845,7 +860,7 @@ export interface AgentNotice {
       | {
           cause: "human_turn";
           id: string;
-          kind: "auth" | "permission";
+          kind: "auth" | "permission" | "install";
           place: string;
           device?: string;
         }
@@ -898,4 +913,73 @@ export interface AutomationResult {
   ok: boolean;
   value?: unknown;
   code?: string;
+}
+/**
+ * The core's `access` section (PRD hide-external-control B2, B11, B17; mission-87): the requests waiting for the operator and the approved bots. Absent until the connection list is restored at start.
+ */
+export interface AccessSnapshot {
+  /**
+   * The core's machine, where every bot runs.
+   */
+  machine: string;
+  /**
+   * How many bots may connect.
+   */
+  limit: number;
+  /**
+   * Requests waiting for the operator, oldest first.
+   */
+  pending: AccessPending[];
+  /**
+   * Approved bots, in the order they were approved.
+   */
+  connections: AccessConnection[];
+}
+export interface AccessPending {
+  id: string;
+  name: string;
+  /**
+   * The program that asked, as the kernel named it; null when the system did not say.
+   */
+  program: string | null;
+  requested_ms: number;
+}
+export interface AccessConnection {
+  id: string;
+  name: string;
+  mode: AccessMode;
+  program: string | null;
+  created_ms: number;
+  /**
+   * Moved at most once a minute.
+   */
+  last_used_ms: number;
+  /**
+   * Live agents this bot started; they stay the bot's work in either mode while it is connected.
+   */
+  agent_count: number;
+  /**
+   * Open missions those agents conduct.
+   */
+  mission_count: number;
+}
+/**
+ * Payload of access_approve, taken only from a window's connection: the waiting request `id` becomes a bot in `mode`. A workspace the catalog does not carry, a request gone, a full list or a taken name changes nothing.
+ */
+export interface AccessApprovePayload {
+  id: string;
+  mode: AccessMode;
+}
+/**
+ * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`. It moves none of the bot's work; a workspace the catalog does not carry changes nothing.
+ */
+export interface AccessModePayload {
+  id: string;
+  mode: AccessMode;
+}
+/**
+ * Payload of access_refuse (a waiting request `id`) and access_revoke (a connected bot `id`, whose work becomes the operator's at once), taken only from a window's connection.
+ */
+export interface AccessIdPayload {
+  id: string;
 }

@@ -37,10 +37,9 @@ export function connectionLine(connection: AccessConnection, machine: string, no
 }
 
 /**
- * Whether the row says that disconnecting or View only hands the tool's work
- * to the operator (B13, D-14): only an Act tool's work is the tool's, so a
- * View only tool's agents are already the operator's.
+ * Whether the row says that disconnecting hands the bot's work to the
+ * operator (B13, D-14): every connected bot keeps what it started.
  */
 export function warnsOfWork(connection: AccessConnection): boolean {
-  return connection.level === "act" && connection.agent_count + connection.mission_count > 0;
+  return connection.agent_count + connection.mission_count > 0;
 }

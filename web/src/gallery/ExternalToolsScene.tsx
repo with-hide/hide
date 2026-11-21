@@ -1,6 +1,6 @@
 // Production Settings › External tools with invented tools (PRD
 // hide-external-control B2-B4, B11-B13): `state=pending`, `connected`,
-// `empty`. Approve, level and disconnect move the invented section as the
+// `empty`. Approve, mode and disconnect move the invented section as the
 // core would. No daemon and no keys.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -15,11 +15,11 @@ const MINUTE = 60_000;
 function fixture(state: string): AccessSection {
   const now = Date.now();
   const busy: AccessConnection = {
-    id: "gallery-conn-1", name: "hermes-ctong", level: "act", program: "/Users/me/.hermes/bin/hermes", created_ms: now - 2 * 86_400_000,
+    id: "gallery-conn-1", name: "hermes-ctong", mode: { kind: "all" }, program: "/Users/me/.hermes/bin/hermes", created_ms: now - 2 * 86_400_000,
     last_used_ms: now - 3 * MINUTE, agent_count: 2, mission_count: 1,
   };
   const quiet: AccessConnection = {
-    id: "gallery-conn-2", name: "nightly-cron", level: "view", program: "/usr/local/bin/nightly", created_ms: now - 9 * 86_400_000,
+    id: "gallery-conn-2", name: "nightly-cron", mode: { kind: "workspace", workspace_id: "workspace:gallery" }, program: "/usr/local/bin/nightly", created_ms: now - 9 * 86_400_000,
     last_used_ms: now - 26 * 60 * MINUTE, agent_count: 0, mission_count: 0,
   };
   return {
@@ -41,10 +41,10 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
     if (event.kind === "access_refuse") useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id) } });
     if (event.kind === "access_approve") {
       const request = current.pending.find((one) => one.id === id);
-      const level = (event.payload as { level: AccessConnection["level"] }).level;
-      if (request) useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id), connections: [...current.connections, { id: request.id, name: request.name, level, program: request.program, created_ms: Date.now(), last_used_ms: Date.now(), agent_count: 0, mission_count: 0 }] } });
+      const mode = (event.payload as { mode: AccessConnection["mode"] }).mode;
+      if (request) useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id), connections: [...current.connections, { id: request.id, name: request.name, mode, program: request.program, created_ms: Date.now(), last_used_ms: Date.now(), agent_count: 0, mission_count: 0 }] } });
     }
-    if (event.kind === "access_level") useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, level: (event.payload as { level: AccessConnection["level"] }).level } : one) } });
+    if (event.kind === "access_mode") useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, mode: (event.payload as { mode: AccessConnection["mode"] }).mode } : one) } });
     if (event.kind === "access_revoke") useShellStore.setState({ access: { ...current, connections: current.connections.filter((one) => one.id !== id) } });
     return true;
   }), []);

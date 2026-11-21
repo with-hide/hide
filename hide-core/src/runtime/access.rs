@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::Runtime;
-use crate::access::{Access, Call, Ended, Level, Standing, Stored};
+use crate::access::{Access, Call, Ended, Mode, Standing, Stored};
 use crate::latest_file::{LatestFile, read_capped};
 use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
 
@@ -56,22 +56,21 @@ pub(crate) fn restore(path: PathBuf) -> (LatestFile<Stored>, Stored) {
     (file, stored)
 }
 
-/// The operator's answer to a tool, from a window's Settings › External
-/// tools (D-31); a pane's scoped connection and the CLI cannot send one
-/// (B8).
+/// The operator's answer to a bot, from a window's Settings (D-31); a
+/// pane's scoped connection and the CLI cannot send one (B8).
 #[derive(Debug)]
 pub(crate) enum AccessEvent {
-    Approve { id: String, level: Level },
+    Approve { id: String, mode: Mode },
     Refuse { id: String },
-    Level { id: String, level: Level },
+    Mode { id: String, mode: Mode },
     Revoke { id: String },
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WithLevel {
+struct WithMode {
     id: String,
-    level: Level,
+    mode: Mode,
 }
 
 #[derive(Deserialize)]
@@ -84,22 +83,22 @@ impl AccessEvent {
     pub(super) const KINDS: [&'static str; 4] = [
         "access_approve",
         "access_refuse",
-        "access_level",
+        "access_mode",
         "access_revoke",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
         Some(match kind {
             "access_approve" => {
-                let WithLevel { id, level } = serde_json::from_value(payload).ok()?;
-                Self::Approve { id, level }
+                let WithMode { id, mode } = serde_json::from_value(payload).ok()?;
+                Self::Approve { id, mode }
             }
             "access_refuse" => Self::Refuse {
                 id: serde_json::from_value::<ById>(payload).ok()?.id,
             },
-            "access_level" => {
-                let WithLevel { id, level } = serde_json::from_value(payload).ok()?;
-                Self::Level { id, level }
+            "access_mode" => {
+                let WithMode { id, mode } = serde_json::from_value(payload).ok()?;
+                Self::Mode { id, mode }
             }
             "access_revoke" => Self::Revoke {
                 id: serde_json::from_value::<ById>(payload).ok()?.id,
@@ -116,7 +115,7 @@ fn standing_answer(standing: &Standing) -> Result<Value, String> {
             "state": "connected",
             "id": connection.id,
             "name": connection.name,
-            "level": connection.level,
+            "mode": connection.mode,
         })),
         Standing::Ended(ended) => Err(ended.reason().to_owned()),
         Standing::Unknown => Ok(json!({"state": "unknown"})),
@@ -135,7 +134,6 @@ impl Runtime {
     /// ends every other tool's records, watches and answer waits by
     /// (`coordination::end_gone_tools`, D-23); `None` until the list is
     /// restored at start, so a start ends nothing before it knows the list.
-    /// A level set to View ends nothing: the connection still stands.
     pub(crate) fn delivery_tool_connections(&self) -> Option<Vec<String>> {
         self.access.store.as_ref()?;
         Some(
@@ -152,7 +150,7 @@ impl Runtime {
         &self,
         kind: &str,
         id: Option<&str>,
-        level: Option<Level>,
+        mode: Option<&Mode>,
         reason: Option<&str>,
     ) {
         crate::diagnostic!(json!({
@@ -160,7 +158,7 @@ impl Runtime {
             "kind": kind,
             "connection_id": id,
             "machine": self.node.as_str(),
-            "level": level.map(Level::as_str),
+            "mode": mode.map(Mode::as_str),
             "reason": reason,
         }));
     }
@@ -216,7 +214,7 @@ impl Runtime {
                             self.note_access(
                                 "access.key_issued",
                                 Some(&connection.id),
-                                Some(connection.level),
+                                Some(&connection.mode),
                                 None,
                             );
                         }
@@ -236,7 +234,7 @@ impl Runtime {
                 Standing::Connected(connection) => Ok(json!({
                     "id": connection.id,
                     "name": connection.name,
-                    "level": connection.level,
+                    "mode": connection.mode,
                 })),
                 standing => {
                     let reason = match standing {
@@ -257,7 +255,7 @@ impl Runtime {
                 if self.access.state.used(&id, now) {
                     self.access_changed(true);
                 }
-                Ok(json!({"id": connection.id, "name": connection.name, "level": connection.level}))
+                Ok(json!({"id": connection.id, "name": connection.name, "mode": connection.mode}))
             }
             Call::Leave { key_sha256 } => match self.access.state.standing(&key_sha256) {
                 Standing::Connected(connection) => {
@@ -289,21 +287,19 @@ impl Runtime {
     pub(super) fn access_event(&mut self, event: AccessEvent) -> bool {
         let now = super::unix_milliseconds();
         let outcome = match &event {
-            AccessEvent::Approve { id, level } => self
-                .access
-                .state
-                .approve(id, *level, now)
-                .map(|_| ("access.approved", id, Some(*level), true)),
+            AccessEvent::Approve { id, mode } => self
+                .known_mode(mode)
+                .and_then(|()| self.access.state.approve(id, mode.clone(), now))
+                .map(|_| ("access.approved", id, Some(mode), true)),
             AccessEvent::Refuse { id } => self
                 .access
                 .state
                 .refuse(id)
                 .map(|_| ("access.refused", id, None, false)),
-            AccessEvent::Level { id, level } => self
-                .access
-                .state
-                .set_level(id, *level)
-                .map(|changed| ("access.level", id, Some(*level), changed)),
+            AccessEvent::Mode { id, mode } => self
+                .known_mode(mode)
+                .and_then(|()| self.access.state.set_mode(id, mode.clone()))
+                .map(|changed| ("access.mode", id, Some(mode), changed)),
             AccessEvent::Revoke { id } => self
                 .access
                 .state
@@ -311,13 +307,12 @@ impl Runtime {
                 .map(|_| ("access.revoked", id, None, true)),
         };
         match outcome {
-            Ok((kind, id, level, save)) => {
-                self.note_access(kind, Some(id), level, None);
+            Ok((kind, id, mode, save)) => {
+                self.note_access(kind, Some(id), mode, None);
                 self.access_changed(save);
-                if matches!(
-                    event,
-                    AccessEvent::Level { .. } | AccessEvent::Revoke { .. }
-                ) {
+                // A mode moves no work: the bot keeps what it started in
+                // either mode (D5). A disconnect hands it to the operator.
+                if matches!(event, AccessEvent::Revoke { .. }) {
                     let id = id.clone();
                     self.tool_work_moved(&id);
                 }
@@ -329,7 +324,7 @@ impl Runtime {
                 let id = match &event {
                     AccessEvent::Approve { id, .. }
                     | AccessEvent::Refuse { id }
-                    | AccessEvent::Level { id, .. }
+                    | AccessEvent::Mode { id, .. }
                     | AccessEvent::Revoke { id } => id,
                 };
                 self.note_access("access.event_refused", Some(id), None, Some(reason));
@@ -338,12 +333,21 @@ impl Runtime {
         }
     }
 
-    /// The connection `id` names, while it stands: the level a command of
-    /// it runs at, and the identity it acts as.
-    pub(crate) fn access_actor(&self, id: &str) -> Option<(Level, crate::delivery::Actor)> {
+    /// A workspace mode names a workspace this core registers; a window
+    /// sends only one it shows, so another is a stale screen's.
+    fn known_mode(&self, mode: &Mode) -> Result<(), &'static str> {
+        match mode.workspace() {
+            Some(workspace) if !self.workspace_known(workspace) => Err("access_workspace_unknown"),
+            _ => Ok(()),
+        }
+    }
+
+    /// The connection `id` names, while it stands: the mode a command of
+    /// it runs in, and the identity it acts as.
+    pub(crate) fn access_actor(&self, id: &str) -> Option<(Mode, crate::delivery::Actor)> {
         self.access.state.connection(id).map(|connection| {
             (
-                connection.level,
+                connection.mode.clone(),
                 crate::delivery::Actor::access(
                     &connection.id,
                     &connection.name,
@@ -358,15 +362,13 @@ impl Runtime {
         self.access.edit += 1;
     }
 
-    /// Whether the tool of `connection` keeps its work now: the connection
-    /// stands, at Act (PRD hide-external-control D-14). A View only, a
-    /// disconnected or a left connection keeps none, and a new connection
-    /// of the same name is another id, so it takes none of this (D-40).
+    /// Whether the bot of `connection` keeps its work now: the connection
+    /// stands, in either mode (PRD hide-external-control D-14, mission-87
+    /// D5). A disconnected or a left connection keeps none, and a new
+    /// connection of the same name is another id, so it takes none of this
+    /// (D-40).
     pub(crate) fn access_keeps_work(&self, connection: &str) -> bool {
-        self.access
-            .state
-            .connection(connection)
-            .is_some_and(|connection| connection.level == Level::Act)
+        self.access.state.connection(connection).is_some()
     }
 
     /// The external tool `work` is, as a row or a mission names it: whether
@@ -408,8 +410,7 @@ impl Runtime {
             .map(|work| self.tool_work_snapshot(work))
     }
 
-    /// Who keeps connection `id`'s work moved (a level, a disconnect, a
-    /// leave): the rows and their lists are judged again on this event, so
+    /// Who keeps connection `id`'s work moved (a disconnect, a leave): the rows and their lists are judged again on this event, so
     /// the work is in or out of the operator's lists at once (B16). Nothing
     /// is read for a tool that started nothing.
     fn tool_work_moved(&mut self, id: &str) -> bool {
@@ -464,7 +465,7 @@ impl Runtime {
                 AccessConnectionSnapshot {
                     id: connection.id.clone(),
                     name: connection.name.clone(),
-                    level: connection.level,
+                    mode: connection.mode.clone(),
                     program: connection.program.clone(),
                     created_ms: connection.created_ms,
                     last_used_ms: connection.last_used_ms,
@@ -497,20 +498,161 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// The identity a tool's command acts as: its connection's, on this
-    /// machine, while the connection's level allows `need` (B20-B23,
-    /// `crate::access::admit`).
+    /// The identity a bot's command acts as: its connection's, on this
+    /// machine, while the connection's mode allows `need` (B20-B23,
+    /// `crate::access::admit`), with the mode the command's own reads hold
+    /// it to (D3).
     pub(super) fn access_authority(
         &self,
         device: &str,
         connection: &str,
         need: crate::access::Need,
-    ) -> Result<crate::delivery::Actor, String> {
-        let (level, actor) = self
+    ) -> Result<(crate::delivery::Actor, Mode), String> {
+        let (mode, actor) = self
             .access_actor(connection)
             .filter(|_| device == self.node.as_str())
             .ok_or(Ended::Revoked.reason())?;
-        crate::access::admit(level, need)?;
-        Ok(actor)
+        crate::access::admit(&mode, need)?;
+        Ok((actor, mode))
+    }
+}
+
+impl Runtime {
+    /// Whether `workspace` is a workspace the catalog carries, on this
+    /// machine or a connected device.
+    pub(super) fn workspace_known(&self, workspace: &str) -> bool {
+        self.catalog_workspaces().any(|known| known.id == workspace)
+    }
+
+    /// The workspace whose tabs hold `pane` on `device`.
+    pub(super) fn pane_workspace(&self, device: &str, pane: &str) -> Option<&str> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .find(|workspace| {
+                workspace.checkouts.iter().any(|checkout| {
+                    checkout.tabs.iter().any(|tab| {
+                        tab.panes.iter().any(|row| {
+                            crate::address::same_pane(self.node.as_str(), device, &row.id, pane)
+                        })
+                    })
+                })
+            })
+            .map(|workspace| workspace.id.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::{Value, json};
+
+    use super::AccessEvent;
+    use crate::access::Mode;
+    use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
+
+    fn schema() -> Value {
+        serde_json::from_str(include_str!("../../../contracts/hided-ws.schema.json")).unwrap()
+    }
+
+    fn keys(value: &Value) -> BTreeSet<String> {
+        value.as_object().unwrap().keys().cloned().collect()
+    }
+
+    /// Whether `value` has every key `def` requires and none it does not
+    /// name, as `additionalProperties: false` says.
+    fn fits(def: &Value, value: &Value) -> bool {
+        let named = keys(&def["properties"]);
+        let required: BTreeSet<String> = def["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key.as_str().unwrap().to_owned())
+            .collect();
+        let have = keys(value);
+        required.is_subset(&have) && have.is_subset(&named)
+    }
+
+    fn mode_fits(defs: &Value, mode: &Value) -> bool {
+        defs["accessMode"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|shape| {
+                fits(shape, mode) && shape["properties"]["kind"]["const"] == mode["kind"]
+            })
+            .count()
+            == 1
+    }
+
+    #[test]
+    fn the_access_section_and_its_events_are_the_shapes_the_wire_contract_names() {
+        let schema = schema();
+        let defs = &schema["$defs"];
+        let workspace = Mode::Workspace {
+            workspace_id: "workspace:00000000000000aa".into(),
+        };
+        let section = serde_json::to_value(AccessSnapshot {
+            machine: "this-mac".into(),
+            limit: crate::access::MAX_CONNECTIONS,
+            pending: vec![AccessPendingSnapshot {
+                id: "00000000000000a1".into(),
+                name: "orca".into(),
+                program: None,
+                requested_ms: 1,
+            }],
+            connections: [Mode::All, workspace.clone()]
+                .into_iter()
+                .enumerate()
+                .map(|(n, mode)| AccessConnectionSnapshot {
+                    id: format!("00000000000000b{n}"),
+                    name: format!("bot-{n}"),
+                    mode,
+                    program: Some("python3".into()),
+                    created_ms: 1,
+                    last_used_ms: 2,
+                    agent_count: 0,
+                    mission_count: 0,
+                })
+                .collect(),
+        })
+        .unwrap();
+        assert!(fits(&defs["accessSnapshot"], &section), "{section}");
+        assert!(fits(&defs["accessPending"], &section["pending"][0]));
+        for connection in section["connections"].as_array().unwrap() {
+            assert!(fits(&defs["accessConnection"], connection), "{connection}");
+            assert!(mode_fits(defs, &connection["mode"]), "{connection}");
+        }
+
+        // Each event the contract declares decodes from its payload, and a
+        // level, the earlier wire, decodes into nothing.
+        for mode in [json!({"kind": "all"}), serde_json::to_value(&workspace).unwrap()] {
+            let payload = json!({"id": "00000000000000a1", "mode": mode});
+            assert!(fits(&defs["accessApprovePayload"], &payload));
+            assert!(fits(&defs["accessModePayload"], &payload));
+            assert!(matches!(
+                AccessEvent::decode("access_approve", payload.clone()),
+                Some(AccessEvent::Approve { .. })
+            ));
+            assert!(matches!(
+                AccessEvent::decode("access_mode", payload),
+                Some(AccessEvent::Mode { .. })
+            ));
+        }
+        let by_id = json!({"id": "00000000000000a1"});
+        assert!(fits(&defs["accessIdPayload"], &by_id));
+        assert!(AccessEvent::decode("access_refuse", by_id.clone()).is_some());
+        assert!(AccessEvent::decode("access_revoke", by_id).is_some());
+        for refused in [
+            ("access_approve", json!({"id": "a", "level": "act"})),
+            ("access_level", json!({"id": "a", "level": "act"})),
+            ("access_mode", json!({"id": "a", "mode": {"kind": "workspace"}})),
+        ] {
+            assert!(AccessEvent::decode(refused.0, refused.1.clone()).is_none(), "{refused:?}");
+        }
+        assert_eq!(
+            AccessEvent::KINDS,
+            ["access_approve", "access_refuse", "access_mode", "access_revoke"]
+        );
     }
 }

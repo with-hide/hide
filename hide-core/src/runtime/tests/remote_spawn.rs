@@ -721,7 +721,7 @@ fn a_spawn_desk_asks_for_starts_with_no_record_made_beforehand_and_takes_its_pla
 /// connection all name the tool.
 #[test]
 fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin() {
-    use crate::access::{Call as AccessCall, Level, key_hash};
+    use crate::access::{Call as AccessCall, Mode, key_hash};
     use crate::runtime::access::AccessEvent;
     let spawner = spawner();
     let connection = {
@@ -736,7 +736,7 @@ fn a_spawn_a_tool_asks_for_starts_as_its_connection_and_names_the_tool_as_origin
         let id = asked.unwrap()["id"].as_str().unwrap().to_owned();
         assert!(runtime.access_event(AccessEvent::Approve {
             id: id.clone(),
-            level: Level::Act,
+            mode: Mode::All,
         }));
         id
     };

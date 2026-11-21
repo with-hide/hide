@@ -96,16 +96,16 @@ pub struct Capability {
     claimed: bool,
     path: PathBuf,
     remote: Option<RemoteCapability>,
-    /// An external tool's level, as the core answered it for this command
+    /// A bot's mode, as the core answered it for this command
     /// ([`Registry::validate`]); `None` for every other caller.
-    access_level: Option<hide_core::access::Level>,
+    access_mode: Option<hide_core::access::Mode>,
 }
 
 impl Capability {
-    /// The level an external tool's command runs at, which the command
-    /// boundary judges it by (`server::ScopedRequest::access_need`).
-    pub(crate) fn access_level(&self) -> Option<hide_core::access::Level> {
-        self.access_level
+    /// The mode a bot's command runs in, which the command boundary judges
+    /// it by (`server::ScopedRequest::access_need`).
+    pub(crate) fn access_mode(&self) -> Option<&hide_core::access::Mode> {
+        self.access_mode.as_ref()
     }
 
     /// The shell a pane-bound credential was proved against; none for any
@@ -407,7 +407,7 @@ impl Registry {
                 claimed: false,
                 path: path.clone(),
                 remote: None,
-                access_level: None,
+                access_mode: None,
             },
         );
         Ok((path, true, token))
@@ -460,7 +460,7 @@ impl Registry {
                     link: grant.link,
                     source_pane_id: grant.source_pane_id,
                 }),
-                access_level: None,
+                access_mode: None,
             },
         );
         Ok((token, true))
@@ -618,16 +618,20 @@ impl Registry {
         if matches!(cap.binding, Binding::Desk { .. }) {
             return Ok(cap);
         }
-        // An external tool's connection is asked again for each command, so
-        // a disconnect or a level the operator changed holds from the next
-        // one (PRD hide-external-control B12, B13).
+        // A bot's connection is asked again for each command, so a
+        // disconnect or a mode the operator changed holds from the next one
+        // (PRD hide-external-control B12, B13).
         if let Binding::Access { connection } = &cap.binding {
             return match core.access(hide_core::access::Call::Check {
                 id: connection.clone(),
             }) {
                 Ok(answer) => {
-                    cap.access_level = serde_json::from_value(answer["level"].clone()).ok();
-                    cap.access_level.map(|_| cap).ok_or("access_unavailable")
+                    cap.access_mode = serde_json::from_value(answer["mode"].clone()).ok();
+                    if cap.access_mode.is_some() {
+                        Ok(cap)
+                    } else {
+                        Err("access_unavailable")
+                    }
                 }
                 Err(reason) => {
                     self.revoke(token);
@@ -2063,7 +2067,7 @@ mod tests {
                 claimed: false,
                 path: PathBuf::new(),
                 remote: None,
-                access_level: None,
+                access_mode: None,
             }
             .pane_terminal()
             .map(str::to_owned)

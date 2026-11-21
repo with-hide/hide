@@ -1,6 +1,6 @@
 //! The daemon's side of external tools (PRD hide-external-control): the
 //! bootstrap socket's answer to a tool's ask, what each refusal tells the
-//! tool to do, and which commands each level runs.
+//! tool to do, and which commands each mode runs.
 //!
 //! A tool proves itself with the key it keeps in its own home; this daemon
 //! hashes the key, hands the core only the hash, and forgets it. Nothing
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use hide_agent_hooks::hook_request::install::{AccessAsk, PaneRequest};
 use hide_core::access::{
-    Call, NEEDS_AGENT, SPAWN_PARENT, VIEW_ONLY, key_hash, valid_key, valid_name,
+    Call, NEEDS_AGENT, OUTSIDE_WORKSPACE, SPAWN_PARENT, key_hash, valid_key, valid_name,
 };
 use hide_core::engine::EngineHandle;
 use serde_json::{Value, json};
@@ -35,7 +35,8 @@ pub const REFUSALS: &[&str] = &[
     "access_ambiguous",
     "access_not_connected",
     "access_key_unreadable",
-    VIEW_ONLY,
+    "access_reapprove",
+    OUTSIDE_WORKSPACE,
     NEEDS_AGENT,
     SPAWN_PARENT,
     "access_core_only",
@@ -50,7 +51,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes"
         }
         "access_pending" => {
-            "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool"
+            "Wait until the operator approves the request in Settings > Bot; the next hide command then runs as the tool"
         }
         "access_refused" => {
             "The operator refused this tool; run hide access request --name <name> to ask again"
@@ -59,10 +60,10 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "The request was dropped; run hide access request --name <name> to ask again"
         }
         "access_limit" => {
-            "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again"
+            "16 tools are connected; ask the operator to disconnect one in Settings > Bot, then run hide access request again"
         }
         "access_name_taken" => {
-            "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again"
+            "A connected tool has this name; ask the operator to disconnect it in Settings > Bot, or choose another --name, then run hide access request again"
         }
         "access_revoked" => REVOKED_NEXT_ACTION,
         "access_ambiguous" => {
@@ -72,8 +73,11 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
         "access_key_unreadable" => {
             "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again"
         }
-        "access_view_only" => {
-            "This tool is View only; ask the operator to switch it to Act in Settings > External tools"
+        "access_reapprove" => {
+            "External tools became bots, and a View only tool is approved again before it runs anything; run hide access request --name <name> to ask the operator"
+        }
+        "access_outside_workspace" => {
+            "This bot is limited to its one workspace; run the command on that workspace's agents, panes, Views and missions, or ask the operator to give it the whole Hide in Settings"
         }
         "access_needs_agent" => {
             "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send"
@@ -94,6 +98,7 @@ pub fn static_reason(reason: &str) -> &'static str {
         "access_pending" => "access_pending",
         "access_refused" => "access_refused",
         "access_request_expired" => "access_request_expired",
+        "access_reapprove" => "access_reapprove",
         _ => "access_unavailable",
     }
 }

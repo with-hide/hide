@@ -1,12 +1,13 @@
 //! The `access` snapshot section (PRD hide-external-control B2, B11, B17):
-//! the requests waiting for the operator and the approved tools, each with
-//! its level, its last use and the agents and missions it started. The core
-//! decides every value; Settings › External tools words them and sends the
-//! operator's approve, refuse, level and disconnect back as events.
+//! the requests waiting for the operator and the approved bots, each with
+//! its mode, its last use and the agents and missions it started. The core
+//! decides every value; Settings words them and sends the operator's
+//! approve, refuse, mode change and disconnect back as events
+//! (`contracts/hided-ws.schema.json`, `accessSnapshot`).
 
 use serde::Serialize;
 
-use crate::access::Level;
+use crate::access::Mode;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AccessSnapshot {
@@ -34,7 +35,9 @@ pub struct AccessPendingSnapshot {
 pub struct AccessConnectionSnapshot {
     pub id: String,
     pub name: String,
-    pub level: Level,
+    /// The whole Hide, or the one workspace it is held in, by the id
+    /// `navigator.workspaces` names it with.
+    pub mode: Mode,
     pub program: Option<String>,
     pub created_ms: u64,
     /// Moved at most once a minute (B34).
