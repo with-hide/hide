@@ -52,22 +52,23 @@
         {
           "drawing": "skills",
           "chapter": null,
+          "settings": "skills",
           "text": {
             "en": {
               "title": "Your skills and MCP servers, the same on every agent",
-              "line": "Add one once in Settings › Skills & MCP and Claude, Codex and every other agent can use it; turn it off or update it in the same place."
+              "line": "Add a skill or an MCP server once and Claude, Codex and every other agent use it. Manage them in Settings › Skills & MCP, or ask an agent to add one."
             },
             "ko": {
               "title": "스킬과 MCP를 모든 에이전트에서 똑같이",
-              "line": "설정 › 스킬·MCP에서 한 번만 넣으면 Claude, Codex 등 모든 에이전트가 같이 써요. 끄고 켜기와 업데이트도 한 곳에서 해요."
+              "line": "스킬이나 MCP를 한 번 넣으면 모든 에이전트가 같이 써요. 설정 › 스킬·MCP에서 관리하거나, 에이전트에게 넣어 달라고 해도 돼요."
             },
             "zh-CN": {
               "title": "技能和 MCP，在每个智能体上都一样",
-              "line": "在 设置 › 技能与 MCP 中添加一次，Claude、Codex 等所有智能体都能使用；关闭或更新也在同一个地方。"
+              "line": "技能或 MCP 只需添加一次，Claude、Codex 等所有智能体都能使用。可以在 设置 › 技能与 MCP 中管理，也可以让智能体帮你添加。"
             },
             "ja": {
               "title": "スキルと MCP をすべてのエージェントで同じように",
-              "line": "設定 › スキル・MCP で一度入れれば、Claude や Codex などすべてのエージェントが使えます。オンオフや更新も一か所でできます。"
+              "line": "スキルや MCP を一度入れれば、Claude や Codex などすべてのエージェントが使えます。設定 › スキル・MCP で管理するか、エージェントに入れてと頼むこともできます。"
             }
           }
         }

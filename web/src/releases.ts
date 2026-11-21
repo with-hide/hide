@@ -25,7 +25,8 @@ export const RELEASE_DRAWINGS = ["automation", "pair", "skills", "mission", "zon
 export type ReleaseDrawing = (typeof RELEASE_DRAWINGS)[number];
 
 export type Words<T> = { en: T } & Partial<Record<Exclude<InterfaceLanguage, "en">, T>>;
-export type Highlight = { drawing: string; chapter: string | null; text: Words<{ title: string; line: string }> };
+/** `settings`: the Settings page that holds a feature no chapter teaches, which its 설정에서 보기 opens (a tab id, `skills`). */
+export type Highlight = { drawing: string; chapter: string | null; settings: string | null; text: Words<{ title: string; line: string }> };
 export type Change = { kind: "change" | "fix"; text: Words<string> };
 export type ReleaseEntry = { version: string; date: string; highlights: Highlight[]; changes: Change[] };
 export type ReleaseFeed = { versions: ReleaseEntry[] };
@@ -74,8 +75,10 @@ function highlight(raw: unknown): Highlight | null {
   if (!isObject(raw) || !isText(raw.drawing, 32)) return null;
   const chapter = raw.chapter === undefined || raw.chapter === null ? null : isText(raw.chapter, 32) ? raw.chapter : undefined;
   if (chapter === undefined) return null;
+  const settings = raw.settings === undefined || raw.settings === null ? null : isText(raw.settings, 32) ? raw.settings : undefined;
+  if (settings === undefined) return null;
   const text = words(raw.text, (value) => (isObject(value) && isText(value.title, 80) && isText(value.line, 200) ? { title: value.title, line: value.line } : null));
-  return text ? { drawing: raw.drawing, chapter, text } : null;
+  return text ? { drawing: raw.drawing, chapter, settings, text } : null;
 }
 
 function change(raw: unknown): Change | null {
