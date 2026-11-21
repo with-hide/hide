@@ -462,10 +462,9 @@ impl Runtime {
     /// Whether `tab`'s desk of `key` is on screen while focus mode draws a
     /// pane of that tab: only beside it (`pair_desk`). `None` while the mode
     /// draws no pane there, where the lane's own state decides. The one rule
-    /// the desk's drawing (`drawn_tray_layout`), a View landing in view
-    /// (`tray_in_view`) and the lane a View calls (`open_tray_for`) read, so
-    /// an open lane under a pane drawn alone is never taken for a desk on
-    /// screen.
+    /// the desk's drawing (`drawn_tray_layout`) and a View landing in view
+    /// (`tray_in_view`) read, so an open lane under a pane drawn alone is
+    /// never taken for a desk on screen.
     pub(super) fn pair_desk_drawn(&self, key: &WorkspaceKey, tab: &str) -> Option<bool> {
         self.pair_left_of(key, tab)
             .map(|_| self.pair_desk(key, tab).is_some())
