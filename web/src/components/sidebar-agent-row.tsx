@@ -27,6 +27,9 @@ import { DeviceChip } from "./device-chip";
 import { ToolLed } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
+import { PairMark } from "./pair-mark";
+import { markedPairs } from "../pairView";
+import { workspaceViewOf } from "../workspace";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 import { beginAgentDrag } from "../agentReference";
@@ -73,7 +76,7 @@ export type SidebarTreeSlot = {
   /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
   fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
-  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
+  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> } | null;
 };
 
 /**
@@ -147,12 +150,14 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
   /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
-  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
   // Each row reads only the facts it draws, so a snapshot that moves nothing here renders nothing.
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
+  // The agent drawn in its tab's pair view wears the pair view mark (PRD lane-desk-pair-view B22).
+  const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.pane_id === agent.pane_id));
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const pulls = listed ?? rowPulls(agent, "own");
@@ -250,7 +255,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[paired ? t("panes.pair.mark") : null, offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
@@ -273,6 +278,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         </>}
         head={<>
           {/* The row button's name already reads all of this out. */}
+          {paired ? <PairMark className="pointer-events-none" data-pair-row={agent.pane_id} /> : null}
           <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
           <AgentForkMark agent={agent} />
           {starred(agent) ? <RevisitStar /> : null}

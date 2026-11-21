@@ -260,11 +260,10 @@ impl Runtime {
         if !self.ui_attached {
             return None;
         }
-        let detail = &self.snapshot.ui_state.detail;
         let Some(crate::model::DetailItem::Remains {
             workspace_id,
             checkout_id,
-        }) = detail.shown.then(|| detail.top()).flatten()
+        }) = self.shown_card()
         else {
             return None;
         };

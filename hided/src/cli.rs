@@ -32,6 +32,8 @@ pub enum CommandKind {
     Automation(crate::automation_cli::AutomationCli),
     /// `hide agent profile …` (PRD agent-profiles D-33).
     AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill …` / `hide mcp …` (PRD skill-mcp-manager D-19).
+    Store(hide_core::store_command::StoreCommand),
     /// `hide agent catalog [--machine <id>]`.
     AgentCatalog {
         machine: Option<String>,
@@ -168,7 +170,7 @@ const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
-const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area";
+const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area of your tab's Views";
 
 const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
 
@@ -208,6 +210,8 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
+        "skill" => usage(crate::store_cli::SKILL_USAGE),
+        "mcp" => usage(crate::store_cli::MCP_USAGE),
         "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
@@ -251,6 +255,8 @@ fn help_text() -> String {
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
+        crate::store_cli::SKILL_USAGE,
+        crate::store_cli::MCP_USAGE,
         crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
@@ -443,6 +449,22 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::profile_cli::parse(&args[3..])
                 .map(CommandKind::AgentProfile)
                 .map_err(|reason| wrong(reason, crate::profile_cli::USAGE))
+        }
+        Some(topic @ ("skill" | "mcp")) => {
+            let (kind, usage_text) = if topic == "skill" {
+                (hide_kit::store::ItemKind::Skill, crate::store_cli::SKILL_USAGE)
+            } else {
+                (hide_kit::store::ItemKind::Mcp, crate::store_cli::MCP_USAGE)
+            };
+            if matches!(args.get(2).map(String::as_str), None | Some("help" | "--help")) {
+                println!("{usage_text}");
+                std::process::exit(0);
+            }
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(usage_text)))?;
+            crate::store_cli::parse(kind, &args[2..])
+                .map(CommandKind::Store)
+                .map_err(|reason| wrong(reason, usage_text))
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
@@ -968,6 +990,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Automation(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::AgentProfile(_)
+                    | CommandKind::Store(_)
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
@@ -1009,6 +1032,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Automation(cli) => crate::automation_cli::run(&env, cli),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
+        CommandKind::Store(command) => crate::store_cli::run(&env, command),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),

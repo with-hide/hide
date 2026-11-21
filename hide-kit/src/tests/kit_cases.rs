@@ -401,6 +401,7 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
         !fixture.home().join(".claude/skills").exists(),
         "a guest writes no skill"
     );
+    assert!(report.store.is_none(), "a guest reads no store");
     assert!(entries_of(&fixture.settings(), &guest_helper) > 0);
 
     // The account's own Hide beside it: each keeps its own entries.
@@ -439,6 +440,11 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
             .any(|(id, outcome)| *id == ComponentId::ClaudeCodeHook
                 && *outcome == RemoveOutcome::Removed),
         "{removed:?}"
+    );
+    assert!(
+        removed.agents.iter().any(|(name, outcome)| name == "store"
+            && matches!(outcome, RemoveOutcome::Kept { .. })),
+        "the account's store stays with its own Hide: {removed:?}"
     );
     let after = fixture.settings();
     assert_eq!(entries_of(&after, &guest_helper), 0);

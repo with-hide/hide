@@ -42,6 +42,8 @@ sessions = "{XDG_DATA_HOME}/opencode/opencode.db"
 login = false
 state = "{XDG_CONFIG_HOME}/opencode"
 usage = false
+mcp = "{XDG_CONFIG_HOME}/opencode/opencode.json"
+mcp_format = "opencode"
 
 [account.forbid]
 vars = ["OPENCODE_CONFIG_DIR", "OPENCODE_DB"]

@@ -106,7 +106,8 @@ export function PhoneHumanTurn({ agent, inset }: { agent: PhoneAgent; inset: str
         {agent.device_label ? <DeviceChip label={agent.device_label} variant="inline" className="shrink-0" /> : null}
       </span>
       <span className="flex min-w-0 items-center gap-sm">
-        <Button
+        {/* An install an agent asked for is confirmed on the computer, where its files show (PRD skill-mcp-manager B32). */}
+        {turn.kind === "install" ? <span className="min-w-0 break-words text-subhead text-muted-foreground" data-phone-human-install={turn.id}>{t("mobile.humanTurn.installOnComputer")}</span> : <Button
           variant="secondary"
           className="min-h-(--size-touch-target) shrink-0 text-body"
           disabled={away || !!pending?.requestId}
@@ -115,8 +116,8 @@ export function PhoneHumanTurn({ agent, inset }: { agent: PhoneAgent; inset: str
           onClick={() => finishHumanTurn(agent)}
         >
           {t("agents.human.done")}
-        </Button>
-        {away ? <span className="min-w-0 truncate text-subhead text-muted-foreground">{t("devices.rail.notConnected")}</span> : pending?.failed ? <span role="status" className="min-w-0 break-words text-subhead text-warning">{t("mobile.humanTurn.failed")}</span> : null}
+        </Button>}
+        {turn.kind === "install" ? null : away ? <span className="min-w-0 truncate text-subhead text-muted-foreground">{t("devices.rail.notConnected")}</span> : pending?.failed ? <span role="status" className="min-w-0 break-words text-subhead text-warning">{t("mobile.humanTurn.failed")}</span> : null}
       </span>
     </div>
   );

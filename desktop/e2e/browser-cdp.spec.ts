@@ -11,7 +11,7 @@ import { WebSocket } from "ws";
 import type { BrowserSync } from "../../web/src/host";
 import { sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
-import { chooseExpand, enterWorkspace, showDocuments } from "../../web/e2e/wire";
+import { chooseExpand, enterWorkspaceWithLane, showDocuments } from "../../web/e2e/wire";
 import { BROWSER_SYNC_CHANNEL } from "../src/channel";
 import { fitWindow, HIDE_CLI, hostLog, launchShell, REPO, startStack, test, type Isolated, type Stack } from "./fixture";
 
@@ -271,7 +271,7 @@ test("browser CDP: standard Playwright controls the scoped native page and disco
   const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1024, height: 640 });
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/fixture`, "--wait"]);
   const displayId = (opened.result as { view_id: string }).view_id;
   expect(typeof displayId).toBe("string");
@@ -443,7 +443,7 @@ test("browser CDP: standard Playwright controls the scoped native page and disco
 test("browser CDP: creation stays in its originating area while another area is active and foreign renderer IDs are refused", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const first = await fromPane(["browser", "open", `${origin}/first`, "--wait"]);
   await expandViews(launched.page);
   const firstId = (first.result as { view_id: string }).view_id;
@@ -489,7 +489,7 @@ test("browser CDP: creation stays in its originating area while another area is 
 test("browser CDP: selected-display and direct-page close replies arrive before capability shutdown", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   for (const mode of ["browser", "page"] as const) {
     const opened = await fromPane(["browser", "open", `${origin}/close-${mode}`, "--wait"]);
     const displayId = (opened.result as { view_id: string }).view_id;
@@ -515,7 +515,7 @@ test("browser CDP: selected-display and direct-page close replies arrive before 
 test("browser CDP: injected incarnation-only sync revokes old URLs without replacing the native page", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const url = `${origin}/incarnation`;
   const opened = await fromPane(["browser", "open", url, "--wait"]);
   const displayId = (opened.result as { view_id: string }).view_id;
@@ -587,7 +587,7 @@ test("browser CDP: injected incarnation-only sync revokes old URLs without repla
 test("browser CDP: the native guard cancels a pending preattach file load and remains restricted after disconnect", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/pending-preload`]);
   const displayId = (opened.result as { view_id: string }).view_id;
   const refusals = (id: string) => hostLog(run.env).filter((line) => line.event === "browser.request_refused" && line.reason === "cdp_file_boundary" && line.display_id === id);
@@ -648,7 +648,7 @@ test("browser CDP: the native guard cancels a pending preattach file load and re
 test("browser CDP: native files cannot be read through runtime, frames, redirects or creation", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/protected`, "--wait"]);
   const displayId = (opened.result as { view_id: string }).view_id;
   const connected = await fromPane(["browser", "connect"]);
@@ -770,7 +770,7 @@ test("browser CDP: native files cannot be read through runtime, frames, redirect
 test("browser CDP: the owned native iframe request is causally canceled before file content", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const url = `${origin}/frame-guard`;
   const opened = await fromPane(["browser", "open", url, "--wait"]);
   const displayId = (opened.result as { view_id: string }).view_id;
@@ -828,7 +828,7 @@ test("browser CDP: the owned native iframe request is causally canceled before f
 test("browser CDP: controlled downloads are always canceled and log once after disconnect", async () => {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const opened = await fromPane(["browser", "open", `${origin}/download-guard`, "--wait"]);
   const displayId = (opened.result as { view_id: string }).view_id;
   const capability = (await fromPane(["browser", "connect", "--display", displayId])).result as Capability;

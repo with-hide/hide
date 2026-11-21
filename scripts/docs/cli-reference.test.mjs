@@ -90,6 +90,7 @@ test("a binary whose help lists a note's command no more fails as a gone note, a
     "For agents and tools",
     "Letters and watches",
     "Agents",
+    "Skills and MCP servers",
     "Missions",
     "Tasks",
     "Automations",

@@ -697,6 +697,35 @@ pub fn request_agent_profile(
     })
 }
 
+/// `hide skill` / `hide mcp`: a read answers at once; a change waits for
+/// its pass, and an install or an update for the operator's confirm too,
+/// which can take a while: `timeout` is the core's own wait and a little
+/// more.
+pub fn request_store(
+    credential: &mut Credential,
+    command: &hide_core::store_command::StoreCommand,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let action = !matches!(
+        command,
+        hide_core::store_command::StoreCommand::List { .. }
+            | hide_core::store_command::StoreCommand::Show { .. }
+    );
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"store","request_id":request_id,"command":command}),
+            &request_id,
+            action,
+            timeout,
+            after,
+        )
+    })
+}
+
 /// `hide device`: the core's own device registrations. A `list` is a read;
 /// an `add` or `remove` run again after a lost answer is refused as a
 /// duplicate or an unknown device, never applied twice.

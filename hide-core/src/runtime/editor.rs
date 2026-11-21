@@ -2757,6 +2757,7 @@ impl Runtime {
             && let Some(workspace) = self.workspace_key(workspace_id, checkout_id)
             && !self.admit_view_open(
                 &workspace,
+                &self.front_place(&workspace),
                 path,
                 crate::view_layout::DisplayKind::File,
                 None,
@@ -2872,6 +2873,9 @@ impl Runtime {
             return false;
         }
         self.reopen_in_flight = None;
+        // Its agents read closed again, unless the reopen below continues
+        // them.
+        self.unsettle_reopen(&request.item);
         // A member of a tree entry comes back behind its target.
         let behind = self.tree_member_behind(key);
         let mut back = false;

@@ -74,6 +74,31 @@ pub enum Hooks {
     None,
 }
 
+/// The shape of an agent's MCP file (`[account.paths] mcp_format`): which
+/// of Hide's MCP converters (`hide_agent_hooks::mcp`) reads and writes it,
+/// and with it which transports the agent takes. A dialect, never data: a
+/// new value comes only with the converter for it, and an agent whose file
+/// has another agent's shape names that agent's (omp's is Claude Code's).
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum McpFormat {
+    /// `mcpServers` in JSON, each server's `type` naming its transport.
+    Claude,
+    /// `[mcp_servers]` in TOML, Streamable HTTP its only remote transport.
+    Codex,
+    /// `[mcp_servers]` in TOML, a remote server's `type` naming its transport.
+    Grok,
+    /// `mcp` in JSON, a local server's command as one list.
+    Opencode,
+    /// `mcpServers` in JSON with no `type`, Streamable HTTP its only remote
+    /// transport.
+    Pi,
+    /// `mcpServers` in JSON, a remote server at `serverUrl`.
+    Agy,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Start {
@@ -422,10 +447,14 @@ pub enum AccountPath {
     State,
     /// What a usage read opens beside the sessions.
     Usage,
+    /// The file the agent reads its MCP servers from, in the shape its
+    /// [`McpFormat`] names, which Hide writes its own servers into
+    /// (`hide_agent_hooks::mcp`).
+    Mcp,
 }
 
 impl AccountPath {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Hooks,
         Self::HookTrust,
         Self::Plugins,
@@ -435,6 +464,7 @@ impl AccountPath {
         Self::Login,
         Self::State,
         Self::Usage,
+        Self::Mcp,
     ];
 
     /// The key a definition writes under `[account.paths]`.
@@ -449,6 +479,7 @@ impl AccountPath {
             Self::Login => "login",
             Self::State => "state",
             Self::Usage => "usage",
+            Self::Mcp => "mcp",
         }
     }
 }
@@ -521,6 +552,9 @@ pub struct AccountRule {
     pub vars: Vec<AccountVar>,
     /// Every feature of [`AccountPath::ALL`], in that order.
     pub paths: Vec<(AccountPath, PathRule)>,
+    /// The shape of the file at [`AccountPath::Mcp`]; `Some` exactly when
+    /// the agent has that file.
+    pub mcp_format: Option<McpFormat>,
     /// Variables a profile's own environment may not set.
     pub forbid: Vec<String>,
     pub login: Option<LoginRule>,
@@ -599,6 +633,9 @@ struct PathsFile {
     login: PathFile,
     state: PathFile,
     usage: PathFile,
+    mcp: PathFile,
+    #[serde(default)]
+    mcp_format: Option<McpFormat>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,6 +751,8 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         login,
         state,
         usage,
+        mcp,
+        mcp_format,
     } = file.paths;
     let written = [
         hooks,
@@ -725,6 +764,7 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         login,
         state,
         usage,
+        mcp,
     ];
     let mut paths = Vec::with_capacity(written.len());
     for (feature, written) in AccountPath::ALL.into_iter().zip(written) {
@@ -760,6 +800,27 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         };
         paths.push((feature, rule));
     }
+    // The format says how the file is read and written, so a file comes
+    // with one and no file has one.
+    let has_mcp = !matches!(
+        paths
+            .iter()
+            .find(|(feature, _)| *feature == AccountPath::Mcp),
+        Some((_, PathRule::Absent))
+    );
+    match (has_mcp, mcp_format) {
+        (true, None) => {
+            return Err(fail(
+                ".paths.mcp_format names the shape of .paths.mcp".into(),
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(fail(
+                ".paths.mcp_format is for an agent whose .paths.mcp is a file".into(),
+            ));
+        }
+        _ => {}
+    }
     let login = file.login.map(|login| {
         let at = match login.at.as_str() {
             "login" => AccountPath::Login,
@@ -785,6 +846,7 @@ fn account_rule(name: &str, file: AccountFile) -> Result<AccountRule, String> {
         reason: file.reason,
         vars,
         paths,
+        mcp_format,
         forbid,
         login,
     })

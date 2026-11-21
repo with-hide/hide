@@ -116,26 +116,35 @@ export async function showSidebarPrs(page: Page): Promise<void> {
   await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
 }
 
-/** Brings the checkout's documents in front of the viewing column from the rail (B2, B11); a pressed button is left alone, since a press would fold them. */
+/**
+ * Enters the Workspace with the lane up on the Explorer, so an open from the
+ * operator's pane comes in front of its tab's desk and a page loads there; with
+ * the lane closed the open waits on the desk, counted on the rail (PRD
+ * lane-desk-pair-view B2).
+ */
+export async function enterWorkspaceWithLane(page: Page, project?: string): Promise<void> {
+  await enterWorkspace(page, project);
+  await showExplorer(page);
+}
+
+/**
+ * Brings the front Agent tab's desk up from the rail, as the operator does
+ * after an agent's open waited on it with the lane closed (PRD
+ * lane-desk-pair-view B2, D-29); a pressed button is left alone, since a
+ * press would fold the desk.
+ */
 export async function showDocuments(page: Page): Promise<void> {
   const button = page.locator('[data-lane-tool="documents"]');
+  await expect(button).toBeEnabled({ timeout: 20_000 }); // wait-ok: an open typed into a pane lands on the desk once the command has run there
   if ((await button.getAttribute("aria-pressed")) !== "true") await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
 }
 
-/** The pin's state as the rail's pin button shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
-export async function pinState(page: Page): Promise<string | null> {
-  return page.locator("[data-lane-pin]").getAttribute("data-lane-pin");
-}
-
-/** Pins or unpins the lane with the pin beside `✕` of its edge column, so the lane must be up (B15; PRD session-docs-and-assistant B33). */
-export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
-  const button = page.locator("[data-lane-pin]");
-  const on = (await button.getAttribute("data-lane-pin")) !== "off";
-  if (on !== pinned) await button.click();
-  // A pinned lane docks, or stays over the agents where docking has no room (B19).
-  await expect(button).toHaveAttribute("data-lane-pin", pinned ? /^(on|narrow)$/ : /^off$/);
+/** Closes the card tab in front with its tab's ✕, which brings the desk's tab looked at before it forward (PRD lane-desk-pair-view D-13). */
+export async function closeFrontCard(page: Page): Promise<void> {
+  const tab = page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]').first();
+  await tab.locator("button").click();
 }
 
 /** Turns the sidebar to its 태스크 list (PRD sidebar-task-lens B1) and waits for the core's task scope. */

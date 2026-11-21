@@ -16,7 +16,7 @@ import type { KeyboardOwner } from "./viewFocus";
 import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
-import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
+import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
 import type { AutomationExample } from "./automationDraft";
 
@@ -353,10 +353,12 @@ type UiStore = {
   /** Where the automation screen stands (PRD automations D-02). */
   automations: AutomationPlace;
   setAutomations: (patch: Partial<AutomationPlace>) => void;
-  /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
+  /** The column in front while a narrow lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
+  /** The page each Workspace drew last in front of its desk (`laneCalls.ts`). Never sent. */
+  drawnPages: DrawnPages;
   /**
    * The Workspace (`workspaceKey`) whose lane call put a page in front, until
    * the Workspace screen, which measures the body, widens its lane for it
@@ -388,6 +390,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
+  storeAskRequested: string | null;
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
@@ -467,6 +471,8 @@ type UiStore = {
   /** The overlay ⌘K replaced when it opened, so Settings in front reads as a screen with nothing to relate to (PRD cmdk-navigation B7). */
   searchOver: Overlay;
   closeOverlay: (overlay?: Overlay) => void;
+  openStoreAsk: (id: string) => void;
+  clearStoreAsk: () => void;
   openSettings: (tab: SettingsTab) => void;
   openProjectSettings: (target: ProjectSettingsTarget, returnFocus?: HTMLElement | null, focus?: "name") => void;
   /** Opens Settings on Devices with the Add device dialog in front. */
@@ -552,6 +558,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   automations: AUTOMATION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
+  drawnPages: NO_DRAWN_PAGES,
   pageWiden: null,
   browserDevices: {},
   drawnLane: { mode: "closed", view: "none", tool: null, stacked: false },
@@ -565,6 +572,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  storeAskRequested: null,
   switchedDevices: [],
   moveGiveUpRequested: false,
   pendingClose: null,
@@ -654,6 +662,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  openStoreAsk: (id) => set({ overlay: "settings", settingsTab: "skills", storeAskRequested: id }),
+  clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),

@@ -169,7 +169,7 @@ it("shows its popover on focus or pointing without taking the keyboard, and a pr
     expect(view.popover()).not.toBeNull();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(view.popover()).toBeNull();
-    // A press (Enter and Space on the focused button are presses too) opens the mission's card in the 보기 slot beside the pane, and closes the popover.
+    // A press (Enter and Space on the focused button are presses too) opens the mission's card as a card tab on a desk beside the pane, and closes the popover.
     await point("pointerover", null);
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
@@ -212,14 +212,14 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
     const rows = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-node]")].map((row) => [row.dataset.missionMiniNode, row.textContent]);
     expect(rows).toEqual([["api", `api title${PR_TEXT}PR`], ["probe", "probe titleResearch"]]);
     expect(popover.querySelector("[data-mission-mini-tally]")?.textContent).toBe("1 done · 2 next");
-    // The map is drawn only in the 보기 slot, and the record opens from the pane menu and the sidebar.
+    // The map is drawn only as a card tab on a desk, and the record opens from the pane menu and the sidebar.
     expect(popover.querySelector("[data-dependency-node]")).toBeNull();
     expect(popover.textContent).not.toContain("record");
     // The one thing to press is the last row, `Open the map`, and it opens the map as the chip does.
     expect([...popover.querySelectorAll("button:not([data-mission-mini-conversation])")].map((button) => button.getAttribute("data-mission-mini-open"))).toEqual(["true"]);
     expect(popover.querySelector("[data-mission-popover]")?.lastElementChild?.getAttribute("data-mission-mini-open")).toBe("true");
     expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Open the map");
-    // Pressing it opens the mission's card in the 보기 slot and closes the popover, as the chip's own press does.
+    // Pressing it opens the mission's card as a card tab on a desk and closes the popover, as the chip's own press does.
     await view.press("[data-mission-mini-open]");
     expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, at: "owner" }]);
     expect(view.popover()).toBeNull();

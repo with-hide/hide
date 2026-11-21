@@ -428,6 +428,7 @@ fn spawner() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },

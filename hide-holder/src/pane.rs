@@ -102,6 +102,7 @@ pub struct Observed {
     pub prompts: u64,
     pub bracketed_paste: bool,
     pub alternate_screen: bool,
+    pub program_status: Option<hide_holder_protocol::ProgramStatus>,
     /// The screen's last rows as the screen rules read them: as many as it
     /// has rows, as an agent's screen is read; empty when not asked.
     pub screen: String,
@@ -260,6 +261,7 @@ impl Pane {
             prompts: self.osc.prompts(),
             bracketed_paste: self.terminal.mode_get(hide_vt::MODE_BRACKETED_PASTE)?,
             alternate_screen: self.terminal.active_screen()? != ActiveScreen::Primary,
+            program_status: self.osc.program_status().cloned(),
             screen,
             rules_title: self.osc.rules_title().to_owned(),
             progress: self.osc.progress().to_owned(),

@@ -1,85 +1,68 @@
-//! The two approved human causes share the durable store reservation and
-//! existing external channels. No retry can follow a consumed reservation.
-use super::ledger::{Ledger, State};
+//! The approved human cause, an inactivity warning its observer did not
+//! confirm, takes the durable store reservation and the existing external
+//! channels. No retry can follow a consumed reservation. A letter that ends
+//! with no recipient tells only its sender (PRD letters-missions-simplify
+//! B7), never the operator.
+use super::ledger::Ledger;
+use super::watch::Watch;
 use super::worker::{HumanNotice, HumanNoticeKind};
 
 const NOTICE_LIMIT: usize = 8;
 
 pub(super) fn claim(ledger: &mut Ledger, now: u64) -> Vec<HumanNotice> {
     let mut notices = Vec::new();
-    for index in 0..ledger.letters.len() {
+    // A pane observer that has not looked at its first warning of a quiet
+    // episode an hour on: the operator is told once per episode. One the
+    // observer saw is its own call, and code-owned observers handle their
+    // own escalation.
+    for index in 0..ledger.watches.len() {
         if notices.len() == NOTICE_LIMIT {
             break;
         }
-        let letter = &ledger.letters[index];
-        let Some(warning) = &letter.watch_warning else {
+        let watch = &ledger.watches[index];
+        let Some(first) = watch.first_warning_at_unix_ms else {
             continue;
         };
-        // Code-owned observers handle their own escalation.
-        if !letter.escalation_owed()
-            || now.saturating_sub(letter.created_at_unix_ms) < super::SECOND_WARNING_MS
-            || ledger.letters.iter().any(|answer| {
-                answer.reply_to.as_deref() == Some(&letter.id)
-                    && answer.sender.same_identity(&letter.recipient)
+        if watch.parent.code_owned()
+            || watch.operator_notified
+            || now.saturating_sub(first) < super::SECOND_WARNING_MS
+            || observer_saw(ledger, watch, first)
+            // Another observer of the same target and episode told it.
+            || ledger.watches.iter().any(|other| {
+                other.operator_notified
+                    && other.target.same_identity(&watch.target)
+                    && other.last_activity_at_unix_ms == watch.last_activity_at_unix_ms
             })
-            || !ledger.watches.iter().any(|watch| {
-                watch.target.same_identity(&warning.target)
-                    && watch.parent.same_identity(&letter.recipient)
-                    && watch.last_activity_at_unix_ms == warning.activity_at_unix_ms
-            })
-            || ledger
-                .letters
-                .iter()
-                .filter_map(|letter| letter.watch_warning.as_ref())
-                .any(|receipt| {
-                    receipt.parent_notified
-                        && receipt.target.same_identity(&warning.target)
-                        && receipt.activity_at_unix_ms == warning.activity_at_unix_ms
-                })
         {
             continue;
         }
-        let target = warning.target.clone();
-        let activity = warning.activity_at_unix_ms;
         notices.push(HumanNotice {
-            id: letter.id.clone(),
-            actor: target.clone(),
+            id: watch.id.clone(),
+            actor: watch.target.clone(),
             kind: HumanNoticeKind::ObserverUnconfirmed,
-            recipient: letter.recipient.name.clone(),
-            about: target.name.clone(),
+            recipient: watch.parent.name.clone(),
+            about: watch.target.name.clone(),
         });
-        for receipt in ledger
-            .letters
-            .iter_mut()
-            .filter_map(|letter| letter.watch_warning.as_mut())
-        {
-            if receipt.target.same_identity(&target) && receipt.activity_at_unix_ms == activity {
-                receipt.parent_notified = true;
-            }
-        }
-    }
-    for letter in &mut ledger.letters {
-        if notices.len() == NOTICE_LIMIT {
-            break;
-        }
-        if letter.state == State::Undelivered && !letter.human_notified {
-            letter.human_notified = true;
-            notices.push(HumanNotice {
-                id: letter.id.clone(),
-                actor: letter.sender.clone(),
-                kind: HumanNoticeKind::LetterUndelivered,
-                recipient: letter.recipient.name.clone(),
-                about: String::new(),
-            });
-        }
+        ledger.watches[index].operator_notified = true;
     }
     notices
+}
+
+/// Whether `watch`'s observer looked at its status cell about the target
+/// since the first warning made at `first` (`runtime::status_cells`).
+pub(crate) fn observer_saw(ledger: &Ledger, watch: &Watch, first: u64) -> bool {
+    let observer = crate::runtime::status_recipient(Some(ledger), &watch.parent);
+    ledger
+        .status_seen
+        .get(&observer)
+        .and_then(|seen| seen.get(&crate::runtime::status_subject_child(&watch.target.pane_id)))
+        .is_some_and(|revision| *revision >= first)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::delivery::{Actor, Command, INACTIVITY_MS, SECOND_WARNING_MS, mailbox, watch};
+    use crate::delivery::{Actor, INACTIVITY_MS, SECOND_WARNING_MS, watch};
 
     fn actor(name: &str) -> Actor {
         Actor {
@@ -126,44 +109,25 @@ mod tests {
             (notices[0].recipient.as_str(), notices[0].about.as_str()),
             ("parent", "target")
         );
-        assert_eq!(ledger.letters.len(), 2);
-        assert!(
-            ledger.letters.iter().all(|letter| letter
-                .watch_warning
-                .as_ref()
-                .unwrap()
-                .parent_notified)
-        );
+        assert!(ledger.letters.is_empty(), "a warning is no letter");
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-        assert!(claim(&mut restored, due + SECOND_WARNING_MS).is_empty());
-        restored.watches.clear();
-        warn(&mut restored, &actor("parent"), &target, 10);
         assert!(claim(&mut restored, due + SECOND_WARNING_MS).is_empty());
     }
 
+    /// An observer that looked at its warning cell decides for itself; the
+    /// operator is told only of one that did not look within the hour.
     #[test]
-    fn acknowledged_cancelled_and_replied_warnings_do_not_notify_people() {
-        for action in ["ack", "cancel", "reply"] {
-            let mut ledger = Ledger::default();
-            let parent = actor("parent");
-            warn(&mut ledger, &parent, &actor("target"), 10);
-            let id = ledger.letters[0].id.clone();
-            let command = match action {
-                "ack" => Command::Ack { id },
-                "cancel" => Command::Cancel { id },
-                _ => Command::Reply {
-                    id,
-                    intent: "checked".into(),
-                    body: "I checked the target".into(),
-                    now: false,
-                },
-            };
-            mailbox::apply(&mut ledger, &parent, None, &command, 20).unwrap();
-            assert!(
-                claim(&mut ledger, 10 + INACTIVITY_MS + SECOND_WARNING_MS).is_empty(),
-                "{action}"
-            );
-        }
+    fn a_warning_its_observer_saw_notifies_no_one() {
+        let mut ledger = Ledger::default();
+        let parent = actor("parent");
+        warn(&mut ledger, &parent, &actor("target"), 10);
+        let first = ledger.watches[0].first_warning_at_unix_ms.unwrap();
+        let observer = crate::runtime::status_recipient(Some(&ledger), &parent);
+        ledger.status_seen.insert(
+            observer,
+            [(crate::runtime::status_subject_child("target"), first)].into(),
+        );
+        assert!(claim(&mut ledger, 10 + INACTIVITY_MS + SECOND_WARNING_MS).is_empty());
     }
 
     #[test]

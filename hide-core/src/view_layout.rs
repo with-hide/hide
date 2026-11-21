@@ -13,6 +13,12 @@
 //! and no tab, and names its page by the address it holds. The desktop host
 //! draws the page; this tree only says where it sits.
 //!
+//! A card display (PRD lane-desk-pair-view D-13) shows one of Hide's own
+//! cards, a pull request, a session's record or plan, a mission's map, a
+//! project's worktrees, cost or what a worktree left, or a Hide AI branch:
+//! no document and no page, only the card it names (`card`). A card is the
+//! operator's, opened by a press, and sits on a desk like any other View.
+//!
 //! An external display (PRD outside-path-in-hide) shows a file outside every
 //! checkout that the operator clicked in the desktop window. It holds no path:
 //! only the desktop host's grant id, the file's name and its viewer kind. The
@@ -63,13 +69,13 @@ pub enum DisplayKind {
     File,
     Diff,
     /// A page the desktop host draws; `path` is empty and `url` names it.
-    /// A pull request's card was a kind of View once; it opens in the
-    /// lane's 보기 slot now, and a stored card is dropped as the file loads
-    /// (PRD sidebar-task-lens D-50, `workspace_views::drop_retired_cards`).
     Browser,
     /// A file outside every checkout the desktop host granted its window;
     /// `path` is empty and `external` names it. Never stored.
     External,
+    /// One of Hide's cards; `path` is empty and `card` names it (PRD
+    /// lane-desk-pair-view D-13).
+    Card,
 }
 
 impl DisplayKind {
@@ -90,6 +96,7 @@ pub enum Shown<'a> {
     Diff(&'a str, Option<bool>),
     Page(&'a str),
     External(&'a str),
+    Card(&'a crate::model::DetailItem),
     Unnamed(&'a str),
 }
 
@@ -101,6 +108,7 @@ impl<'a> Shown<'a> {
         committed: Option<bool>,
         url: Option<&'a str>,
         external: Option<&'a ExternalFile>,
+        card: Option<&'a crate::model::DetailItem>,
     ) -> Self {
         match kind {
             DisplayKind::File => Self::File(path),
@@ -109,6 +117,7 @@ impl<'a> Shown<'a> {
             DisplayKind::External => {
                 external.map_or(Self::Unnamed(id), |file| Self::External(&file.grant))
             }
+            DisplayKind::Card => card.map_or(Self::Unnamed(id), Self::Card),
         }
     }
 }
@@ -275,6 +284,9 @@ pub struct Display {
     /// kind. A stored file never carries one (`workspace_views::save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<ExternalFile>,
+    /// A card display's card; absent for every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<crate::model::DetailItem>,
 }
 
 impl Display {
@@ -310,16 +322,6 @@ impl Display {
         self.unseen = None;
     }
 
-    /// Whether the Files strip of `scope` shows this View: the operator's
-    /// Views show in every session's, and a session's only in its own
-    /// (D-10). With no session, a plain shell has the keyboard and only the
-    /// operator's show (D-28). A View no session opened is the operator's.
-    pub fn shown_to(&self, scope: Option<&crate::view_feedback::SessionScope>) -> bool {
-        self.operator
-            || self.openers.is_empty()
-            || scope.is_some_and(|scope| self.openers.iter().any(|o| o.of_session(scope)))
-    }
-
     /// What this display shows, as every list that counts it once compares.
     pub fn shown(&self) -> Shown<'_> {
         Shown::of(
@@ -329,6 +331,7 @@ impl Display {
             self.committed,
             self.url.as_deref(),
             self.external.as_ref(),
+            self.card.as_ref(),
         )
     }
 
@@ -392,7 +395,10 @@ impl AreaItem for Display {
             // without its group would never find its tab again.
             let group = match display.kind {
                 DisplayKind::Diff => Some(display.committed.unwrap_or(false)),
-                DisplayKind::File | DisplayKind::Browser | DisplayKind::External => None,
+                DisplayKind::File
+                | DisplayKind::Browser
+                | DisplayKind::External
+                | DisplayKind::Card => None,
             };
             if display.committed != group {
                 display.committed = group;
@@ -430,6 +436,17 @@ impl AreaItem for Display {
                 if display.kind != DisplayKind::External {
                     display.external = None;
                 }
+                display.path.clear();
+                display.preview = false;
+                addresses += 1;
+            }
+            // Only a card display names a card, and it names nothing else;
+            // the load drops one with no card (`workspace_views::settle`).
+            if display.kind != DisplayKind::Card {
+                if display.card.take().is_some() {
+                    addresses += 1;
+                }
+            } else if display.card.is_none() || !display.path.is_empty() || display.preview {
                 display.path.clear();
                 display.preview = false;
                 addresses += 1;
@@ -531,6 +548,7 @@ impl Layout {
             opened_stamp: 0,
             unseen: None,
             external: None,
+            card: None,
         }
     }
 
@@ -551,6 +569,16 @@ impl Layout {
             external: Some(file),
             load,
             ..self.new_display("", DisplayKind::External, None, false)
+        }
+    }
+
+    /// A new card display for `card` with a fresh id, not yet in any area.
+    /// A card is opened by a press, never a preview, and is the operator's.
+    pub fn new_card_display(&mut self, card: crate::model::DetailItem) -> Display {
+        Display {
+            card: Some(card),
+            operator: true,
+            ..self.new_display("", DisplayKind::Card, None, false)
         }
     }
 

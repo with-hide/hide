@@ -553,6 +553,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
     guard.ingest_kit_report(
         crate::node::TEST_NODE,
         &hide_kit::KitReport {
+            store: None,
             components: vec![hide_kit::ComponentReport {
                 id: hide_kit::ComponentId::CodexHook,
                 state: hide_kit::ComponentState::NotInstalled,

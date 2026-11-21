@@ -1049,7 +1049,6 @@ mod tests {
                     {"id": "agent-1", "machine": ALIAS, "actor": actor(ALIAS, &pane(ALIAS)), "host_scope": ALIAS, "pane": "w1:p1"},
                 ],
                 "spawns": [{"id": "spawn-2", "parent": "agent-0", "machine": ALIAS, "pane": "w1:p1"}],
-                "node_clocks": {ALIAS: {"connected_ms": 60_000, "since": null}},
             }),
         );
         // A spawn made for a step of the plan of a session on the device.
@@ -1324,10 +1323,6 @@ mod tests {
         assert_eq!(ledger["agents"][1]["host_scope"], MACHINE);
         assert_eq!(ledger["agents"][0]["host_scope"], "/tmp/engine.sock");
         assert_eq!(ledger["spawns"][0]["machine"], MACHINE);
-        assert_eq!(
-            ledger["node_clocks"],
-            json!({MACHINE: {"connected_ms": 60_000, "since": null}})
-        );
         assert_eq!(
             read(state, LABELS)["devices"],
             json!({crate::labels::device_target(MACHINE): {"w1:p1": {"owner": "v1:b"}}})
@@ -1644,13 +1639,14 @@ mod tests {
         let state = dir.path();
         let mut views = crate::workspace_views::WorkspaceViews::default();
         let view = views.entry_at(ALIAS, ROOT, 1);
+        let shelf = &mut view.shelf;
         let mut display =
-            view.layout
-                .new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
+            shelf.new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
         display.opened_by(opener(ALIAS, "t1"), 0);
         display.opened_by(opener(NODE, "t2"), 0);
         display.opened_by(opener(ALIAS, "t3"), 0);
-        view.layout.insert("a1", display, 0).unwrap();
+        let area = shelf.active_area().id.clone();
+        shelf.insert(&area, display, 0).unwrap();
         crate::workspace_views::save(&state.join(WORKSPACE_VIEWS), &views).unwrap();
 
         let outcome = name_devices(state, &node()).unwrap();
@@ -1665,8 +1661,7 @@ mod tests {
         let display = loaded
             .get(MACHINE, ROOT)
             .unwrap()
-            .layout
-            .displays()
+            .views()
             .next()
             .unwrap()
             .clone();

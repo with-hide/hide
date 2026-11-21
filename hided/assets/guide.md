@@ -3,7 +3,7 @@
 Hide is the operator's workspace for coding agents, and this guide is for an agent running in one of its panes.
 Outside Hide, or in a pane Hide does not know, the commands below are refused with a `reason` and a `next_action`; if you cannot get past that, this guide does not apply to the session.
 Hide runs the terminals: each pane, its split, its working folder, the agent in it and its terminal.
-Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the right lane with its View slot (보기 in Korean), the browser displays, and a Conductor's missions.
+Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the Views each Agent tab keeps in the right lane, the browser displays, and a Conductor's missions.
 You change Hide only through the `hide` commands below; what you print in your own pane is read by the operator, not by Hide.
 Every pane, agent and letter command here is a `hide` command; there is no other program to call.
 
@@ -178,13 +178,13 @@ hide view move <view-id> --area <area-id> --index <n>
 ```
 
 - These need the Hide window open and your pane in a checkout Hide knows; a refusal says which is missing.
-- `file open` and `diff open` show a file or its changes in a View beside the agents, and `browser open` a page, always as a tab of the active View area; a page of the same address already open there comes forward instead of opening again. Only the operator splits the View areas, and open takes no `--beside`.
+- `file open` and `diff open` show a file or its changes in a View, and `browser open` a page; the same file, diff or address already open is that View again rather than a second one. Only the operator splits the View areas, and open takes no `--beside`.
+- Where an open lands depends on whether the operator watches your pane, the pane they are in on the Workspace on their screen. From that pane it goes onto your Agent tab's Views as a tab of the active View area, in front when the right lane is open; a closed lane stays closed. From any other pane, or while the operator is on another Workspace, nothing on their screen moves: the View waits in your pane's Views list (`뷰 N개` on your pane's header) until they open it. `view select` follows the same rule.
 - Open is how you show the operator a result: until they look at it, your row waits in their Needs You as To look at (`볼 것`), even while you keep working. Open only what the operator should look at, and say what you opened.
 - `browser snapshot`, `click`, `fill` and the rest read and drive a page already open in a View, by its id from `view list`, from a pane on a connected device exactly as from one on the machine that runs Hide; `workspace info` lists each as `browser.<command>`, and `hide browser help` explains them.
 - Check a page for yourself with your own browser tool, such as `aside`, not `browser open`: a page you open in Hide waits for the operator like any result.
-- What you open belongs to your session: the operator sees it in the Files list while your pane has the keyboard, and it closes when your pane closes or your session is archived.
-- While the operator looks at this checkout from another pane, what you open waits in your session's Files list instead of taking the screen.
-- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours.
+- What you open belongs to your session: it stays in your pane's Views list, and it closes when your pane closes or your session is archived.
+- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours. `view split` and `view move` arrange only a View the operator has on their tab's Views; one still waiting in your pane's list is refused with `view_not_in_lane`, and its layout is the operator's to choose when they open it.
 - What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view status <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
 - `hide <path>` (or `hide .`) is the operator's own command: it adds a folder of your machine as a project when it is not one yet, then brings Hide's window to it, moving the operator's screen. Run it only when the operator asks you to open a folder in Hide, and say what came forward.
 

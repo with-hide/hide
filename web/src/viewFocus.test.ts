@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { closeShortcutPolicy, newTabPolicy, type KeyboardOwner } from "./viewFocus";
 
 describe("close shortcut policy", () => {
-  const decide = (owner: KeyboardOwner, displayId: string | null = "d1", paneIds = ["p1", "p2"], detailShown = false) =>
-    closeShortcutPolicy({ owner, workspace: "workspace", displayId, paneIds, detailShown });
+  const decide = (owner: KeyboardOwner, displayId: string | null = "d1", paneIds = ["p1", "p2"]) =>
+    closeShortcutPolicy({ owner, workspace: "workspace", displayId, paneIds });
 
   it("closes the view even while an agent pane remains focused in the core", () => {
     expect(decide({ kind: "view", workspace: "workspace", areaId: "a1" })).toEqual({ kind: "view", id: "d1" });
@@ -22,17 +22,6 @@ describe("close shortcut policy", () => {
     expect(decide({ kind: "view", workspace: "workspace", areaId: "gone" }, null)).toMatchObject({ kind: "nothing" });
     expect(decide({ kind: "pane", workspace: "workspace", paneId: "gone" })).toMatchObject({ kind: "nothing" });
     expect(decide({ kind: "pane", workspace: "elsewhere", paneId: "p1" })).toMatchObject({ kind: "nothing" });
-  });
-
-  it("closes the 보기 slot from the slot or from nowhere, leaves the tool column closing nothing, and a pane or a View its own (PRD lane-two-columns B13, B16)", () => {
-    const shown = (owner: KeyboardOwner) => decide(owner, "d1", ["p1"], true);
-    expect(shown({ kind: "detail", workspace: "workspace" })).toEqual({ kind: "detail" });
-    expect(shown({ kind: "tool", workspace: "workspace" })).toMatchObject({ kind: "nothing" });
-    expect(shown({ kind: "none" })).toEqual({ kind: "detail" });
-    expect(shown({ kind: "pane", workspace: "workspace", paneId: "p1" })).toEqual({ kind: "pane", id: "p1" });
-    expect(shown({ kind: "view", workspace: "workspace", areaId: "a1" })).toEqual({ kind: "view", id: "d1" });
-    expect(shown({ kind: "agent", workspace: "workspace" })).toMatchObject({ kind: "nothing" });
-    expect(shown({ kind: "detail", workspace: "elsewhere" })).toMatchObject({ kind: "nothing" });
   });
 });
 

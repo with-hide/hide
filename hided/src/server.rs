@@ -1456,7 +1456,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "No letter with that id was sent by you or to you, or it has left the ledger; ask the agent that named it to send you its body in a letter of its own"
         }
         "intent_conflict" => {
-            "Use a new --intent for each new letter or spawn; send or spawn again with this intent only to repeat exactly what it was first used for (the same recipient, kind and body, or the same spawn)"
+            "Use a new --intent for each new spawn; spawn again with this intent only to repeat the same spawn"
         }
         "desk_spawn_args" => {
             "Desk passes no words to an agent's own CLI after `--`; choose the model and effort with --model and --effort and run the spawn again without `--`, or ask the operator to start that session themselves"
@@ -1597,18 +1597,27 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
+/// Whether a page command, the CLI's or a phone's picture
+/// (`mobile/page_shot.rs`), may act on `view`. A View on a desk does only as
+/// its area's selected View, so one behind another tab is refused before
+/// anything is sent; a page on no desk is on no screen for an action to be
+/// drawn over, so every one of them does (PRD lane-desk-pair-view B32).
+pub(crate) fn takes_input(view: &hide_core::workspace_control::View) -> bool {
+    view.selected || view.area_id == hide_core::workspace_views::SHELF_AREA
+}
+
 /// What the core knows of a display a `hide browser` command relays to:
-/// whether it is its area's selected View (the only one shown, so the CLI
-/// refuses input to any other before sending it) and `source_url`, the
-/// address the core keeps for it. A device's page loads from a loopback route
-/// on this machine, so the page reports that address and the CLI names this
-/// one instead. `None` when the checkout has no such display.
+/// whether it takes input (`takes_input`), and `source_url`, the address the
+/// core keeps for it. A device's page loads from a loopback route on this
+/// machine, so the page reports that address and the CLI names this one
+/// instead. `None` when the caller's checkout, whose Views alone `views`
+/// lists, has no such display.
 pub(crate) fn relay_facts(
     views: &[hide_core::workspace_control::View],
     display_id: &str,
 ) -> Option<Value> {
     let view = views.iter().find(|view| view.view_id == display_id)?;
-    Some(json!({"selected": view.selected, "source_url": view.target}))
+    Some(json!({"selected": takes_input(view), "source_url": view.target}))
 }
 
 /// The relay's answer to the CLI: `relay_facts` under the display's id.
@@ -1728,6 +1737,9 @@ enum ScopedRequest {
     AgentCatalog(Option<String>),
     /// `hide agent profile`: planned on the owner thread, run off it.
     AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill` / `hide mcp`: planned on the owner thread, waited on off
+    /// it, an install or an update until the operator answers its confirm.
+    Store(hide_core::store_command::StoreCommand),
     /// `hide ps [--all]`: the live panes and agents, read from the core's
     /// own state.
     Ps {
@@ -1778,6 +1790,7 @@ impl ScopedRequest {
                 | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
+                | Self::Store(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::AgentArchive { .. }
@@ -1802,6 +1815,11 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
+            Self::Store(command) => match command {
+                hide_core::store_command::StoreCommand::List { .. }
+                | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
+                _ => Need::Act,
+            },
             // Reading the automations is a view; a change starts agents
             // later with no one present.
             Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
@@ -1952,6 +1970,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::agent_profiles::ProfileCommand::valid)
                         .map(ScopedRequest::AgentProfile),
+                        Some("store") => serde_json::from_value::<
+                            hide_core::store_command::StoreCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::store_command::StoreCommand::valid)
+                        .map(ScopedRequest::Store),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -2216,6 +2240,16 @@ async fn scoped_client_loop(
                                         .and_then(hide_core::agent_profiles::Prepared::run)
                                         .map_err(|code| {
                                             let next = hide_core::agent_profiles::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Store(command) => {
+                                    core.prepare_store(&cap.context.device_id, &cap.pane_id, command)
+                                        .and_then(hide_core::store_command::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::store_command::next_action(
                                                 hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
@@ -5515,6 +5549,40 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// PRD lane-desk-pair-view B32: every page on no desk takes an agent's
+    /// input, a desk page behind another tab of its area does not, and a
+    /// display outside the caller's checkout, whose Views the list never
+    /// holds, is missing rather than driven.
+    #[test]
+    fn a_page_on_no_desk_takes_input_and_another_checkouts_page_is_missing() {
+        let view = |area: &str, id: &str, selected: bool| hide_core::workspace_control::View {
+            area_id: area.into(),
+            view_id: id.into(),
+            kind: "browser",
+            target: format!("https://{id}.test/"),
+            selected,
+            active_area: false,
+            page: None,
+            openers: Vec::new(),
+            operator: false,
+            unseen: true,
+        };
+        let shelf = hide_core::workspace_views::SHELF_AREA;
+        let views = vec![
+            view(shelf, "front-of-shelf", true),
+            view(shelf, "behind-on-shelf", false),
+            view("a1", "on-desk", true),
+            view("a1", "behind-on-desk", false),
+        ];
+        let takes_input =
+            |id: &str| super::relay_facts(&views, id).map(|facts| facts["selected"] == true);
+        assert_eq!(takes_input("front-of-shelf"), Some(true));
+        assert_eq!(takes_input("behind-on-shelf"), Some(true));
+        assert_eq!(takes_input("on-desk"), Some(true));
+        assert_eq!(takes_input("behind-on-desk"), Some(false));
+        assert_eq!(takes_input("another-checkouts-page"), None);
+    }
+
     /// A daemon with no screen and `live` holder panes, ending after one
     /// idle second.
     fn idle(live: Result<usize, String>) -> crate::ending::Ending {

@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -516,7 +516,7 @@ export function nodePace(mission: Pick<Mission, "status">, node: Pick<MissionNod
   if (nodeLook(mission, node) !== "working") return null;
   const state = node.work?.state;
   if (state === "stopped" || state === "no_worker") return "stopped";
-  if (state === "waiting" || workerAsleep(node)) return "waiting";
+  if (state === "waiting" || state === "asleep" || workerAsleep(node)) return "waiting";
   return "working";
 }
 
@@ -786,7 +786,7 @@ export function escalationWhy(escalation: WorkerEscalation, t: TFunction<"transl
 }
 
 /** The escalations a held letter to the parent raises. */
-const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked", "bell_exhausted", "undelivered"]);
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked"]);
 
 /**
  * A node worker's escalation as the mission shows it, the one rule 내 차례
@@ -865,7 +865,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 잠듦`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
@@ -874,6 +874,8 @@ export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">
       return t("mission.work.stopped", { why: t("mission.work.stop.noWorker") });
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "asleep":
+      return t("mission.worker.asleep");
     case "stopped":
       return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
   }
@@ -939,7 +941,7 @@ export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps
   return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan" })), now: null };
 }
 
-/** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
+/** The events the core sends for `missionId`, which it does only for the mission open as a card tab on a desk (D-22). */
 export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
   const events = rest?.mission_events;
   return events && events.mission === missionId ? events : null;
@@ -1046,7 +1048,7 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
   // A refused close says how many finished nodes have a line empty when the core counted them.
   if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
@@ -1141,19 +1143,18 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
 }
 
 /**
- * A Conductor's hold on a node that has not started
- * (`hide mission node --hold`): the card's grey pause line and the list's
- * `⏸N`. None once the node started or left the plan, or for a mission that
- * ended; the core lifts an expired hold within a minute.
+ * What a node waits on that its Conductor set, as the core decides it
+ * (`Mission::wait_of`): its own hold or the mission's delay, the card's grey
+ * pause line `기다리는 중 · <why> · <time>`. None while nothing holds it; the
+ * core lifts an expired wait within a minute.
  */
-export function nodeHold(mission: Mission, node: MissionNode): MissionNodeHold | null {
-  if (mission.status === "done" || mission.status === "cancelled" || node.status !== "planned") return null;
-  return node.hold ?? null;
+export function nodeWait(node: MissionNode): MissionNodeWait | null {
+  return node.wait ?? null;
 }
 
-/** How many of a mission's nodes its Conductor holds back now (`nodeHold`). */
+/** How many of a mission's nodes its Conductor holds back on their own now (the list's `보류 N`); a mission's delay is its pill's to say. */
 export function heldNodes(mission: Mission): number {
-  return mission.nodes.filter((node) => nodeHold(mission, node) !== null).length;
+  return mission.nodes.filter((node) => node.wait != null && !node.wait.mission).length;
 }
 
 /**
@@ -1176,8 +1177,6 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
     switch (warning.kind) {
       case "review_fails":
         return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
-      case "no_push":
-        return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
       case "stopped":
         return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
     }

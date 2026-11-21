@@ -32,6 +32,8 @@ sessions = "~/.gemini/antigravity-cli/brain"
 login = false
 state = "~/.gemini/config"
 usage = false
+mcp = "~/.gemini/config/mcp_config.json"
+mcp_format = "agy"
 
 [screen]
 version = "2026.10.05.1"

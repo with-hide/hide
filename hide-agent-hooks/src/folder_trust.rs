@@ -13,7 +13,8 @@
 //!   `~/.claude.json`, changed while Hide holds Claude's own lock on that file.
 //! - Codex: `[projects."<folder>"] trust_level = "trusted"` in
 //!   `~/.codex/config.toml`, written by Codex itself through its app-server
-//!   (`crate::codex_trust`), so Hide never writes that file.
+//!   (`crate::codex_trust`), so Hide writes no trust there; its only own
+//!   entries in that file are MCP servers (`crate::mcp`).
 //! - agy: one entry of `trustedWorkspaces` in
 //!   `~/.gemini/antigravity-cli/settings.json`.
 //! - Grok: `[folders."<folder>"] trusted = true` in
@@ -1066,7 +1067,7 @@ mod grok {
 /// they read it again and write it: a folder beside the file, made to take
 /// the lock and removed to release it. Hide makes the same folder across its
 /// own read and write of the file, so neither drops the other's change.
-mod lock_folder {
+pub(crate) mod lock_folder {
     use std::time::SystemTime;
 
     use hide_platform::fs::identity::FileId;
@@ -1089,7 +1090,7 @@ mod lock_folder {
     }
 
     /// The agent's lock on `file`, held until dropped.
-    pub(super) struct LockFolder {
+    pub(crate) struct LockFolder {
         path: PathBuf,
         file: PathBuf,
         owner: &'static str,
@@ -1103,7 +1104,7 @@ mod lock_folder {
         /// [`LOCK_FOLDER_WAIT`] while `owner` (the agent) holds it.
         // Another process's lock folder announces nothing when it goes.
         #[allow(clippy::disallowed_methods)] // a production wait, not test code
-        pub(super) fn take(
+        pub(crate) fn take(
             path: PathBuf,
             file: &Path,
             owner: &'static str,
@@ -1165,7 +1166,7 @@ mod lock_folder {
         }
 
         /// Refuses a write once the agent took the lock over.
-        pub(super) fn still_held(&self) -> Result<(), InstallFailure> {
+        pub(crate) fn still_held(&self) -> Result<(), InstallFailure> {
             if self.held() {
                 return Ok(());
             }
@@ -1284,7 +1285,7 @@ mod pi {
 /// Code takes that file's lock (proper-lockfile's `<file>.lock` folder) and
 /// reads the file again before every write of its own, so Hide holds the same
 /// lock across its read and its write and neither drops the other's change.
-mod claude {
+pub(crate) mod claude {
     use super::lock_folder::LockFolder;
     use super::*;
 
@@ -1301,7 +1302,7 @@ mod claude {
         PathBuf::from(path)
     }
 
-    fn lock(config: &Path) -> Result<LockFolder, InstallFailure> {
+    pub(crate) fn lock(config: &Path) -> Result<LockFolder, InstallFailure> {
         LockFolder::take(lock_path(config), config, "Claude Code")
     }
 

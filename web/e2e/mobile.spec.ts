@@ -678,6 +678,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_unfinished: "일 남음",
         subject_human_turn: "사람 차례",
         subject_human_turn_auth: "인증",
+        subject_human_turn_install: "설치 확인",
         subject_human_turn_permission: "허용",
         subject_input_unconfirmed_brief: "브리프 확인 안 됨",
         subject_input_unconfirmed_letter: "편지 확인 안 됨",

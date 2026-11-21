@@ -8,7 +8,7 @@ import { startFixture } from "./engine-fixture";
 import { elsewhereTab, finishUnseenTurn, setAgentAsking, setAgentState } from "./fixture-agents";
 import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot, sidebarOverflow } from "./wire";
+import { closeFrontCard, countSent, screenshot, sidebarOverflow } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 const LONG_TITLE = "행 높이 WIDE TITLE MUST CUT HERE";
@@ -100,7 +100,7 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     await expect(treeButton).toBeFocused();
     await treeButton.click();
     await screenshot(page, "sessions-pane-child-popover");
-    // The tree's task button reveals the parent's row in the sidebar's 태스크 list in one event, its record in the lane's 보기 slot when it has a session, and no Overview opens (PRD sidebar-task-lens B40).
+    // The tree's task button reveals the parent's row in the sidebar's 태스크 list in one event, its record as a desk tab when it has a session, and no Overview opens (PRD sidebar-task-lens B40).
     const reveals = sent.get("task_reveal") ?? 0;
     await tree.locator("[data-agent-tree-task]").click();
     await expect.poll(() => sent.get("task_reveal") ?? 0).toBe(reveals + 1);
@@ -112,7 +112,7 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     await page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-agent-open="${parent}"]`).first().click();
     // The record the reveal opened stays up over the panes' right edge, where
     // the children button sits, until the operator closes it.
-    await page.locator("[data-detail-close]").click();
+    await closeFrontCard(page);
     await treeButton.click();
     await withControl(daemon, (control) => closePane(control, child));
     await expect(tree).toHaveCount(0, { timeout: 20_000 });

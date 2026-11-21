@@ -2,9 +2,9 @@ import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { REGISTRY, type Command } from "../../../web/src/shortcuts";
-import { BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL } from "../channel";
+import { BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
-import { browserPartition } from "./browserSync";
+import { browserPartition, MAX_LIVE_VIEWS } from "./browserSync";
 import { session } from "electron";
 import { ExternalFiles, UNNAMED_GRANT_GRACE_MS, externalPartition } from "./externalFiles";
 import type { HostLog } from "./log";
@@ -476,7 +476,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
     const pages = Reflect.get(subject, "pages") as Map<string, Record<string, unknown>>;
     let contentsId = 0;
     const page = (id: string, extra: Record<string, unknown> = {}) => {
-      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
+      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id, getZoomFactor: () => 1, enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn() });
       const value = {
         key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
         view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, contentsId: contents.id, state: { url: `https://${id}.example/`, loading: false, failure: null },
@@ -706,6 +706,196 @@ describe("a page that closes itself", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("pages on no desk on screen (PRD lane-desk-pair-view B32)", () => {
+  const workspace = "local\u0000/checkout";
+  const rect = { x: 10, y: 20, width: 640, height: 480 };
+  const row = (id: string, load: number, url = `https://${id}.example/`) => ({ workspace, id, area_id: "shelf", url, load });
+
+  function host() {
+    let nextId = 0;
+    const views: { id: string; view: { webContents: EventEmitter & { id: number; getURL: () => string; close: ReturnType<typeof vi.fn>; enableDeviceEmulation: ReturnType<typeof vi.fn>; disableDeviceEmulation: ReturnType<typeof vi.fn> }; setVisible: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn> } }[] = [];
+    nativeView.make = () => {
+      const contents = Object.assign(new EventEmitter(), {
+        id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "", close: vi.fn(),
+        enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn(),
+        loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined),
+        navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      });
+      const view = { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() };
+      views.push({ id: "", view });
+      return view;
+    };
+    Object.assign(session, { fromPartition: vi.fn(() => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), on: vi.fn(), webRequest: { onBeforeRequest: vi.fn() } })) });
+    const resolve = vi.fn<(workspace: string, id: string, load: number) => Promise<ResolvedPage>>(() => new Promise<ResolvedPage>(() => undefined));
+    const release = vi.fn();
+    const log = { event: vi.fn() };
+    let now = 1;
+    const subject = new BrowserViews(log as unknown as HostLog, () => true, resolve, release, vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: 1_000_000, every: 1_000_000, now: () => now });
+    const shellContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn(), focus: vi.fn(), getZoomFactor: () => 1 });
+    const removeChildView = vi.fn();
+    const window = Object.assign(new EventEmitter(), {
+      isFocused: () => true, isDestroyed: () => false, webContents: shellContents, getContentBounds: () => ({ x: 0, y: 0, width: 1400, height: 820 }),
+      contentView: { removeChildView, addChildView: vi.fn() },
+    });
+    subject.attach(window as never);
+    const pages = Reflect.get(subject, "pages") as Map<string, { id: string; view: unknown; visible: boolean }>;
+    // Through the channel the shell sends on, so the host reads what parseSync passes.
+    const sync = (retained: ReturnType<typeof row>[], placed: { id: string; load: number; rect: typeof rect | null; device?: { width: number; mobile: boolean } }[] = [], inventoried = true) => {
+      now += 1;
+      ipc.get(BROWSER_SYNC_CHANNEL)!({}, {
+        workspace: placed.length ? workspace : null,
+        displays: placed.map((display) => ({ id: display.id, area_id: "shelf", url: `https://${display.id}.example/`, load: display.load, rect: display.rect, visible: display.rect !== null, ...(display.device ? { device: display.device } : {}) })),
+        retained, ...(inventoried ? { inventoried: true } : {}),
+      });
+    };
+    // What a shell sends first after it starts or reloads: no snapshot yet, so an empty list that is not the core's.
+    const firstSync = () => sync([], [], false);
+    const reloadShell = () => shellContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    const live = () => [...pages.values()].map((page) => page.id).sort();
+    const pageOf = (id: string) => pages.get(`${workspace}\u0001${id}`);
+    const viewOf = (id: string) => pageOf(id)?.view as (typeof views)[number]["view"] | undefined;
+    return { subject, sync, firstSync, reloadShell, resolve, release, removeChildView, views, live, viewOf, pageOf, log };
+  }
+
+  it("loads a page the core asks for hidden, and the desk then shows that same page without loading it again", () => {
+    const { sync, firstSync, resolve, views, viewOf, pageOf } = host();
+    // The shell's first sync names nothing; its first inventory finds a page
+    // opened before this window: nothing loads.
+    firstSync();
+    sync([row("earlier", 3)]);
+    expect(views).toHaveLength(0);
+    // An agent opens a page on no desk: it loads hidden, laid out at the
+    // lane's width by emulation, since Chromium gives a page it never showed
+    // no viewport of its own.
+    sync([row("earlier", 3), row("agent", 4)]);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(workspace, "agent", 4);
+    const page = viewOf("agent")!;
+    const laidOut = { width: 900, height: 820 };
+    expect(page.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, ...laidOut });
+    expect(page.setVisible).not.toHaveBeenCalledWith(true);
+    // Nothing is laid out before a document commits; each commit lays it out.
+    expect(page.webContents.enableDeviceEmulation).not.toHaveBeenCalled();
+    page.webContents.getURL = () => "https://agent.example/";
+    page.webContents.emit("did-navigate", {}, "https://agent.example/");
+    expect(page.webContents.enableDeviceEmulation).toHaveBeenLastCalledWith({ screenPosition: "desktop", screenSize: laidOut, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: laidOut, scale: 1 });
+    // The operator puts it on the desk: the same contents take the slot and
+    // its own size, with no load.
+    sync([row("earlier", 3), row("agent", 4)], [{ id: "agent", load: 4, rect }]);
+    expect(views).toHaveLength(1);
+    expect(viewOf("agent")).toBe(page);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(page.setBounds).toHaveBeenLastCalledWith(rect);
+    expect(page.webContents.disableDeviceEmulation).toHaveBeenCalledOnce();
+    expect(page.setVisible).toHaveBeenLastCalledWith(true);
+    expect(pageOf("agent")?.visible).toBe(true);
+    // Taken off the desk again, it stays loaded and hidden; a reopen loads it again in place.
+    sync([row("earlier", 3), row("agent", 4)]);
+    expect(page.setVisible).toHaveBeenLastCalledWith(false);
+    sync([row("earlier", 3), row("agent", 5)]);
+    expect(views).toHaveLength(1);
+    expect(resolve).toHaveBeenLastCalledWith(workspace, "agent", 5);
+    // The page opened before this window loads when the core asks again.
+    sync([row("earlier", 6), row("agent", 5)]);
+    expect(resolve).toHaveBeenLastCalledWith(workspace, "earlier", 6);
+  });
+
+  it("loads none of the pages it already had when a checkout comes back or the shell loads again", () => {
+    const { sync, firstSync, reloadShell, resolve, log } = host();
+    const offScreenLoads = () => log.event.mock.calls.filter(([kind]) => kind === "browser.loaded_off_screen").length;
+    firstSync();
+    sync([row("a", 3)]);
+    sync([row("a", 3), row("b", 4)]);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(workspace, "b", 4);
+    // The device link drops: its checkout's pages leave the inventory, and
+    // come back with the stamps they had.
+    sync([]);
+    sync([row("a", 3), row("b", 4)]);
+    expect(resolve).toHaveBeenCalledOnce();
+    // The shell loads again: its first sync names nothing, then the same inventory.
+    reloadShell();
+    firstSync();
+    sync([row("a", 3), row("b", 4), row("c", 5)]);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(offScreenLoads()).toBe(1);
+    // A page opened after that loads.
+    sync([row("a", 3), row("b", 4), row("c", 5), row("d", 6)]);
+    expect(resolve).toHaveBeenLastCalledWith(workspace, "d", 6);
+    expect(offScreenLoads()).toBe(2);
+  });
+
+  it("keeps pages on no desk within the live-page cap and releases a closed View's page", () => {
+    const { sync, firstSync, resolve, release, removeChildView, live, views, viewOf } = host();
+    firstSync();
+    // The operator looked at one page on a desk, then left it.
+    const desk = row("desk", 1);
+    sync([desk], [{ id: "desk", load: 1, rect }]);
+    sync([desk]);
+    const rows: ReturnType<typeof row>[] = [desk];
+    for (let index = 1; index <= MAX_LIVE_VIEWS; index += 1) {
+      rows.push(row(`p${index}`, index + 1));
+      sync([...rows]);
+    }
+    // Twelve live at most: a page loaded off screen counts as just seen, so the
+    // page shown longest ago goes and every page an agent just asked for stays.
+    expect(live()).toHaveLength(MAX_LIVE_VIEWS);
+    expect(live()).not.toContain("desk");
+    expect(live()).toContain("p1");
+    expect(live()).toContain(`p${MAX_LIVE_VIEWS}`);
+    // An unloaded page is not loaded again on the next sync; only a new ask does that.
+    const loads = resolve.mock.calls.length;
+    sync([...rows]);
+    expect(resolve).toHaveBeenCalledTimes(loads);
+    // The core closes a View: its page ends and its route is let go.
+    const closed = viewOf("p5")!;
+    sync(rows.filter((entry) => entry.id !== "p5"));
+    expect(live()).not.toContain("p5");
+    expect(removeChildView).toHaveBeenCalledWith(closed);
+    expect(closed.webContents.close).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledWith(workspace, "p5", 6);
+    // Every View closed: nothing is left alive.
+    sync([]);
+    expect(live()).toEqual([]);
+    expect(views.every(({ view }) => view.webContents.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("lays out a page shown at a device size and loaded again off screen only once its document commits", () => {
+    const { sync, firstSync, views, viewOf } = host();
+    firstSync();
+    const phone = row("phone", 1);
+    sync([phone], [{ id: "phone", load: 1, rect, device: { width: 390, mobile: true } }]);
+    sync([phone]);
+    const rows: ReturnType<typeof row>[] = [phone];
+    for (let index = 1; index <= MAX_LIVE_VIEWS; index += 1) {
+      rows.push(row(`p${index}`, index + 1));
+      sync([...rows]);
+    }
+    expect(viewOf("phone")).toBeUndefined();
+    // An agent opens it again: emulating it before a document commits would stall the main process.
+    sync([row("phone", MAX_LIVE_VIEWS + 2), ...rows.slice(1)]);
+    const page = viewOf("phone")!;
+    expect(views.at(-1)?.view).toBe(page);
+    expect(page.webContents.enableDeviceEmulation).not.toHaveBeenCalled();
+    page.webContents.getURL = () => "https://phone.example/";
+    page.webContents.emit("did-navigate", {}, "https://phone.example/");
+    expect(page.webContents.enableDeviceEmulation).toHaveBeenCalledOnce();
+    expect(page.webContents.enableDeviceEmulation.mock.calls[0]![0]).toMatchObject({ screenPosition: "mobile", viewSize: { width: 390 } });
+  });
+
+  it("does not load an evicted local file page again until the core asks", () => {
+    const { sync, firstSync, resolve, live } = host();
+    firstSync();
+    // The core's inventory is empty, then an agent opens one file after another.
+    sync([]);
+    const rows = Array.from({ length: MAX_LIVE_VIEWS + 1 }, (_, index) => row(`f${index}`, index + 1, `file:///checkout/f${index}.html`));
+    for (let index = 1; index <= rows.length; index += 1) sync(rows.slice(0, index));
+    expect(live()).toHaveLength(MAX_LIVE_VIEWS);
+    const loads = resolve.mock.calls.length;
+    sync(rows);
+    sync(rows);
+    expect(resolve).toHaveBeenCalledTimes(loads);
   });
 });
 
