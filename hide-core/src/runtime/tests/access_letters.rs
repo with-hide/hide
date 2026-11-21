@@ -1,12 +1,12 @@
-//! An external tool's letters (PRD hide-external-control B21, B23, D-10,
-//! D-35, D-39): a tool approved at Act writes to an agent, follows it and
+//! A bot's letters (PRD hide-external-control B21, B23, D-10, D-35, D-39):
+//! an approved bot writes to an agent, follows it and
 //! reads its reply as Desk does, under its connection's code-owned
 //! identity; no agent writes to a tool first, as none writes to Desk; and
 //! what needs an agent in a pane, or a parent, is refused with its code.
 //! The commands run through the store, as a tool's command does.
 
 use super::*;
-use crate::access::{Call, Level, key_hash};
+use crate::access::{Call, Mode, key_hash};
 use crate::delivery::worker::Worker;
 use crate::delivery::{Actor, Command};
 use crate::handle::ChangeNotifier;
@@ -126,9 +126,9 @@ impl Fixture {
         prepared.run(Duration::from_secs(5))
     }
 
-    /// The tool `nightly` asks, and the operator approves it at `level`;
+    /// The tool `nightly` asks, and the operator approves it in `mode`;
     /// its connection's id.
-    fn connect(&self, level: Level) -> String {
+    fn connect(&self, mode: Mode) -> String {
         let mut guard = self.runtime.lock().unwrap();
         let (answer, _) = guard.access_call(Call::Request {
             name: "nightly".into(),
@@ -139,7 +139,7 @@ impl Fixture {
         let id = answer.unwrap()["id"].as_str().unwrap().to_owned();
         assert!(guard.access_event(AccessEvent::Approve {
             id: id.clone(),
-            level,
+            mode,
         }));
         id
     }
@@ -213,7 +213,7 @@ fn spawn(parent: Option<&str>, beside: bool) -> Command {
 #[test]
 fn a_tool_at_act_writes_to_an_agent_and_reads_its_reply_once_in_its_inbox() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::Act);
+    let connection = fixture.connect(Mode::All);
     let worker = fixture.ids["worker"].clone();
 
     let letter = fixture.tool(&connection, send(&worker, "look")).unwrap();
@@ -276,7 +276,7 @@ fn a_tool_at_act_writes_to_an_agent_and_reads_its_reply_once_in_its_inbox() {
 #[test]
 fn no_agent_writes_first_to_a_tool_or_to_desk() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::Act);
+    let connection = fixture.connect(Mode::All);
     for target in [
         format!("hide:access:{connection}"),
         "hide:access:nightly".to_owned(),
@@ -291,24 +291,13 @@ fn no_agent_writes_first_to_a_tool_or_to_desk() {
     }
 }
 
-/// B20, B12, B13: a View only tool writes no letter, the operator's switch
-/// to Act lets its next command write, and a disconnected tool runs none.
+/// B12, B13, mission-87 D1: every approved bot writes a letter, and a
+/// disconnected one runs no command.
 #[test]
-fn a_view_only_tool_writes_no_letter_until_the_operator_lets_it_act() {
+fn an_approved_bot_writes_a_letter_and_a_disconnected_one_runs_nothing() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::View);
+    let connection = fixture.connect(Mode::All);
     let worker = fixture.ids["worker"].clone();
-    assert_eq!(
-        fixture
-            .tool(&connection, send(&worker, "look"))
-            .err()
-            .as_deref(),
-        Some("access_view_only")
-    );
-    fixture.operator(AccessEvent::Level {
-        id: connection.clone(),
-        level: Level::Act,
-    });
     assert!(fixture.tool(&connection, send(&worker, "look")).is_ok());
     fixture.operator(AccessEvent::Revoke {
         id: connection.clone(),
@@ -327,7 +316,7 @@ fn a_view_only_tool_writes_no_letter_until_the_operator_lets_it_act() {
 #[test]
 fn a_letter_asked_before_the_tool_was_disconnected_is_not_written() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::Act);
+    let connection = fixture.connect(Mode::All);
     let worker = fixture.ids["worker"].clone();
     let prepared = fixture
         .prepare_tool(&connection, None, send(&worker, "late"))
@@ -348,7 +337,7 @@ fn a_letter_asked_before_the_tool_was_disconnected_is_not_written() {
 #[test]
 fn a_tool_is_refused_what_needs_an_agent_a_parent_or_a_pane_hint() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::Act);
+    let connection = fixture.connect(Mode::All);
     let worker = fixture.ids["worker"].clone();
     let refused = |command: Command| fixture.tool(&connection, command).err();
     assert_eq!(
@@ -480,12 +469,12 @@ fn desk_is_refused_panes_sleep_and_missions_as_before() {
     assert_eq!(mission.err().as_deref(), Some("desk_has_no_checkout"));
 }
 
-/// B20-B22 outside letters: a tool reads panes and missions at View, types
-/// into a pane only at Act, and opens no pane and conducts no mission.
+/// B21, B22 outside letters: a bot reads panes and missions and types into
+/// a pane, and opens no pane and conducts no mission.
 #[test]
-fn a_tool_reads_panes_and_missions_types_only_at_act_and_conducts_nothing() {
+fn a_bot_reads_panes_and_missions_types_and_conducts_nothing() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::View);
+    let connection = fixture.connect(Mode::All);
     let caller = access_caller_id(&connection, None);
     let context = crate::access::access_context(crate::node::TEST_NODE, &connection);
     let typing = || crate::pane_command::PaneCommand::Send {
@@ -510,13 +499,6 @@ fn a_tool_reads_panes_and_missions_types_only_at_act_and_conducts_nothing() {
             )
             .is_ok()
     );
-    assert_eq!(
-        runtime
-            .prepare_pane_command(node, &caller, &context, typing())
-            .err()
-            .as_deref(),
-        Some("access_view_only")
-    );
     let listed = runtime.mission_command(
         node,
         &caller,
@@ -524,12 +506,6 @@ fn a_tool_reads_panes_and_missions_types_only_at_act_and_conducts_nothing() {
         crate::missions::MissionCommand::List,
     );
     assert!(listed.is_ok(), "{listed:?}");
-    drop(runtime);
-    fixture.operator(AccessEvent::Level {
-        id: connection.clone(),
-        level: Level::Act,
-    });
-    let mut runtime = fixture.runtime.lock().unwrap();
     assert!(
         runtime
             .prepare_pane_command(node, &caller, &context, typing())
@@ -636,7 +612,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
 fn a_disconnect_with_the_store_full_a_leave_or_a_restore_ends_what_the_tool_kept() {
     for end in ["revoke", "leave", "restore"] {
         let fixture = Fixture::start();
-        let connection = fixture.connect(Level::Act);
+        let connection = fixture.connect(Mode::All);
         let worker = fixture.ids["worker"].clone();
         fixture
             .tool(
@@ -718,7 +694,7 @@ fn a_disconnect_with_the_store_full_a_leave_or_a_restore_ends_what_the_tool_kept
 #[test]
 fn the_agent_list_names_no_tools_own_identity() {
     let fixture = Fixture::start();
-    let connection = fixture.connect(Level::Act);
+    let connection = fixture.connect(Mode::All);
     register_origin(&fixture, &connection);
     let ledger = fixture.runtime.lock().unwrap().delivery_state().unwrap();
     assert_eq!(
@@ -747,15 +723,6 @@ fn the_agent_list_names_no_tools_own_identity() {
         names(fixture.agent("worker", list()).unwrap()),
         ["other", "worker"]
     );
-    assert_eq!(
-        names(fixture.tool(&connection, list()).unwrap()),
-        ["other", "worker"]
-    );
-    // At View only, as the together check read it.
-    fixture.operator(AccessEvent::Level {
-        id: connection.clone(),
-        level: Level::View,
-    });
     assert_eq!(
         names(fixture.tool(&connection, list()).unwrap()),
         ["other", "worker"]

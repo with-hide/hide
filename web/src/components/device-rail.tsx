@@ -9,11 +9,9 @@ import { numberOf, numberedDevices } from "../numbering";
 import { openedMachines } from "../pairing";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
-import { botMode, botWorkspaceName } from "../bots";
-import { catalogWorkspaces } from "../snapshot";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
-import { BotFace, BotWorkspaceBadge } from "./bot-mark";
+import { BotFace, BotWorkspaceBadge, useBotWorkspaceName } from "./bot-mark";
 import { EntryContextMenu } from "./entry-menu";
 import { Button } from "./ui/button";
 import { Keycap } from "./ui/keycap";
@@ -194,7 +192,8 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
 
 /** A bot's tile reading its mode from the access section, where the core publishes it beside the connection. */
 const BotTile = memo(function BotTile(props: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
-  const workspace = useShellStore((s) => botWorkspaceName(botMode(s.access?.connections.find((one) => one.id === props.connection)), catalogWorkspaces(s.rest)));
+  const mode = useShellStore((s) => s.access?.connections.find((one) => one.id === props.connection)?.mode);
+  const workspace = useBotWorkspaceName(mode);
   return <BotTileView {...props} workspace={workspace} />;
 });
 

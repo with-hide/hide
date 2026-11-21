@@ -1653,7 +1653,8 @@ impl Runtime {
             // them, is refused before any of it is read (B20-B23).
             (
                 expected.clone(),
-                self.access_authority(device, connection, crate::access::delivery_need(&command))?,
+                self.access_authority(device, connection, crate::access::delivery_need(&command))?
+                    .0,
             )
         } else {
             let context = self
@@ -2509,17 +2510,15 @@ impl Runtime {
     /// The authority a code-owned caller acts with: a Factory host's own
     /// recipient, or Hide's own identity for one of its roles; never a pane's.
     pub(crate) fn code_owned_authority_current(&self, caller: &str, actor: &Actor) -> bool {
-        // An external tool's identity holds while its connection stands at
-        // Act, for the credential of that same connection (B12, B13).
+        // A bot's identity holds while its connection stands, for the
+        // credential of that same connection (B12, B13).
         if let Some(connection) = actor.access_connection() {
             return matches!(
                 Caller::parse(caller),
                 Caller::Access { connection: id, .. } if id == connection
             ) && self
                 .access_actor(connection)
-                .is_some_and(|(level, current)| {
-                    level == crate::access::Level::Act && current.same_identity(actor)
-                });
+                .is_some_and(|(_, current)| current.same_identity(actor));
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())

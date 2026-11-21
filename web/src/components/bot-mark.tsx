@@ -1,6 +1,11 @@
 import { FolderIcon } from "lucide-react";
-import { BOT_SHAPE_SRC, botLook, type BotColor } from "../bots";
+import { useCallback } from "react";
+import { BOT_SHAPE_SRC, botLook, botWorkspaceName, type BotColor } from "../bots";
+import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
+import { machineName, windowDeviceId } from "../screenMachine";
+import { catalogWorkspaces, type AccessMode } from "../snapshot";
+import { useShellStore } from "../store";
 
 const TILE_BG: Record<BotColor, string> = {
   slate: "bg-bot-slate",
@@ -44,4 +49,18 @@ export function BotWorkspaceBadge({ className }: { className?: string }) {
       <FolderIcon className="size-(--size-rail-mark)" />
     </span>
   );
+}
+
+/** Names a workspace's machine when it is not this window's, for a workspace a bot is held inside. */
+export function useWorkspaceDeviceName(): (deviceId: string) => string | null {
+  const { t } = useInterfaceTranslation();
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  return useCallback((deviceId: string) => (deviceId === windowDeviceId(devices) ? null : machineName(devices, deviceId, t)), [devices, t]);
+}
+
+/** The name of the workspace a bot with `mode` is held inside, or null for a whole-Hide bot or none (`botWorkspaceName`). */
+export function useBotWorkspaceName(mode: AccessMode | undefined): string | null {
+  const { t } = useInterfaceTranslation();
+  const deviceName = useWorkspaceDeviceName();
+  return useShellStore((s) => (mode ? botWorkspaceName(mode, catalogWorkspaces(s.rest), deviceName, t("externalTools.mode.gone")) : null));
 }

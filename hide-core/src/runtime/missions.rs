@@ -2562,9 +2562,9 @@ impl Runtime {
             _ => None,
         };
         let every_project = tool.is_some();
-        // A tool reaches only Show and List, which name no pane.
+        // A bot reaches only Show and List, which name no pane.
         let (context, actor, pane) = match tool {
-            Some(actor) => (expected.clone(), actor.clone(), actor.pane_id),
+            Some((actor, _)) => (expected.clone(), actor.clone(), actor.pane_id),
             None => {
                 let context = self
                     .workspace_control_query(device, caller, Query::Info)
@@ -5709,7 +5709,6 @@ impl Runtime {
                 access
                     .connections
                     .iter()
-                    .filter(|connection| connection.level == crate::access::Level::Act)
                     .map(|connection| (connection.id.clone(), connection.name.clone()))
                     .collect()
             })

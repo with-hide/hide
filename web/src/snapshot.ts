@@ -3447,42 +3447,13 @@ export type DeskMentions = {
   projects: { id: string; name: string; sessions: string[] }[];
 };
 
-/** What an approved external tool may do (PRD hide-external-control D-06, D-34): see what Hide shows, or that and set agents to work. */
-export type AccessLevel = "view" | "act";
-
 /**
- * The `access` section (PRD hide-external-control B2, B11, B15): the requests
- * waiting for the operator and the approved tools on the core's machine. The
- * core decides every value; Settings › External tools words them and sends
- * the operator's approve, refuse, level and disconnect back.
+ * The `access` section (PRD hide-external-control B2, B11, B15; mission-87):
+ * the requests waiting for the operator and the approved bots on the core's
+ * machine, each with its mode, the whole Hide or one workspace. The shapes
+ * are the contract's (`accessSnapshot` in `contracts/hided-ws.schema.json`).
  */
-export type AccessSection = {
-  /** The core's machine, where every tool runs. */
-  machine: string;
-  /** How many tools may connect (`n / 16`). */
-  limit: number;
-  /** Oldest first. */
-  pending: AccessPending[];
-  /** In the order they were approved. */
-  connections: AccessConnection[];
-};
-
-export type AccessPending = { id: string; name: string; program: string | null; requested_ms: number };
-
-export type AccessConnection = {
-  id: string;
-  name: string;
-  level: AccessLevel;
-  /** Every workspace or one; absent from a core that predates bot modes. */
-  mode?: import("./bots").BotMode;
-  program: string | null;
-  created_ms: number;
-  /** Moved at most once a minute (B34). */
-  last_used_ms: number;
-  /** How many live agents the tool started, and how many open missions those agents conduct. */
-  agent_count: number;
-  mission_count: number;
-};
+export type { AccessConnection, AccessMode, AccessPending, AccessSnapshot as AccessSection } from "./generated/hided-ws";
 
 /** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
 export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";

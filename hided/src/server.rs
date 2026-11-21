@@ -1802,11 +1802,12 @@ impl ScopedRequest {
         )
     }
 
-    /// What an external tool's level must allow for this command (PRD
-    /// hide-external-control B20-B23). A command family the core also runs
-    /// for a tool takes its need from the core's one table
-    /// (`hide_core::access`), which the core judges again; the rest are
-    /// this boundary's alone.
+    /// What a bot's mode must allow for this command (PRD
+    /// hide-external-control B20-B23, mission-87 D3). A command family the
+    /// core also runs for a bot takes its need from the core's one table
+    /// (`hide_core::access`), which the core judges again with what the
+    /// command names; the rest are this boundary's alone
+    /// (`docs/ARCHITECTURE.md`, Bots, has every row).
     fn access_need(&self) -> hide_core::access::Need {
         use hide_core::access::{self, Need};
         match self {
@@ -1814,20 +1815,10 @@ impl ScopedRequest {
             Self::Pane(command) => access::pane_need(command),
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
-            Self::Ps { .. } | Self::AccessList => Need::View,
-            Self::Store(command) => match command {
-                hide_core::store_command::StoreCommand::List { .. }
-                | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
-                _ => Need::Act,
-            },
-            // Reading the automations is a view; a change starts agents
-            // later with no one present.
-            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
-            Self::Automation(..) => Need::Act,
-            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
-                Need::Agent
-            }
-            Self::AgentSleep { .. }
+            // The core lists a workspace-mode bot's own workspace only, and
+            // holds what the rest name, or the folder they run in, to it.
+            Self::Ps { .. }
+            | Self::AgentSleep { .. }
             | Self::AgentArchive { .. }
             | Self::Query(..)
             | Self::Action(..)
@@ -1835,10 +1826,21 @@ impl ScopedRequest {
             | Self::BrowserRelay(..)
             | Self::Links(..)
             | Self::Session(..)
-            | Self::AgentCatalog(..)
+            | Self::WorktreeRemove(..) => Need::Workspace,
+            // Which agents and models a machine offers names nothing of any
+            // workspace, and a spawn into its own needs it.
+            Self::AgentCatalog(..) => Need::Workspace,
+            // The bots and the requests, the skills and MCP servers, the
+            // agents' profiles, the automations book and a new project are
+            // Hide's as a whole.
+            Self::AccessList
+            | Self::Store(..)
             | Self::AgentProfile(..)
-            | Self::ProjectOpen(..)
-            | Self::WorktreeRemove(..) => Need::Act,
+            | Self::Automation(..)
+            | Self::ProjectOpen(..) => Need::All,
+            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
+                Need::Agent
+            }
         }
     }
 }
@@ -2089,10 +2091,10 @@ async fn scoped_client_loop(
                             tokio::task::spawn_blocking(move || {
                             let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
-                            // An external tool runs what its level allows,
-                            // judged here for every command (B20-B23).
-                            if let Some(level) = cap.access_level() {
-                                hide_core::access::admit(level, command.access_need()).map_err(|reason| {
+                            // A bot runs what its mode allows, judged here
+                            // for every command (B20-B23, mission-87 D3).
+                            if let Some(mode) = cap.access_mode() {
+                                hide_core::access::admit(mode, command.access_need()).map_err(|reason| {
                                     (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
                                 })?;
                             }
@@ -2138,7 +2140,7 @@ async fn scoped_client_loop(
                                     crate::hook_request::delivery(&core, &cap, *command, hint)?
                                 }
                                 ScopedRequest::AccessList => {
-                                    if cap.access_level().is_none() {
+                                    if cap.access_mode().is_none() {
                                         return Err((
                                             "access_not_connected".to_owned(),
                                             crate::pane_auth::refusal_next_action("access_not_connected"),
@@ -2155,7 +2157,7 @@ async fn scoped_client_loop(
                                 // A tool outside every checkout has none to
                                 // read: it asks from inside one (B25).
                                 ScopedRequest::Links(_) | ScopedRequest::Session(_)
-                                    if cap.access_level().is_some()
+                                    if cap.access_mode().is_some()
                                         && cap.context.checkout_path.is_empty() =>
                                 {
                                     return Err((

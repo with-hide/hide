@@ -36,7 +36,8 @@ impl Runtime {
         let desk_authority = match Caller::parse(caller) {
             Caller::Access { connection, .. } => Some((
                 expected.clone(),
-                self.access_authority(device, connection, crate::access::Need::Act)?,
+                self.access_authority(device, connection, crate::access::Need::Workspace)?
+                    .0,
             )),
             Caller::Desk if desk_may_act => Some(self.desk_authority(device)?),
             _ => None,

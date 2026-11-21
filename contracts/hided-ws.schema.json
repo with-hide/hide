@@ -997,6 +997,72 @@
       "additionalProperties": false,
       "properties": { "color_theme": { "$ref": "#/$defs/colorTheme" } }
     },
+    "accessMode": {
+      "description": "What an approved bot reaches (mission-87 D2): `all` is the whole Hide; `workspace` is one workspace, Hide's project, by the id `navigator.workspaces` gives it, with every checkout inside it, which the core holds the bot's commands, lists and reads to. A window names the workspace from `navigator.workspaces`; an id no longer there is a workspace since removed, where the bot reaches nothing.",
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "all" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "workspace_id"], "properties": { "kind": { "const": "workspace" }, "workspace_id": { "type": "string", "minLength": 1 } } }
+      ]
+    },
+    "accessSnapshot": {
+      "description": "The core's `access` section (PRD hide-external-control B2, B11, B17; mission-87): the requests waiting for the operator and the approved bots. Absent until the connection list is restored at start.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["machine", "limit", "pending", "connections"],
+      "properties": {
+        "machine": { "description": "The core's machine, where every bot runs.", "type": "string" },
+        "limit": { "description": "How many bots may connect.", "type": "integer", "minimum": 0 },
+        "pending": { "description": "Requests waiting for the operator, oldest first.", "type": "array", "items": { "$ref": "#/$defs/accessPending" } },
+        "connections": { "description": "Approved bots, in the order they were approved.", "type": "array", "items": { "$ref": "#/$defs/accessConnection" } }
+      }
+    },
+    "accessPending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "program", "requested_ms"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "program": { "description": "The program that asked, as the kernel named it; null when the system did not say.", "type": ["string", "null"] },
+        "requested_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "accessConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "mode", "program", "created_ms", "last_used_ms", "agent_count", "mission_count"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "mode": { "$ref": "#/$defs/accessMode" },
+        "program": { "type": ["string", "null"] },
+        "created_ms": { "type": "integer", "minimum": 0 },
+        "last_used_ms": { "description": "Moved at most once a minute.", "type": "integer", "minimum": 0 },
+        "agent_count": { "description": "Live agents this bot started; they stay the bot's work in either mode while it is connected.", "type": "integer", "minimum": 0 },
+        "mission_count": { "description": "Open missions those agents conduct.", "type": "integer", "minimum": 0 }
+      }
+    },
+    "accessApprovePayload": {
+      "description": "Payload of access_approve, taken only from a window's connection: the waiting request `id` becomes a bot in `mode`. A workspace the catalog does not carry, a request gone, a full list or a taken name changes nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": { "id": { "type": "string" }, "mode": { "$ref": "#/$defs/accessMode" } }
+    },
+    "accessModePayload": {
+      "description": "Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`. It moves none of the bot's work; a workspace the catalog does not carry changes nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode"],
+      "properties": { "id": { "type": "string" }, "mode": { "$ref": "#/$defs/accessMode" } }
+    },
+    "accessIdPayload": {
+      "description": "Payload of access_refuse (a waiting request `id`) and access_revoke (a connected bot `id`, whose work becomes the operator's at once), taken only from a window's connection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": { "id": { "type": "string" } }
+    },
     "closeReason": {
       "type": "string",
       "enum": ["invalid_token", "origin_not_allowed", "schema_mismatch", "client_limit"]

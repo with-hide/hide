@@ -8534,7 +8534,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
 /// the operator, who is told then, and the mission still names the tool.
 #[test]
 fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
-    use crate::access::{Call, Level, key_hash};
+    use crate::access::{Call, Mode, key_hash};
     use crate::delivery::worker::HumanNoticeKind;
     use crate::missions::AttentionReason;
     use crate::runtime::access::AccessEvent;
@@ -8550,7 +8550,7 @@ fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
     let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
     assert!(runtime.access_event(AccessEvent::Approve {
         id: connection.clone(),
-        level: Level::Act,
+        mode: Mode::All,
     }));
     let conductor = runtime
         .missions

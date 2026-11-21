@@ -1448,18 +1448,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
     },
     /**
-     * Settings › 봇 (PRD hide-external-control B3, B4, B12, B13): the
-     * operator's answer to a bot's request, with the mode it is approved in,
-     * and the mode or disconnect of a connected one, each one core event; the
-     * `access` section shows the outcome.
+     * Settings (PRD hide-external-control B3, B4, B12, B13; mission-87):
+     * the operator's answer to a bot's request and the mode or disconnect of
+     * a connected one, each one core event; the `access` section shows the
+     * outcome.
      */
-    approveAccess(id: string, mode: import("./bots").BotMode) {
+    approveAccess(id: string, mode: import("./snapshot").AccessMode) {
       dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode } });
     },
     refuseAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
     },
-    setBotMode(id: string, mode: import("./bots").BotMode) {
+    setAccessMode(id: string, mode: import("./snapshot").AccessMode) {
       dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode } });
     },
     revokeAccess(id: string) {

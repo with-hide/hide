@@ -5,25 +5,24 @@
 // keys.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
-import type { BotMode } from "../bots";
 import { BotTileView, RailTileView } from "../components/device-rail";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { ExternalToolsTab } from "../settings/ExternalToolsTab";
-import type { AccessConnection, AccessSection } from "../snapshot";
+import type { AccessConnection, AccessMode, AccessSection } from "../snapshot";
 import { useShellStore } from "../store";
 
 const MINUTE = 60_000;
 
 const WORKSPACES = [
-  { id: "gallery-ws-herdr", label: "herdr-ide" },
-  { id: "gallery-ws-reels", label: "creator/reels" },
-  { id: "gallery-ws-deck", label: "presentation" },
+  { id: "gallery-ws-herdr", label: "herdr-ide", device_id: "gallery-mac" },
+  { id: "gallery-ws-reels", label: "creator/reels", device_id: "gallery-mac" },
+  { id: "gallery-ws-deck", label: "presentation", device_id: "gallery-mac" },
 ];
 
-function connection(id: string, name: string, mode: BotMode, agents: number, missions: number, lastUsedMinutes: number): AccessConnection {
+function connection(id: string, name: string, mode: AccessMode, agents: number, missions: number, lastUsedMinutes: number): AccessConnection {
   const now = Date.now();
-  return { id, name, level: "act", mode, program: `/usr/local/bin/${name}`, created_ms: now - 2 * 86_400_000, last_used_ms: now - lastUsedMinutes * MINUTE, agent_count: agents, mission_count: missions };
+  return { id, name, mode, program: `/usr/local/bin/${name}`, created_ms: now - 2 * 86_400_000, last_used_ms: now - lastUsedMinutes * MINUTE, agent_count: agents, mission_count: missions };
 }
 
 function fixture(state: string): AccessSection {
@@ -68,14 +67,15 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(() => createActions((event) => {
     const current = useShellStore.getState().access;
     if (!current) return true;
-    const payload = event.payload as { id?: string; mode?: BotMode };
+    const payload = event.payload as { id?: string; mode?: AccessMode };
     const id = payload.id;
     if (event.kind === "access_refuse") useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id) } });
     if (event.kind === "access_approve" && payload.mode) {
       const request = current.pending.find((one) => one.id === id);
       if (request) useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id), connections: [...current.connections, { ...connection(request.id, request.name, payload.mode, 0, 0, 0), program: request.program }] } });
     }
-    if (event.kind === "access_mode" && payload.mode) useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, mode: payload.mode } : one) } });
+    const mode = payload.mode;
+    if (event.kind === "access_mode" && mode) useShellStore.setState({ access: { ...current, connections: current.connections.map((one) => one.id === id ? { ...one, mode } : one) } });
     if (event.kind === "access_revoke") useShellStore.setState({ access: { ...current, connections: current.connections.filter((one) => one.id !== id) } });
     return true;
   }), []);

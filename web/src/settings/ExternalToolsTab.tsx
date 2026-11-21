@@ -10,8 +10,8 @@ import { ChevronDownIcon, FolderIcon } from "lucide-react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
-import { botMode, botWorkspaceName, type BotMode } from "../bots";
-import { BotFace, BotWorkspaceBadge } from "../components/bot-mark";
+import { workspaceName } from "../bots";
+import { BotFace, BotWorkspaceBadge, useBotWorkspaceName, useWorkspaceDeviceName } from "../components/bot-mark";
 import { useMinuteClock } from "../components/elapsed";
 import { Group, Note } from "../components/settings-rows";
 import { Badge } from "../components/ui/badge";
@@ -23,10 +23,10 @@ import { connectionLine, pendingLine, warnsOfWork } from "../externalTools";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { coreMachineName } from "../screenMachine";
-import { catalogWorkspaces, listedWorkspaces, type AccessConnection, type AccessPending, type Workspace } from "../snapshot";
+import { catalogWorkspaces, listedWorkspaces, type AccessConnection, type AccessMode, type AccessPending, type Workspace } from "../snapshot";
 import { useShellStore } from "../store";
 
-type ModeKind = BotMode["kind"];
+type ModeKind = AccessMode["kind"];
 const MODES: readonly ModeKind[] = ["all", "workspace"];
 
 /** The value a mode reads as in a menu or a choice: `all`, or the workspace's id. */
@@ -84,7 +84,8 @@ function PendingRow({ request, machine, workspaces, now, actions }: { request: A
   const [picked, setPicked] = useState<string | null>(null);
   // The pick follows the projects as they change: a project that left is no longer chosen.
   const workspace = workspaces.find((one) => one.id === picked) ?? workspaces[0] ?? null;
-  const mode: BotMode | null = kind === "all" ? { kind: "all" } : workspace ? { kind: "workspace", workspace_id: workspace.id } : null;
+  const deviceName = useWorkspaceDeviceName();
+  const mode: AccessMode | null = kind === "all" ? { kind: "all" } : workspace ? { kind: "workspace", workspace_id: workspace.id } : null;
   const line = pendingLine(request, machine, now, t, language);
   return (
     <div className="flex flex-col gap-md px-md py-md" data-access-pending={request.id}>
@@ -115,11 +116,11 @@ function PendingRow({ request, machine, workspaces, now, actions }: { request: A
         <Select value={workspace.id} onValueChange={setPicked}>
           <SelectTrigger aria-label={t("externalTools.mode.pick")} className="w-full min-w-0" data-access-workspace={workspace.id}>
             <SelectValue>
-              <span className="flex min-w-0 items-center gap-xs"><FolderIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" /><span className="truncate">{workspace.label}</span></span>
+              <span className="flex min-w-0 items-center gap-xs"><FolderIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" /><span className="truncate">{workspaceName(workspace, deviceName)}</span></span>
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {workspaces.map((one) => <SelectItem key={one.id} value={one.id}>{one.label}</SelectItem>)}
+            {workspaces.map((one) => <SelectItem key={one.id} value={one.id}>{workspaceName(one, deviceName)}</SelectItem>)}
           </SelectContent>
         </Select>
       ) : null}
@@ -128,7 +129,7 @@ function PendingRow({ request, machine, workspaces, now, actions }: { request: A
           {t("externalTools.refuse")}
         </Button>
         <Button variant="secondary" size="sm" disabled={mode === null} onClick={() => mode && actions.approveAccess(request.id, mode)} data-access-approve={kind}>
-          {kind === "all" || !workspace ? t("externalTools.approve.all") : t("externalTools.approve.workspace", { workspace: workspace.label })}
+          {kind === "all" || !workspace ? t("externalTools.approve.all") : t("externalTools.approve.workspace", { workspace: workspaceName(workspace, deviceName) })}
         </Button>
       </div>
     </div>
@@ -144,12 +145,13 @@ function PendingRow({ request, machine, workspaces, now, actions }: { request: A
 function ConnectionRow({ connection, machine, workspaces, now, actions }: { connection: AccessConnection; machine: string; workspaces: readonly Workspace[]; now: number; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const mode = botMode(connection);
-  const workspace = botWorkspaceName(mode, workspaces);
+  const mode = connection.mode;
+  const workspace = useBotWorkspaceName(mode);
+  const deviceName = useWorkspaceDeviceName();
   const current = mode.kind === "all" ? ALL_VALUE : mode.workspace_id;
   const change = (value: string) => {
     if (value === current) return;
-    actions.setBotMode(connection.id, value === ALL_VALUE ? { kind: "all" } : { kind: "workspace", workspace_id: value });
+    actions.setAccessMode(connection.id, value === ALL_VALUE ? { kind: "all" } : { kind: "workspace", workspace_id: value });
   };
   return (
     <div className="flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm" data-access-connection={connection.id} data-access-mode={mode.kind}>
@@ -189,7 +191,7 @@ function ConnectionRow({ connection, machine, workspaces, now, actions }: { conn
                   <DropdownMenuLabel>{t("externalTools.mode.workspace")}</DropdownMenuLabel>
                   {workspaces.map((one) => (
                     <DropdownMenuRadioItem key={one.id} value={one.id} data-access-mode-option={one.id}>
-                      <span className="min-w-0 truncate">{one.label}</span>
+                      <span className="min-w-0 truncate">{workspaceName(one, deviceName)}</span>
                     </DropdownMenuRadioItem>
                   ))}
                 </>

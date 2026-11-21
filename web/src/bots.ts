@@ -11,6 +11,7 @@ import sleepy from "./assets/bots/sleepy.png";
 import smile from "./assets/bots/smile.png";
 import tufts from "./assets/bots/tufts.png";
 import wink from "./assets/bots/wink.png";
+import type { AccessMode } from "./snapshot";
 
 export const BOT_SHAPES = ["smile", "sleepy", "wink", "headset", "antenna", "beanie", "tufts"] as const;
 export const BOT_COLORS = ["slate", "coral", "teal", "lavender", "mustard", "sage", "charcoal"] as const;
@@ -47,18 +48,19 @@ function nth<T>(list: readonly T[], value: number): T {
   return item;
 }
 
-/** A bot's mode: every workspace with the operator's whole authority, or held inside one workspace (Hide's project). */
-export type BotMode = { kind: "all" } | { kind: "workspace"; workspace_id: string };
-
-const ALL: BotMode = { kind: "all" };
-
-/** The mode the core published for a connected bot; a connection that names none reads as whole Hide, as every Act tool was. */
-export function botMode(connection: { mode?: BotMode } | undefined): BotMode {
-  return connection?.mode ?? ALL;
+/** A workspace as a bot's mode names it: its name, and its machine's after it when that is not this window's. */
+export function workspaceName(workspace: { label: string; device_id: string }, deviceName: (deviceId: string) => string | null): string {
+  const device = deviceName(workspace.device_id);
+  return device === null ? workspace.label : `${workspace.label} (${device})`;
 }
 
-/** The name of a workspace-mode bot's workspace, or null for a whole-Hide bot; a workspace the core no longer lists keeps its id. */
-export function botWorkspaceName(mode: BotMode, workspaces: readonly { id: string; label: string }[]): string | null {
+/**
+ * The workspace a bot is held inside, named for the screen, or null for a
+ * whole-Hide bot. A workspace the core no longer lists was removed, and the
+ * bot reaches nothing there, which `gone` words.
+ */
+export function botWorkspaceName(mode: AccessMode, workspaces: readonly { id: string; label: string; device_id: string }[], deviceName: (deviceId: string) => string | null, gone: string): string | null {
   if (mode.kind === "all") return null;
-  return workspaces.find((workspace) => workspace.id === mode.workspace_id)?.label ?? mode.workspace_id;
+  const workspace = workspaces.find((one) => one.id === mode.workspace_id);
+  return workspace ? workspaceName(workspace, deviceName) : gone;
 }
