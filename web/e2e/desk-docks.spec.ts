@@ -165,17 +165,17 @@ test("a press outside the floating desk and Explorer lands on what was pressed b
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
 
-    // The left pane's zoom button is outside the floating layer; while the
+    // The left pane's menu button is outside the floating layer; while the
     // press is held the desk still floats, so the button stays under it.
-    const zoom = page.locator(`[data-pane-view="${left}"] [data-pane-zoom="false"]`);
-    const box = (await zoom.boundingBox())!;
+    const button = page.locator(`[data-pane-menu="${left}"]`);
+    const box = (await button.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     await quietFor(page, 300, "a desk that stood on the press would have been drawn by now");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await page.mouse.up();
-    // The press zoomed the pane, then the Explorer closed and the desk stood.
-    await expect(page.locator('[data-canvas][data-zoomed="true"]')).toHaveCount(1);
+    // The press opened the pane's menu, then the Explorer closed and the desk stood.
+    await expect(page.getByRole("menu")).toBeVisible();
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
   } finally {

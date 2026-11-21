@@ -1259,7 +1259,7 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
   await expect(keyboardOnPage, "the page's area never became the keyboard's").toHaveCount(0);
 });
 
-test("expand: Zoom pane in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {
+test("expand: ⇧⌘↩ in a focused page expands the lane and back while the page keeps the keyboard", { tag: NEEDS_FOCUS }, async () => {
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);

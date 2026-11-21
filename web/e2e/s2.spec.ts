@@ -1,6 +1,6 @@
 // S2 flows on an isolated engine (PRD web-shell-pivot-s2 B16): two
 // checkouts, three tabs, two splits, one registration, one refusal, plus
-// the shortcut sheet, zoom, a pane close and a divider drag. Every command
+// the shortcut sheet, a pane close and a divider drag. Every command
 // runs against a private engine; the operator's engine is never touched.
 // Each test is one contract and starts from `startFlow`'s own stack, so a
 // failure in one never takes another contract's assertions down with it.
