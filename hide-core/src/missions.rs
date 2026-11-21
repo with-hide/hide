@@ -1869,6 +1869,21 @@ pub struct FolderLine {
     pub current: bool,
 }
 
+/// The result report a closed mission owes the agent of another machine
+/// that started its Conductor (`runtime/mission_report.rs`, PRD
+/// device-connect-iroh D-72, B65). It is saved with the close, so a core
+/// that ends between the close and the letter still sends it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum OriginReport {
+    /// Its letter is not kept yet.
+    Owed,
+    /// Kept as letter `letter`, which the ledger carries from there.
+    Sent { letter: String },
+    /// No letter was written for it, and why; its Conductor was told.
+    Refused { reason: String },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Mission {
     pub id: String,
@@ -1983,6 +1998,11 @@ pub struct Mission {
     /// adding a second. A build from before it ignores and drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_line: Option<FolderLine>,
+    /// What became of the report its last close owes the agent of another
+    /// machine that asked for the mission; none for a mission that owes
+    /// none. A build from before it ignores and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_report: Option<OriginReport>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     #[serde(default)]
@@ -5009,6 +5029,7 @@ pub(crate) mod tests {
             put_away_unix_ms: None,
             report: None,
             folder_line: None,
+            origin_report: None,
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
             started_at_unix_ms: None,

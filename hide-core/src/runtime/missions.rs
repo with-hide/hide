@@ -859,11 +859,14 @@ pub(crate) struct MissionRuntime {
     pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
     /// Counts the events' changes, for the published section.
     pub(crate) events_edit: u64,
-    /// The missions that closed and whose report their Conductor's origin
-    /// has not been sent yet (`mission_report.rs`), and whether a thread
-    /// sends some now. Memory only: a close is reported by the next tick.
+    /// The missions whose stored record owes their Conductor's origin a
+    /// report (`Mission::origin_report`, `mission_report.rs`): read again
+    /// from the book at a start, so at most one entry per mission of the
+    /// book. Whether a thread sends some now, and when a report that could
+    /// not be written yet is tried again.
     pub(crate) reports_owed: Vec<String>,
     pub(crate) reporting: bool,
+    pub(crate) reports_again_unix_ms: u64,
     /// The answers the doorbell tried and held, by mission: shown as
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
@@ -2086,6 +2089,15 @@ impl Runtime {
                         }
                     }
                 }
+                // A close saved before its report's letter still owes it.
+                self.missions.reports_owed = book
+                    .missions
+                    .iter()
+                    .filter(|mission| {
+                        mission.origin_report == Some(crate::missions::OriginReport::Owed)
+                    })
+                    .map(|mission| mission.id.clone())
+                    .collect();
                 self.missions.book = book;
             }
             Restored::Unreadable(reason) => {
@@ -2146,6 +2158,7 @@ impl Runtime {
         if current.status != MissionStatus::Cancelled {
             self.gate_close(current, end)?;
         }
+        let owes = self.owes_origin_report(&current.conductor.actor);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         let status = match (target.status, end) {
             (MissionStatus::Cancelled, _) => return Err("mission_cancelled".into()),
@@ -2167,6 +2180,8 @@ impl Runtime {
         if report.is_some() {
             target.report = report;
         }
+        // Saved with the close itself (`mission_report.rs`).
+        target.origin_report = owes.then_some(crate::missions::OriginReport::Owed);
         let ended = if status == MissionStatus::MergeWait {
             Vec::new()
         } else {
@@ -2231,10 +2246,12 @@ impl Runtime {
         {
             return false;
         }
+        let owes = self.owes_origin_report(&mission.conductor.actor);
         let Some(mission) = self.missions.book.get_mut(id) else {
             return false;
         };
         mission.status = MissionStatus::Done;
+        mission.origin_report = owes.then_some(crate::missions::OriginReport::Owed);
         mission.closed_at_unix_ms = Some(now);
         mission.reopened_on = None;
         mission.updated_at_unix_ms = now;
@@ -2671,6 +2688,7 @@ impl Runtime {
                     put_away_unix_ms: None,
                     report: None,
                     folder_line: None,
+                    origin_report: None,
                     created_at_unix_ms: now,
                     updated_at_unix_ms: now,
                     started_at_unix_ms: None,
