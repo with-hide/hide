@@ -158,17 +158,7 @@ test("a crowded desk reads its front tab whole and shrinks the others, and the r
     // its marks, its tooltip naming it whole.
     const cut = (tab: ReturnType<typeof front>) => tab.locator("[data-tab-title]").evaluate((title: HTMLElement) => title.offsetParent === null || title.scrollWidth > title.clientWidth);
     await expect(front(page)).toContainText(names[3]!);
-    // On a failure, the numbers that decided it: the tab, its title's box and text, and the width the strip gave it.
-    const widths = () => front(page).evaluate((tab: HTMLElement) => {
-      const title = tab.querySelector<HTMLElement>("[data-tab-title]")!;
-      const copy = title.cloneNode(true) as HTMLElement;
-      copy.style.cssText = "position:absolute;visibility:hidden;width:max-content;max-width:none;flex:none;overflow:visible";
-      tab.appendChild(copy);
-      const natural = copy.getBoundingClientRect().width;
-      copy.remove();
-      return { tab: tab.getBoundingClientRect().width, title: title.getBoundingClientRect().width, client: title.clientWidth, scroll: title.scrollWidth, natural, set: tab.closest<HTMLElement>("[role=tablist]")?.style.getPropertyValue("--tab-selected-width"), cls: tab.className };
-    });
-    await expect.poll(() => cut(front(page))).toBe(false).catch(async (error: Error) => { throw new Error(`${error.message}\n${JSON.stringify(await widths())}`); });
+    await expect.poll(() => cut(front(page))).toBe(false);
     expect(await cut(deskTabs(page).first())).toBe(true);
     await deskTabs(page).first().hover();
     await expect(page.getByRole("tooltip")).toContainText(names[0]!);

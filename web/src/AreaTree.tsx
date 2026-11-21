@@ -539,12 +539,23 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     apply(measure(), (update) => update());
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
-    // The selected name's width is the text's, which a font that finishes loading later changes with no box resized.
-    const fontsLoaded = () => apply(measure(), flushSync);
-    document.fonts?.addEventListener("loadingdone", fontsLoaded);
+    // The selected name's room is what the tab leaves beside its marks and controls, which can change after this
+    // measure (a mark or a control drawn a frame later); its title's box changing measures again on the next frame,
+    // which settles once the title holds its name. A font that finishes loading changes the text with no box resized.
+    let frame = 0;
+    const again = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => apply(measure(), flushSync));
+    };
+    const title = new ResizeObserver(again);
+    const selectedTitle = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"] [data-tab-title]');
+    if (selectedTitle) title.observe(selectedTitle);
+    document.fonts?.addEventListener("loadingdone", again);
     return () => {
       observer.disconnect();
-      document.fonts?.removeEventListener("loadingdone", fontsLoaded);
+      title.disconnect();
+      cancelAnimationFrame(frame);
+      document.fonts?.removeEventListener("loadingdone", again);
     };
   }, [tabCount, hasSelected, selectedId, selectedLabel, fits.selected]);
   // The shown view's tab stays in sight however many tabs the area holds
