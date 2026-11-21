@@ -138,22 +138,36 @@ test("of three panes the focused one is outlined, and ⇧⌘↩ draws it alone i
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
+    const tabRow = await page.locator("[data-tab-bar]").first().boundingBox();
+    const agents = await page.locator("[data-agent-area]").boundingBox();
+    if (!tabRow || !agents) throw new Error("the tab row and the Agent area are measured before focus mode");
 
     // A shell with nothing to show enters focus mode alone, as a pane zoom drew it (D-53, D-57).
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-pair-layer]")).toHaveAttribute("data-pair-alone", "true");
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
     await expect.poll(() => sent.get("pair_view")).toBe(1);
-    // The pane keeps the input perimeter, and its head wears the mode's line (D-58).
+    // The pane keeps the input perimeter; the band stands in the tab row's place with the pane's name and the way back (D-61).
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
-    await expect(shellPane.locator("[data-pane-pair-line]")).toBeVisible();
+    const band = page.locator("[data-pair-strip]");
+    await expect(band).toBeVisible();
+    await expect(band.locator("[data-pair-strip-name]")).not.toBeEmpty();
+    await expect(band.locator("[data-pair-leave]")).toBeVisible();
+    // The body is as tall as outside the mode: the band takes the tab row's place and height, and the pane fills the rest (D-61).
+    const bandBox = await band.boundingBox();
+    const paneBox = await shellPane.boundingBox();
+    if (!bandBox || !paneBox) throw new Error("the band and the pane are measured in focus mode");
+    expect(Math.abs(bandBox.y - tabRow.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bandBox.height - tabRow.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(paneBox.y - (tabRow.y + tabRow.height))).toBeLessThanOrEqual(1);
+    expect(Math.abs(paneBox.y + paneBox.height - (agents.y + agents.height))).toBeLessThanOrEqual(1);
     await screenshot(page, "layout-focus-alone");
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
     await expect.poll(() => sent.get("pair_view")).toBe(2);
-    await expect(page.locator("[data-pane-pair-line]")).toHaveCount(0);
+    await expect(page.locator("[data-pair-strip]")).toHaveCount(0);
   } finally {
     open.stack.stop();
   }
@@ -193,11 +207,12 @@ test("a right-click focuses its pane and opens the terminal menu, whose Focus mo
     const layer = page.locator(`[data-pair-layer="${shellPaneId}"]`);
     await expect(layer).toHaveAttribute("data-pair-alone", "true");
     await expect.poll(() => sent.get("pair_view")).toBe(1);
-    // The pane drawn alone takes the whole body, not just its own split cell.
+    // The pane drawn alone takes the whole body under the band, not just its own split cell (D-61).
     const layerBox = (await layer.boundingBox())!;
+    const bandBox = (await page.locator("[data-pair-strip]").boundingBox())!;
     const aloneBox = (await shellPane.boundingBox())!;
     expect(Math.abs(aloneBox.width - layerBox.width)).toBeLessThan(2);
-    expect(Math.abs(aloneBox.height - layerBox.height)).toBeLessThan(2);
+    expect(Math.abs(aloneBox.height - (layerBox.height - bandBox.height))).toBeLessThan(2);
     expect(Math.abs(aloneBox.x - layerBox.x)).toBeLessThan(2);
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(page.locator("[data-pair-layer]")).toHaveCount(0);

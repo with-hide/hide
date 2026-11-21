@@ -391,9 +391,6 @@ export const PaneView = memo(function PaneView({
           if (!owned) paneMenu.openAt(event.clientX, event.clientY);
         }}
       >
-        {/* The pane focus mode draws wears a two-pixel line of the mode's accent under its head, inside the head's height, so
-            entering moves no terminal; with the pressed ◧ it is how the screen says so (PRD lane-desk-pair-view D-58). */}
-        {pair === "on" ? <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 border-b-2 border-pair-view" data-pane-pair-line="true" /> : null}
         {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
             The left side is one row that gives up its width first and clips at its end, so the right side's controls stay whole at any width;
             below the pane head breakpoints its chips drop their words, then go, and the title keeps what is left.

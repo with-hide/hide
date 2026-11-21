@@ -289,8 +289,8 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
   // A terminal click leaves the desk where it is, closing only a floating
   // tool (D-50): the operator closes the lane with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
-  // In pair view the lane is the half beside the paired pane, under the tab
-  // row (PRD lane-desk-pair-view B17, D-16, D-58); it is the same
+  // In pair view the lane is the half beside the paired pane, under the band
+  // in the tab row's place (PRD lane-desk-pair-view B17, D-16, D-61); it is the same
   // element in every mode, so entering pair view mounts no desk again.
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
@@ -310,7 +310,7 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
         {/* The terminals attach once the body is measured, so a standing desk's reserve is in their first grid (D-50). */}
         {width > 0 ? <AgentArea checkout={checkout} actions={actions} /> : null}
       </div>
-      {pair !== null ? <PairLayer paneId={pair.pane_id} alone={pair.alone === true} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
+      {pair !== null ? <PairLayer checkout={checkout} paneId={pair.pane_id} alone={pair.alone === true} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its

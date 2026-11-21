@@ -624,10 +624,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    // In focus mode the desk button takes the keyboard to the desk beside the pane, and stands a folded
-    // desk first (D-46, D-57); ⌘E is what folds it.
-    if (pairBesideDesk(view)) return showDocuments(true);
-    if (drawnPair(view)) return showPairDesk(true);
+    // In focus mode the desk button is ⌘E: it folds the desk beside the pane and stands it again (D-57, D-63).
+    if (drawnPair(view)) return showPairDesk(pairBesideDesk(view) === null);
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
     showDocuments(true);
@@ -4045,9 +4043,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     keepViewOpen,
 
     focusView,
-    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward. */
+    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward; in focus mode a folded desk stands again for it (D-63). */
     revealView(displayId: string) {
-      showDocuments();
+      const view = workspaceViewOf(rest());
+      if (drawnPair(view) && !pairBesideDesk(view)) showPairDesk(true);
+      else showDocuments();
       focusView(displayId, true);
     },
     focusViewArea,

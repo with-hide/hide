@@ -20,7 +20,8 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
 import { workspaceKey } from "./viewLayout";
-import { TOOLS, TOOL_SCOPES, agentEntries, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
+import { TOOLS, TOOL_SCOPES, agentEntries, workspaceViewOf, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
+import { drawnPair } from "./pairView";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 
@@ -95,7 +96,12 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const uiState = useShellStore((s) => s.rest?.ui_state);
   const up = laneUp(drawn.mode);
   const documentsChord = commandLabel("toggle_lane_documents", uiState);
-  const documentsShown = up && drawn.view === "documents";
+  // In focus mode the button is the desk beside the pane, which it folds and stands as ⌘E does: pressed while the desk
+  // stands, and while folded it counts the left pane's Views, none for a pane with nothing to show (D-63).
+  const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
+  const pairViews = useShellStore((s) => (pair ? (workspaceViewOf(s.rest)?.feedback?.opened ?? []).filter((row) => row.pane_id === pair.pane_id).length : 0));
+  const documentsShown = pair ? pair.alone !== true : up && drawn.view === "documents";
+  const count = pair ? (documentsShown ? 0 : pairViews) : views;
   // The rail is always drawn, so the Hide AI tool's count reads its Project whichever tool shows.
   useMemoryProject(actions);
   return (
@@ -114,9 +120,9 @@ export function ToolRail({ actions }: { actions: Actions }) {
         >
           {documentsShown ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
           <FilesIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-          {views > 0 ? (
-            <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-primary px-xxs text-micro text-primary-foreground" data-lane-badge={views}>
-              {views}
+          {count > 0 ? (
+            <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-primary px-xxs text-micro text-primary-foreground" data-lane-badge={count}>
+              {count}
             </span>
           ) : null}
         </button>
