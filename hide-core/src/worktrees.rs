@@ -586,6 +586,14 @@ impl GitWatch {
         self.collect();
         !self.pending.is_empty()
     }
+
+    /// The projects marked and not settled yet, all of them at once: for a
+    /// read made while the watch rests, when no later report extends their
+    /// wait and nothing else settles them.
+    fn take_marked(&mut self) -> Vec<PathBuf> {
+        self.collect();
+        std::mem::take(&mut self.pending).into_keys().collect()
+    }
 }
 
 impl Drop for GitWatch {
@@ -765,6 +773,12 @@ impl WorktreeReader {
         if watched {
             self.git_watch.reconcile(&request.projects);
             self.owed.extend(self.git_watch.settled());
+        } else {
+            // A change the watch marked before it rested is owed now. Left
+            // marked, it would keep every answer from counting as current
+            // (`observations_current`), and the catalog a mission reads
+            // would not be replaced until a window came back.
+            self.owed.extend(self.git_watch.take_marked());
         }
         self.owed
             .retain(|root| request.projects.iter().any(|p| &p.root_path == root));
@@ -1641,6 +1655,45 @@ mod tests {
         assert_eq!(node.reads(), 3, "an explicit read is not held");
         // The node's watch ends before the reader, which then waits for none.
         drop(watch);
+    }
+
+    /// A change the watch had marked and not settled when the window closed
+    /// is read by the next read with no window, and that answer counts as
+    /// current: no later report extends the change's wait, and an answer
+    /// that never counted as current would never replace the catalog a
+    /// mission on a machine with no window reads.
+    #[test]
+    fn a_change_a_rested_watch_left_marked_is_read_with_no_window() {
+        let node = std::sync::Arc::new(Answering::new(Default::default()));
+        let mut reader = WorktreeReader::spaced(node.clone(), Duration::ZERO);
+        let request = WorktreeRequest {
+            projects: projects(&["/a"]),
+            generation: 0,
+            removals: 0,
+        };
+        let read = |reader: &mut WorktreeReader| {
+            let answer = reader.read_unwatched_if_due(request.clone());
+            answer.or_else(|| {
+                reader.inner.join_pending();
+                reader.read_unwatched_if_due(request.clone())
+            })
+        };
+        assert!(
+            read(&mut reader)
+                .expect("the first read")
+                .observations_current
+        );
+        assert_eq!(node.reads(), 1);
+
+        reader
+            .git_watch
+            .pending
+            .insert(PathBuf::from("/a"), Instant::now());
+        reader.rest();
+        let answer = read(&mut reader).expect("the marked change is read");
+        assert!(answer.observations_current);
+        assert_eq!(node.reads(), 2);
+        assert!(read(&mut reader).is_none(), "and read once");
     }
 
     /// A worktree Git cannot describe, or a repository it cannot list, is
