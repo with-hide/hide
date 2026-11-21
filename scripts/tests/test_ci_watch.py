@@ -173,12 +173,31 @@ class GivingUp(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertTrue(lines[-1].startswith("still running after 60 minutes"))
 
-    def test_an_unanswered_api_is_one_line_and_2(self):
+    def test_a_refused_read_is_asked_again_and_the_watch_goes_on(self):
+        github = GitHub([(run(), [failed("rust workspace / lint", "2026-11-21T12:06:00Z")])])
+        refusals = iter([watch.Unanswered("`gh api x` failed: API rate limit exceeded (HTTP 403)")] * 2)
+
+        def limited(path):
+            refusal = next(refusals, None)
+            if refusal is not None:
+                raise refusal
+            return github(path)
+
+        status, lines, sleeps = follow(limited)
+        self.assertEqual((status, sleeps), (1, 2))
+        self.assertEqual(sum("did not answer" in line for line in lines), 1, "a streak of refusals is said once")
+        self.assertTrue(lines[-3].startswith("failed: rust workspace / lint"))
+
+    def test_github_refusing_until_the_timeout_ends_the_watch_with_2(self):
         def refuse(path):
             raise watch.Unanswered("`gh api x` failed: HTTP 502")
 
-        self.assertEqual(watch.main(["--run", "7"], api=refuse), 2)
-
+        times = iter([0, 0, 61 * 60])
+        lines = []
+        status = watch.watch(refuse, arguments(timeout=60), sleep=lambda _: None, clock=lambda: next(times),
+                             out=lines.append)
+        self.assertEqual(status, 2)
+        self.assertEqual(lines[-1], "GitHub did not answer for the last reads of 60 minutes: `gh api x` failed: HTTP 502")
 
 if __name__ == "__main__":
     unittest.main()

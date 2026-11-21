@@ -17,9 +17,10 @@ of another workflow) when the run succeeds.
     python3 scripts/ci-watch.py --run <run id>
 
 Exit status: 0 the run passed, 1 a job failed, 2 the run ended otherwise (a
-newer push cancelled it) or the watch could not finish (GitHub did not answer,
-no run appeared, or `--timeout` passed). It asks GitHub's REST API through
-`gh api` only. CONTRIBUTING.md, Waiting for CI, says when to run it.
+newer push cancelled it) or `--timeout` passed first (no run appeared, the run
+still ran, or GitHub stopped answering). It asks GitHub's REST API through
+`gh api` only, and a read GitHub refuses, such as one past the rate limit
+every agent of an account shares, is asked again at the next poll. CONTRIBUTING.md, Waiting for CI, says when to run it.
 """
 import argparse
 import json
@@ -119,29 +120,38 @@ def judge(run, jobs):
 def watch(api, arguments, sleep=time.sleep, clock=time.monotonic, out=print):
     """Poll until the run is decided; the exit status."""
     deadline = clock() + arguments.timeout * 60
-    run = None
-    while run is None:
-        if arguments.run is not None:
-            run = api(f"repos/{{owner}}/{{repo}}/actions/runs/{arguments.run}")
-        else:
-            run = find_run(api, pr=arguments.pr, branch=arguments.branch, sha=arguments.sha)
-        if run is None:
-            # A run takes a few seconds to appear after a push.
-            if clock() >= deadline:
-                out(f"no {WORKFLOW} run appeared within {arguments.timeout} minutes")
-                return 2
-            sleep(arguments.interval)
-    out(f"watching run {run['id']} on {run['head_sha'][:10]}: {run['html_url']}")
+    run_id = refused = None
     while True:
-        run = api(f"repos/{{owner}}/{{repo}}/actions/runs/{run['id']}")
-        verdict = judge(run, run_jobs(api, run["id"]))
-        if verdict is not None:
-            status, lines = verdict
-            for line in lines:
-                out(line)
-            return status
+        try:
+            if run_id is None:
+                found = (api(f"repos/{{owner}}/{{repo}}/actions/runs/{arguments.run}") if arguments.run is not None
+                         else find_run(api, pr=arguments.pr, branch=arguments.branch, sha=arguments.sha))
+                if found is not None:
+                    run_id = found["id"]
+                    out(f"watching run {run_id} on {found['head_sha'][:10]}: {found['html_url']}")
+            if run_id is not None:
+                run = api(f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}")
+                verdict = judge(run, run_jobs(api, run_id))
+                if verdict is not None:
+                    status, lines = verdict
+                    for line in lines:
+                        out(line)
+                    return status
+            refused = None
+        except Unanswered as error:
+            # GitHub's rate limit, which every agent of an account shares, or
+            # a server error: the read is asked again at the next poll, and
+            # only the timeout ends the watch on it.
+            if refused is None:
+                out(f"GitHub did not answer; asking again every {arguments.interval} s: {error}")
+            refused = error
         if clock() >= deadline:
-            out(f"still running after {arguments.timeout} minutes: {run['html_url']}")
+            if refused is not None:
+                out(f"GitHub did not answer for the last reads of {arguments.timeout} minutes: {refused}")
+            elif run_id is None:
+                out(f"no {WORKFLOW} run appeared within {arguments.timeout} minutes")
+            else:
+                out(f"still running after {arguments.timeout} minutes: run {run_id}")
             return 2
         sleep(arguments.interval)
 
@@ -158,11 +168,7 @@ def main(argv=None, api=gh_api):
     arguments = parser.parse_args(argv)
     if arguments.sha and arguments.branch is None:
         parser.error("--sha goes with --branch")
-    try:
-        return watch(api, arguments)
-    except Unanswered as error:
-        print(f"ci-watch: {error}", file=sys.stderr)
-        return 2
+    return watch(api, arguments)
 
 
 if __name__ == "__main__":
