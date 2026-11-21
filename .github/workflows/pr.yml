@@ -52,17 +52,18 @@
 # macOS-only failure there does not stop merges but is fixed before the next
 # release (CONTRIBUTING.md, When main's push run fails).
 # The same holds for Windows (operator decision 2026-11-21; docs/TESTING.md,
-# Where the Windows runners went): a pull request takes a Windows runner only
-# when it changes a Windows path (`scripts/ci-plan.py`, WINDOWS_PATHS and
-# `windows_path`: Windows-only code, ConPTY, PowerShell, WSL, the package
-# inputs, a crate's manifest, a path no rule narrows and the CI that defines
-# these jobs). Such a pull request runs the Windows jobs its paths plan:
-# `windows check`, `windows e2e`, `windows desktop`, `windows wsl`, `agy
-# contract`, and the Windows legs of `relay protocol`, `os contract`, `vt`,
-# `holder restart`, `omp SDK`, `agent journey` and `agent CLIs` (`plan`'s
-# `windows` output). Every other pull request runs none, and main's push run
-# and the nightly run them all; a Windows-only failure there does not stop
-# merges but is fixed before the next release.
+# Where the Windows runners went), decided per lane: a pull request runs a
+# Windows job only when it changes a path that job proves (`scripts/ci-plan.py`,
+# `windows_lanes`: Rust code that holds Windows code runs `windows check` and
+# the Windows legs of its crate's lanes, web code with a Windows form the
+# Windows e2e suites, a package input `package`, and CI definitions or a path
+# no rule narrows every Windows job). `windows check`, `windows e2e`,
+# `windows desktop`, `windows wsl` and `agy contract` are planned or not as
+# lanes; the Windows legs of `relay protocol`, `os contract`, `vt`, `holder
+# restart`, `omp SDK`, `agent journey` and `agent CLIs` follow `plan`'s
+# `windows-legs`. Main's push run and the nightly run every Windows job; a
+# Windows-only failure there does not stop merges but is fixed before the
+# next release.
 # `vt`, `omp SDK` and `compile (macos)`, which need no screen, keychain or
 # login session, run on the operator's Mac mini instead when the repository
 # variable HIDE_MACOS_CI_RUNNER names it, except for a fork's pull request
@@ -161,12 +162,11 @@ jobs:
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
       # macOS-only lanes out and the lanes below run without their macOS leg.
       macos: ${{ steps.plan.outputs.macos }}
-      # Whether this run takes a Windows runner: `true` for main's push run,
-      # the nightly and a pull request that changes a Windows path
-      # (`scripts/ci-plan.py`, WINDOWS_PATHS and `windows_path`); otherwise
-      # the plan leaves the Windows-only lanes out and the lanes below run
-      # without their Windows leg.
-      windows: ${{ steps.plan.outputs.windows }}
+      # The lanes whose Windows leg this run takes (a JSON list): every one for
+      # main's push run and the nightly; for a pull request, the ones whose
+      # Windows job proves a Windows path it changes (`scripts/ci-plan.py`,
+      # `windows_lanes`). The Windows-only lanes follow the plan's lanes.
+      windows-legs: ${{ steps.plan.outputs.windows-legs }}
       # Whether `policy` runs only the checks that read the pull request's
       # body: `true` for a body edit whose last green run checked this same
       # head, where the script suite and the structural checks already passed.
@@ -1036,7 +1036,7 @@ jobs:
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
-      systems: ${{ format('["linux"{0}]', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}]', contains(fromJSON(needs.plan.outputs.windows-legs), 'os-contract') && ',"windows"' || '') }}
     permissions:
       contents: read
 
@@ -1066,7 +1066,7 @@ jobs:
     secrets:
       HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
-      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', contains(fromJSON(needs.plan.outputs.windows-legs), 'vt') && ',"windows"' || '') }}
       macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
@@ -1082,7 +1082,7 @@ jobs:
     if: contains(fromJSON(needs.plan.outputs.lanes), 'holder-restart')
     uses: ./.github/workflows/holder-restart.yml
     with:
-      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', contains(fromJSON(needs.plan.outputs.windows-legs), 'holder-restart') && ',"windows"' || '') }}
     permissions:
       contents: read
 
@@ -1096,7 +1096,7 @@ jobs:
     if: contains(fromJSON(needs.plan.outputs.lanes), 'omp-contract')
     uses: ./.github/workflows/omp-contract.yml
     with:
-      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}{1}]', needs.plan.outputs.macos == 'true' && ',"macos"' || '', contains(fromJSON(needs.plan.outputs.windows-legs), 'omp-contract') && ',"windows"' || '') }}
       macos-runner: ${{ needs.plan.outputs.self-hosted-macos }}
     permissions:
       contents: read
@@ -1125,7 +1125,7 @@ jobs:
     uses: ./.github/workflows/agent-journey.yml
     with:
       # The Windows forms only when `plan` says the run takes Windows.
-      systems: ${{ format('["linux"{0}]', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}]', contains(fromJSON(needs.plan.outputs.windows-legs), 'agent-journey') && ',"windows"' || '') }}
     permissions:
       contents: read
 
@@ -1139,7 +1139,7 @@ jobs:
     uses: ./.github/workflows/agent-clis.yml
     with:
       # The Windows install only when `plan` says the run takes Windows.
-      systems: ${{ format('["linux"{0}]', needs.plan.outputs.windows == 'true' && ',"windows"' || '') }}
+      systems: ${{ format('["linux"{0}]', contains(fromJSON(needs.plan.outputs.windows-legs), 'agent-clis') && ',"windows"' || '') }}
     permissions:
       contents: read
 
@@ -1285,7 +1285,7 @@ jobs:
     secrets: inherit
     with:
       include-macos: ${{ needs.plan.outputs.macos == 'true' }}
-      include-windows: ${{ needs.plan.outputs.windows == 'true' }}
+      include-windows: ${{ contains(fromJSON(needs.plan.outputs.windows-legs), 'relay-protocol') }}
 
   verify:
     name: verify

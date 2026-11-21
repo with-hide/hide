@@ -2,9 +2,11 @@
 import importlib.util
 from fnmatch import fnmatchcase
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -996,7 +998,7 @@ def runner_jobs(block):
         # A lane whose macOS or Windows leg follows the plan; the most is every leg.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
         if systems.startswith("${{"):
-            return len(json.loads(evaluate(systems[3:-2], "true", "true")))
+            return len(json.loads(evaluate(systems[3:-2], "true")))
         return len(json.loads(systems.strip("'")))
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
@@ -1010,7 +1012,7 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/agent-journey.yml" in block:
         # Stand-ins run on each system but Windows; Windows has its forms job.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
-        systems = json.loads(evaluate(systems[3:-2], "true", "true") if systems.startswith("${{") else systems.strip("'"))
+        systems = json.loads(evaluate(systems[3:-2], "true") if systems.startswith("${{") else systems.strip("'"))
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
@@ -1174,12 +1176,13 @@ def pr_plan(*paths, status="M"):
     return ci.pull_request_systems(ci.select(entries, CRATES, ROOT), entries, CRATES, ROOT)
 
 
-def evaluate(expression, macos, windows="true"):
-    """A `pr.yml` expression evaluated for the plan's `macos` and `windows`
-    outputs, the way the concurrency test evaluates its condition; `format`
-    is GitHub's, whose `{0}` placeholders are Python's."""
-    code = (expression.replace("needs.plan.outputs.macos", repr(macos)).replace("needs.plan.outputs.windows", repr(windows))
-            .replace("&&", " and ").replace("||", " or "))
+def evaluate(expression, macos, legs=ci.WINDOWS_LEG_LANES):
+    """A `pr.yml` expression evaluated for the plan's `macos` and
+    `windows-legs` outputs, the way the concurrency test evaluates its
+    condition; `format` is GitHub's, whose `{0}` placeholders are Python's."""
+    code = re.sub(r"contains\(fromJSON\(needs\.plan\.outputs\.windows-legs\), '([a-z-]+)'\)",
+                  lambda found: repr(found.group(1) in legs), expression)
+    code = code.replace("needs.plan.outputs.macos", repr(macos)).replace("&&", " and ").replace("||", " or ")
     return eval(code, {"__builtins__": {}, "format": lambda text, *values: text.format(*values)})
 
 
@@ -1320,6 +1323,487 @@ class MacosOnPullRequests(unittest.TestCase):
         self.assertEqual(set(ci.MACOS_ONLY_LANES) | set(ci.MACOS_LEG_LANES), MACOS_LANES)
 
 
+# What recently merged pull requests changed, as `git diff --name-status`
+# against main listed it (read from GitHub, 2026-11-21): the cases the
+# Windows rule was decided on. They are read here a whole file at a time, as
+# the plan reads a pull request whose diff it cannot read; `RustChange`
+# below reads a change against a file's Windows items. A file a later change
+# gives Windows code moves its pull request to WINDOWS_PULL_REQUESTS, which
+# is the rule working.
+NO_WINDOWS_PULL_REQUESTS = {
+    # A core runtime fix with its tests and the guide.
+    2785: (("M", "docs/UI_BEHAVIOR.md"), ("M", "hide-core/src/runtime/automations.rs"),
+           ("M", "hide-core/src/runtime/tests/desk_views.rs"), ("M", "hide-core/src/runtime/unseen_views.rs"),
+           ("M", "hide-core/src/runtime/view_areas.rs")),
+    2789: (("M", "docs/ARCHITECTURE.md"), ("M", "docs/PERFORMANCE_TESTING.md"), ("M", "hide-core/src/runtime/agent_areas.rs"),
+           ("M", "hide-core/src/runtime/session.rs"), ("M", "hide-core/src/runtime/tests/agent_areas.rs"),
+           ("M", "hide-core/src/workspace_views.rs")),
+    # A core change with a new web e2e spec that is not tagged `@platform`.
+    2787: (("M", "docs/ARCHITECTURE.md"), ("M", "hide-core/src/runtime/agent_sleep.rs"),
+           ("M", "hide-core/src/runtime/agent_sleep/dormant.rs"), ("M", "hide-core/src/runtime/agent_sleep/letters.rs"),
+           ("M", "hide-core/src/runtime/tests/agent_sleep.rs"), ("A", "web/e2e/sleeping-tab-live-elsewhere.spec.ts")),
+    # A web e2e spec tagged `@platform`, with the core and the shell: the
+    # Linux suite runs it, its Windows leg runs on main.
+    2781: (("M", "hide-core/src/runtime/detail.rs"), ("A", "web/e2e/card-keyboard.spec.ts"), ("M", "web/src/ViewAreas.tsx"),
+           ("M", "web/src/ws.ts")),
+    # A web screen, its tokens and the guide.
+    2774: (("M", "design/tokens.json"), ("M", "docs/UI_BEHAVIOR.md"), ("M", "web/src/AutomationScreen.tsx"),
+           ("M", "web/src/tokens.css")),
+    2725: (("M", "docs/ARCHITECTURE.md"), ("M", "hide-core/src/runtime/automations.rs"),
+           ("M", "hide-core/src/runtime/tests/automations.rs")),
+    2713: (("M", "docs/delivery.md"), ("M", "hide-core/src/coordination/mod.rs"), ("M", "hide-core/src/coordination/room.rs"),
+           ("M", "hide-core/src/delivery/ledger.rs"), ("M", "hide-core/src/delivery/watch.rs"),
+           ("M", "hide-core/src/delivery/worker.rs")),
+    # A CLI command of hided, its help, its test and the user docs' notes.
+    2698: (("M", "hided/assets/automation/help.md"), ("M", "hided/assets/guide.md"), ("M", "hided/src/automation_cli.rs"),
+           ("M", "hided/tests/it/automations.rs"), ("M", "site/src/data/cli-notes.json")),
+    # The core and the phone's daemon side.
+    2697: (("M", "docs/ARCHITECTURE.md"), ("M", "hide-core/src/agent_state/tally/phone/automations.rs"),
+           ("M", "hide-core/src/automations.rs"), ("M", "hide-core/src/runtime/automations.rs"),
+           ("M", "hide-core/src/runtime/tests/automations.rs"), ("M", "hide-core/src/runtime/usage_ledger.rs"),
+           ("M", "hided/src/mobile/phone.rs")),
+    # The core with an added test fixture.
+    2757: (("M", "docs/AI_PROVIDERS.md"), ("M", "docs/ARCHITECTURE.md"), ("M", "hide-core/src/runtime/automations.rs"),
+           ("M", "hide-core/src/runtime/tests/automations.rs"), ("M", "hide-core/src/usage.rs"),
+           ("M", "hide-core/src/usage/limits/claude.rs"), ("M", "hide-core/src/usage/limits/tests.rs"),
+           ("A", "hide-core/tests/fixtures/claude-usage/cost-2.1.329.json")),
+    # Documentation alone.
+    2747: (("M", "docs/BUILD.md"),),
+    # The core, the web shell and a web unit test.
+    2738: (("M", "docs/UI_BEHAVIOR.md"), ("M", "hide-core/src/missions.rs"), ("M", "hide-core/src/runtime/events.rs"),
+           ("M", "hide-core/src/runtime/mission_health.rs"), ("M", "hide-core/src/runtime/missions.rs"),
+           ("M", "hide-core/src/runtime/tests/missions.rs"), ("M", "web/src/actions.ts"),
+           ("M", "web/src/components/sidebar-mission-row.test.tsx"), ("M", "web/src/components/sidebar-mission-row.tsx")),
+}
+# Each with the Windows jobs that prove what it changed, beside the
+# `package` lane when it changes a package input.
+RUST_LEGS = {"windows-check", "os-contract"}
+WINDOWS_PULL_REQUESTS = {
+    # `hide-platform`'s host code with its Windows form: `windows check`, and
+    # the Windows legs of the platform layer's lanes (its WSL link among them).
+    2794: ((("M", "docs/ARCHITECTURE.md"), ("M", "docs/INSTALL.md"), ("M", "hide-holder/src/pane_env.rs"),
+            ("M", "hide-platform/src/host.rs"), ("M", "hide-platform/tests/it/host.rs")),
+           {"windows-check", "windows-wsl", "os-contract", "omp-contract"}),
+    # A Windows device's PowerShell bootstrap in the device link.
+    2791: ((("M", "docs/ARCHITECTURE.md"), ("M", "hide-node/src/ssh/bootstrap.ps1"), ("M", "hide-node/src/ssh/bootstrap.rs"),
+            ("M", "hide-node/src/ssh/bootstrap_tests.rs"), ("M", "hide-node/src/ssh/bootstrap_windows_tests.rs")),
+           {"windows-check", "windows-wsl"}),
+    # The package manager's workspace file, which no rule narrows: every Windows job.
+    2704: ((("M", "pnpm-workspace.yaml"),), set(ci.WINDOWS_LANES) - {"holder-restart", "agent-clis"}),
+    # The workflow that defines the Windows jobs: every one.
+    2612: ((("M", ".github/workflows/pr.yml"),), set(ci.WINDOWS_LANES)),
+    # The hooks the Windows installer carries, with no Windows code: `package` alone.
+    2684: ((("M", "docs/agent-hooks.md"), ("M", "hide-agent-hooks/src/memory.rs"), ("M", "hide-agent-hooks/src/plugin/helper.rs"),
+            ("M", "hide-core/src/handle.rs"), ("A", "hide-core/src/links/session_brief.rs"), ("M", "hide-memory/src/hook.rs"),
+            ("M", "hided/src/core.rs")),
+           set()),
+    # The core's engine, whose file holds a Windows form: not the e2e suites.
+    2788: ((("M", "docs/status-model.md"), ("M", "hide-core/src/delivery/ladder.rs"), ("M", "hide-core/src/engine/fake.rs"),
+            ("M", "hide-core/src/engine/mod.rs"), ("M", "hided/src/mobile/pane.rs")),
+           RUST_LEGS),
+    # The pane holder, whose PTY is ConPTY on Windows: its vt and restart legs.
+    2753: ((("M", "docs/status-model.md"), ("M", "hide-holder-protocol/src/lib.rs"), ("M", "hide-holder/src/holder.rs"),
+            ("M", "hide-holder/tests/it/watch.rs")),
+           {"windows-check", "vt", "holder-restart"}),
+    # A crate's manifest and the platform layer's process code.
+    2723: ((("M", "AGENTS.md"), ("M", "hide-platform/Cargo.toml"), ("M", "hide-platform/src/process.rs"),
+            ("A", "hide-platform/src/process/open_files.rs"), ("M", "hided/src/server.rs")),
+           {"windows-check", "windows-wsl", "os-contract", "omp-contract"}),
+    # The desktop host's environment, read differently on Windows: its unit
+    # suite in `windows check` and the Windows desktop suite.
+    2755: ((("M", "desktop/src/main/env.ts"), ("M", "desktop/src/main/env.test.ts"), ("M", "web/src/App.tsx")),
+           {"windows-check", "windows-desktop"}),
+    # The keyboard, whose Windows form differs: the Windows e2e suites, not `windows check`.
+    2680: ((("M", "web/src/keyboard.ts"), ("M", "web/src/Sidebar.tsx")), {"windows-e2e", "windows-desktop"}),
+}
+
+
+def system_legs(expression, macos, legs):
+    """The systems a `pr.yml` lane's leg expression names for the plan's outputs."""
+    return json.loads(evaluate(expression, macos, legs))
+
+
+class WindowsOnPullRequests(unittest.TestCase):
+    """A pull request runs a Windows job only for a path that job proves; main and the nightly run every one."""
+
+    def assertNoWindows(self, result):
+        self.assertEqual(result["windows"]["lanes"], [])
+        self.assertFalse(set(result["lanes"]) & set(ci.WINDOWS_ONLY_LANES))
+        # `verify` passes with the Windows-only lanes skipped, and fails if one ran.
+        ci.aggregate(needs_for(result))
+        for lane in ci.WINDOWS_ONLY_LANES:
+            with self.assertRaises(ValueError):
+                ci.aggregate(needs_for(result, **{lane: "success"}))
+
+    def test_recent_pull_requests_without_a_windows_path_plan_no_windows_job(self):
+        dropped = set()
+        for number, entries in NO_WINDOWS_PULL_REQUESTS.items():
+            with self.subTest(pr=number):
+                result = ci.pull_request_systems(ci.select(list(entries), CRATES, ROOT), list(entries), CRATES, ROOT)
+                self.assertNoWindows(result)
+                self.assertFalse(result["windows"]["runs"])
+                self.assertIn("main's push run and the nightly run the Windows jobs", result["windows"]["why"][0])
+                self.assertIn("Windows jobs: skipped", ci.summary(result))
+                # What the paths plan otherwise stays: only the Windows and macOS jobs go.
+                paths = ci.select(list(entries), CRATES, ROOT)["lanes"]
+                self.assertEqual(result["lanes"], [lane for lane in paths if lane not in ci.WINDOWS_ONLY_LANES + ci.MACOS_ONLY_LANES])
+                dropped |= set(paths) & set(ci.WINDOWS_ONLY_LANES)
+        # Before the rule these pull requests waited for `windows check` and the Windows suites.
+        self.assertTrue({"windows-check", "windows-e2e", "windows-desktop"} <= dropped)
+
+    def test_recent_pull_requests_with_a_windows_path_plan_the_windows_jobs_that_prove_it(self):
+        for number, (entries, proved) in WINDOWS_PULL_REQUESTS.items():
+            with self.subTest(pr=number):
+                result = ci.pull_request_systems(ci.select(list(entries), CRATES, ROOT), list(entries), CRATES, ROOT)
+                self.assertTrue(result["windows"]["runs"])
+                self.assertEqual(set(result["windows"]["lanes"]), proved)
+                self.assertEqual(set(result["lanes"]) & set(ci.WINDOWS_ONLY_LANES), proved & set(ci.WINDOWS_ONLY_LANES))
+                # `verify` requires each planned Windows-only lane and refuses the others.
+                ci.aggregate(needs_for(result))
+                for lane in ci.WINDOWS_ONLY_LANES:
+                    with self.assertRaises(ValueError):
+                        ci.aggregate(needs_for(result, **{lane: "skipped" if lane in proved else "success"}))
+        # A package input runs `package`, which builds the Windows installer.
+        self.assertIn("package", pr_plan("hide-agent-hooks/src/memory.rs")["lanes"])
+
+    def test_main_pushes_the_nightly_and_unreadable_plans_run_every_windows_job(self):
+        for event in ("push", "schedule", "workflow_dispatch", "workflow_call"):
+            with self.subTest(event=event):
+                result = ci.plan(event, None, None, ROOT)
+                self.assertTrue(result["windows"]["runs"])
+                self.assertEqual(result["windows"]["lanes"], list(ci.WINDOWS_LANES))
+                self.assertEqual(result["lanes"], FULL)
+                self.assertTrue(set(ci.WINDOWS_ONLY_LANES) <= set(result["lanes"]))
+        # The nightly owns agy in its own job on every system; the other Windows lanes are verify's.
+        nightly = ci.plan("schedule", None, None, ROOT, nightly_agent_checks=True)
+        self.assertEqual(nightly["windows"]["lanes"], list(ci.WINDOWS_LANES))
+        self.assertTrue(set(ci.WINDOWS_ONLY_LANES) - {"agy-contract"} <= set(nightly["lanes"]))
+        unreadable = ci.plan("pull_request", "0" * 40, "HEAD", ROOT)
+        self.assertEqual(unreadable["windows"]["lanes"], list(ci.WINDOWS_LANES))
+        self.assertIn("comparison unavailable", unreadable["windows"]["why"][0])
+        self.assertTrue(ci.windows_path("T", "web/src/store.ts", CRATES))
+
+    def test_a_merge_group_and_a_draft_plan_no_windows_job(self):
+        group = ci.plan("merge_group", None, None, ROOT)
+        self.assertEqual(group["lanes"], list(ci.MERGE_GROUP_LANES))
+        self.assertEqual(group["windows"], {"runs": False, "lanes": [], "why": ["merge group: no Windows job"]})
+        draft = ci.plan("pull_request", None, None, ROOT, draft=True)
+        self.assertEqual(draft["lanes"], [])
+        self.assertFalse(draft["windows"]["runs"])
+
+    def test_each_kind_of_windows_path_plans_the_windows_jobs_that_prove_it(self):
+        every = set(ci.WINDOWS_LANES)
+        for path, proved in (
+            # CI that defines the Windows jobs, and this plan: every one.
+            (".github/workflows/web-e2e.yml", every), (".github/actions/windows-fixture-path/action.yml", every),
+            ("scripts/ci-plan.py", every),
+            # A path no rule narrows: every Windows job its plan has.
+            ("mystery/file.txt", every - {"holder-restart", "agent-clis"}),
+            # Rust: `windows check` and the Windows legs of the crate's lanes, not the e2e suites.
+            ("Cargo.lock", every - {"windows-e2e", "windows-desktop", "agent-journey", "holder-restart", "agent-clis"}),
+            ("hide-core/Cargo.toml", RUST_LEGS), ("hided/build.rs", RUST_LEGS),
+            ("hide-platform/src/process.rs", {"windows-check", "windows-wsl", "os-contract", "omp-contract"}),
+            ("hide-shell/src/lib.rs", {"windows-check"}),
+            ("vendor/portable-pty/src/win/conpty.rs", {"windows-check", "vt", "holder-restart"}),
+            ("hide-node/src/ssh/wsl.rs", {"windows-check", "windows-wsl"}),
+            ("hide-kit/src/cli_windows.rs", {"windows-check", "windows-wsl", "agy-contract", "os-contract"}),
+            # Pinned ConPTY: the legs that fetch it and the Windows e2e's own-engine job.
+            ("contracts/conpty.json", {"windows-e2e", "vt", "holder-restart"}),
+            # Web code whose Windows form differs: the Windows e2e suites.
+            ("web/src/keys.ts", {"windows-e2e", "windows-desktop"}),
+            ("web/src/revealExternal.ts", {"windows-e2e", "windows-desktop"}),
+            ("web/e2e/windows-command.ts", {"windows-check", "windows-e2e", "windows-desktop"}),
+            # The desktop host's Windows code: its unit suite, the Windows desktop
+            # suite, and the Windows web suite, whose specs import the wire path.
+            ("desktop/src/main/wirePath.ts", {"windows-check", "windows-desktop", "windows-e2e"}),
+            # The journey's Windows forms.
+            ("scripts/tests/test_agent_live_windows.py", {"agent-journey"}),
+            ("scripts/agent_live_check/windows.py", {"agent-journey", "holder-restart"}),
+            # The installer's Windows smoke: `package`, which builds and starts it.
+            ("desktop/scripts/smoke-windows-installer.mjs", set()),
+        ):
+            with self.subTest(path=path):
+                result = pr_plan(path)
+                self.assertTrue(result["windows"]["runs"], result["windows"])
+                self.assertEqual(set(result["windows"]["lanes"]), proved)
+                self.assertIn("Windows jobs: run", ci.summary(result))
+        # A deleted code file cannot be read for its Windows code; a change that is
+        # not an add, modify or delete is unreadable.
+        self.assertIn("windows-check", pr_plan("hide-core/src/missions.rs", status="D")["lanes"])
+        self.assertTrue(ci.windows_path("T", "docs/TESTING.md", CRATES))
+
+    def test_what_no_windows_job_proves_plans_none(self):
+        for status in ("A", "M"):
+            for path in (
+                "docs/TESTING.md", "AGENTS.md", "design/tokens.json", "site/src/content/docs/docs/start/install-windows.md",
+                "scripts/tests/test_fetch_conpty.py", "agents/prd/x.md",
+                # Code with no Windows form: the core, the shell, the desktop host's shared code, specs.
+                "hide-core/src/missions.rs", "web/src/store.ts", "web/src/App.tsx", "desktop/src/main/windowState.ts",
+                "web/e2e/sleeping-tab-live-elsewhere.spec.ts", "web/e2e/card-keyboard.spec.ts", "mobile/android/app/build.gradle",
+            ):
+                with self.subTest(status=status, path=path):
+                    self.assertNoWindows(pr_plan(path, status=status))
+        # A CI definition with no Windows job a pull request runs plans no
+        # Windows lane; `package`, which every CI edit plans, takes its own.
+        for path in (".github/workflows/agent-canary.yml", ".github/workflows/nightly.yml"):
+            with self.subTest(path=path):
+                self.assertNoWindows(pr_plan(path))
+        self.assertNoWindows(pr_plan("docs/TESTING.md", "design/tokens.json", status="D"))
+
+    def test_every_package_input_runs_the_package_lane_and_its_windows_jobs(self):
+        # `package` builds the Windows installer and the Windows device kit and has no form without them.
+        tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        for pattern in ci.PACKAGE_PATHS:
+            with self.subTest(pattern=pattern):
+                name = next(name for name in tracked if fnmatchcase(name, pattern) and not ci.is_unit_test(name))
+                result = pr_plan(name)
+                self.assertIn("package", result["lanes"])
+                self.assertTrue(result["windows"]["runs"])
+                self.assertIn("Windows jobs: run", ci.summary(result))
+
+    def test_every_windows_path_names_a_tracked_file_and_the_marker_finds_windows_code(self):
+        tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        for pattern in ci.WINDOWS_PATHS + ci.WINDOWS_LAYER:
+            with self.subTest(pattern=pattern):
+                self.assertTrue(any(fnmatchcase(name, pattern) for name in tracked), f"{pattern} names no file")
+        marked = {name for name in tracked if name.endswith(ci.CODE_SUFFIXES) and name.startswith(("hide-platform/", "desktop/src/main/"))
+                  and ci.WINDOWS_CODE.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))}
+        self.assertTrue({"hide-platform/src/process.rs", "hide-platform/src/host.rs", "desktop/src/main/wirePath.ts"} <= marked)
+        # The macOS and Linux login items, and a window's bounds, are no Windows form.
+        self.assertFalse({"hide-platform/src/user_agents/launchd.rs", "hide-platform/src/user_agents/systemd.rs",
+                          "desktop/src/main/windowState.ts"} & marked)
+        for code, windows in (('#[cfg(windows)]\nfn a() {}', True), ('#[cfg(any(windows, target_os = "linux"))]', True),
+                              ('#[cfg_attr(windows, path = "w.rs")]', True), ('#[cfg(target_os = "windows")]', True),
+                              ('use std::os::windows::fs::OpenOptionsExt;', True), ('process.platform === "win32"', True),
+                              ('if os.name == "nt":', True), ("if os.name != 'nt':", True),
+                              ('test("x", { tag: "@platform" })', False), ('#[cfg(unix)]\nfn a() {}', False),
+                              ('let windows = 2;', False), ('// Windows Terminal', False), ('windows_sys::Win32', False)):
+            with self.subTest(code=code):
+                self.assertEqual(bool(ci.WINDOWS_CODE.search(code)), windows)
+
+    def test_every_workflow_a_pull_request_runs_on_windows_is_a_windows_path(self):
+        jobs = pr_jobs()
+        called = {re.search(r"uses: \./\.github/workflows/(\S+\.yml)", block).group(1)
+                  for block in jobs.values() if "uses: ./.github/workflows/" in block}
+        for name in sorted(called):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            if "windows-latest" in text:
+                with self.subTest(workflow=name):
+                    self.assertTrue(ci.windows_path("M", f".github/workflows/{name}", CRATES))
+        # `repeat.yml` and `remote-mailbox.yml` run on Linux in a pull request.
+        for name in ("repeat.yml", "remote-mailbox.yml"):
+            self.assertIsNone(ci.windows_path("M", f".github/workflows/{name}", CRATES))
+            self.assertTrue(pr_plan(f".github/workflows/{name}")["full"])
+
+    def test_only_the_windows_lanes_name_a_windows_runner(self):
+        # Every pr.yml job that can start a Windows runner is a Windows-only lane,
+        # a lane with a Windows leg, or `package`; `windows wsl` and `package`
+        # call workflows that name their Windows runners themselves.
+        for lane, block in pr_jobs().items():
+            with self.subTest(lane=lane):
+                body = "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
+                names_windows = bool(re.search(r"windows-latest|\"windows\"|include-windows:|wsl-device\.yml|package\.yml", body))
+                self.assertEqual(names_windows, lane in set(ci.WINDOWS_LANES) | {"package"})
+
+    def test_pr_yml_runs_the_windows_legs_the_plan_names(self):
+        jobs = pr_jobs()
+        self.assertIn("windows-legs: ${{ steps.plan.outputs.windows-legs }}", jobs["plan"])
+        for lane in ("vt", "holder-restart", "omp-contract"):
+            with self.subTest(lane=lane):
+                expression = re.search(r"\n      systems: \$\{\{(.+?)\}\}", jobs[lane]).group(1)
+                self.assertEqual(system_legs(expression, "true", [lane]), ["linux", "macos", "windows"])
+                self.assertEqual(system_legs(expression, "false", [lane]), ["linux", "windows"])
+                self.assertEqual(system_legs(expression, "true", []), ["linux", "macos"])
+                # Another lane's Windows leg is not this one's.
+                self.assertEqual(system_legs(expression, "false", ["os-contract"] if lane != "os-contract" else []), ["linux"])
+        for lane in ("os-contract", "agent-journey", "agent-clis"):
+            with self.subTest(lane=lane):
+                expression = re.search(r"\n      systems: \$\{\{(.+?)\}\}", jobs[lane]).group(1)
+                self.assertEqual(system_legs(expression, "true", [lane]), ["linux", "windows"])
+                self.assertEqual(system_legs(expression, "true", ["vt"]), ["linux"])
+        relay = re.search(r"\n      include-windows: \$\{\{(.+?)\}\}", jobs["relay-protocol"]).group(1)
+        self.assertIs(evaluate(relay, "true", ["relay-protocol"]), True)
+        self.assertIs(evaluate(relay, "true", ["vt"]), False)
+        workflow = (ROOT / ".github/workflows/relay-protocol.yml").read_text()
+        matrix = re.search(r"\n        os: \$\{\{ fromJSON\((.+?)\) \}\}", workflow).group(1)
+        for macos, windows, systems in ((True, True, ["ubuntu-latest", "windows-latest", "macos-15"]),
+                                        (False, True, ["ubuntu-latest", "windows-latest"]),
+                                        (True, False, ["ubuntu-latest", "macos-15"]), (False, False, ["ubuntu-latest"])):
+            code = (matrix.replace("inputs.include-windows", repr(windows)).replace("inputs.include-macos", repr(macos))
+                    .replace("&&", " and ").replace("||", " or "))
+            self.assertEqual(json.loads(eval(code, {"__builtins__": {}, "format": lambda text, *values: text.format(*values)})), systems)
+        # The Windows-only lanes follow the plan's lanes, which leave them out.
+        for lane in ci.WINDOWS_ONLY_LANES:
+            self.assertIn(f"if: contains(fromJSON(needs.plan.outputs.lanes), '{lane}')", jobs[lane])
+        self.assertIn("systems: '[\"windows\"]'", jobs["agy-contract"])
+
+    def test_the_plan_writes_the_windows_legs_pr_yml_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pr = PullRequest(directory)
+            pr.commit("main", "base", {"docs/a.md": "one\n"})
+            pr.git("checkout", "-qb", "topic")
+            pr.commit("topic", "relay", {"hide-relay-protocol/src/lib.rs": '#[cfg(windows)]\nfn a() {}\n'})
+            pr.check_out_merge()
+            output = Path(directory) / "output"
+            subprocess.run([sys.executable, str(ROOT / "scripts/ci-plan.py"), "plan", "--event", "pull_request"],
+                           cwd=directory, check=True, capture_output=True,
+                           env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", ""), "GITHUB_OUTPUT": str(output)})
+            written = dict(row.split("=", 1) for row in output.read_text().splitlines())
+            # The crate graph comes from this checkout, which has no workspace, so every lane is planned.
+            self.assertEqual(json.loads(written["windows-legs"]), list(ci.WINDOWS_LEG_LANES))
+            self.assertEqual(written["body-only"], "false")
+
+
+# Real Windows items, cut from the files whose Windows code most often met a
+# pull request (2026-11-21): a `cfg!` branch inside a function
+# (`hide-kit/src/layout.rs`), a `cfg!` constant (`hide-agent-hooks/src/runtime.rs`),
+# a `cfg!` early return (`hide-kit/src/agents.rs`) and attributes on imports
+# inside a test (`hided/src/cli.rs`).
+LAYOUT = """/// The folders a fixture HOME may be made in.
+fn temporary_roots(own: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![own.join("AppData").join("Local").join("Temp")]
+    } else {
+        let _ = own;
+        vec![PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]
+    }
+}
+
+/// The store of the skills and MCP items.
+pub fn store_dir(home: &Path) -> PathBuf {
+    home.join(".hide").join("store")
+}
+"""
+RUNTIME = """/// The helper's name.
+pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
+    "hide-agent-hooks.exe"
+} else {
+    "hide-agent-hooks"
+};
+
+/// The pane's `hide_hooks` reporting protocol.
+pub const PROTOCOL: u32 = 4;
+"""
+AGENTS = """pub(crate) fn login_shell() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    hide_platform::host::default_shell()
+        .inspect_err(|error| eprintln!("kit.login_shell_missing kind={:?}", error.kind()))
+        .ok()
+}
+"""
+CLI = """    #[test]
+    fn a_daemon_that_exits_ends_the_wait_at_the_next_look() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let start = std::time::Instant::now();
+        let error = wait(|| std::process::ExitStatus::from_raw(256));
+        assert!(error.contains("'{'"), "{error}");
+    }
+"""
+
+
+class RustChange(unittest.TestCase):
+    """A shared Rust file plans `windows check` only when its change touches the file's Windows code."""
+
+    def test_the_item_reader_finds_each_windows_item_and_where_it_ends(self):
+        self.assertEqual(ci.windows_items(LAYOUT), [(3, 8)])
+        self.assertEqual(ci.windows_items(RUNTIME), [(2, 6)])
+        self.assertEqual(ci.windows_items(AGENTS), [(2, 4)])
+        # The attribute and its import, twice: the marker in the attribute and the one in the path.
+        self.assertEqual(ci.windows_items(CLI), [(5, 6), (6, 6)])
+        self.assertEqual(ci.windows_items("fn a() {}\n"), [])
+        # A comment that names Windows code is not Windows code.
+        self.assertEqual(ci.windows_items("// #[cfg(windows)]\nfn a() {}\n"), [])
+        # An inner attribute holds the whole file.
+        self.assertEqual(ci.windows_items('#![cfg(windows)]\nfn a() {}\nfn b() {}\n'), [(1, 4)])
+
+    def test_a_file_the_reader_cannot_place_counts_as_windows(self):
+        for text, why in ((LAYOUT.replace("    }\n}", "    }\n", 1), "brackets"),
+                          ('fn a() { let s = "open;\n #[cfg(windows)] fn b() {}', "string"),
+                          ("/* open\n#[cfg(windows)]\nfn b() {}", "comment"),
+                          ('macro_rules! m { () => { #[cfg(windows)] fn b() {} } }', "macro"),
+                          ('fn a() { println!("{}", cfg!(windows)); }', "macro")):
+            with self.subTest(why=why):
+                with self.assertRaises(ci.Unreadable):
+                    ci.windows_items(text)
+
+    def plan(self, name, before, after):
+        """The plan of a pull request that changes one shared Rust file from `before` to `after`."""
+        with tempfile.TemporaryDirectory() as directory:
+            pr = PullRequest(directory)
+            pr.commit("main", "base", {name: before, "docs/a.md": "one\n"})
+            pr.git("checkout", "-qb", "topic")
+            if after is None:
+                pr.git("rm", "-q", name)
+                pr.git("commit", "-qm", "delete")
+            else:
+                pr.commit("topic", "change", {name: after})
+            pr.check_out_merge()
+            return pr.plan(None)
+
+    def test_a_change_inside_a_windows_item_plans_windows_check(self):
+        name = "hide-core/src/layout.rs"
+        for after, why in (
+            (LAYOUT.replace('join("Temp")', 'join("Tmp")'), "a change inside a Windows item: hide-core/src/layout.rs:4"),
+            # Its non-Windows branch is part of the same statement, which is read whole.
+            (LAYOUT.replace('"/private/tmp"', '"/var/tmp"'), "a change inside a Windows item: hide-core/src/layout.rs:7"),
+            # A line that names Windows code, added or removed.
+            (LAYOUT.replace("fn store_dir", "#[cfg(windows)]\nfn store_dir"), "Windows code changed: hide-core/src/layout.rs"),
+            (LAYOUT.replace("    if cfg!(windows) {", "    if false {"), "Windows code changed: hide-core/src/layout.rs"),
+        ):
+            with self.subTest(why=why):
+                result = self.plan(name, LAYOUT, after)
+                self.assertIn("windows-check", result["lanes"])
+                self.assertTrue(any(reason.startswith(why) for reason in result["windows"]["why"]), result["windows"])
+                self.assertNotIn("windows-e2e", result["lanes"])
+
+    def test_a_change_beside_or_far_from_the_windows_items_plans_none(self):
+        name = "hide-core/src/layout.rs"
+        for after in (
+            # The line right after the item, and the doc comment right before it.
+            LAYOUT.replace("}\n\n/// The store", "}\n// beside\n\n/// The store"),
+            LAYOUT.replace("/// The folders a fixture HOME may be made in.", "/// The folders a fixture HOME is made in."),
+            # Another function, far from the item.
+            LAYOUT.replace('join("store")', 'join("items")'),
+        ):
+            with self.subTest(after=after[:60]):
+                result = self.plan(name, LAYOUT, after)
+                self.assertNoWindows(result)
+        result = self.plan("hide-core/src/runtime.rs", RUNTIME, RUNTIME.replace("= 4;", "= 5;"))
+        self.assertNoWindows(result)
+        self.assertIn("rust", result["lanes"])
+
+    def assertNoWindows(self, result):
+        self.assertEqual(result["windows"]["lanes"], [], result["windows"])
+        self.assertFalse(set(result["lanes"]) & set(ci.WINDOWS_ONLY_LANES))
+        ci.aggregate(needs_for(result))
+
+    def test_a_deleted_windows_block_or_an_unreadable_file_plans_windows_check(self):
+        name = "hide-core/src/agents.rs"
+        deleted = AGENTS.replace("    if cfg!(windows) {\n        return None;\n    }\n", "")
+        self.assertIn("windows-check", self.plan(name, AGENTS, deleted)["lanes"])
+        # A deleted file whose lines held Windows code, and one whose did not.
+        self.assertIn("windows-check", self.plan(name, AGENTS, None)["lanes"])
+        self.assertNoWindows(self.plan(name, "fn a() {}\n", None))
+        # Braces that do not balance: the reader cannot place the change, so Windows runs.
+        unbalanced = LAYOUT + "fn broken() {\n"
+        result = self.plan(name, unbalanced, unbalanced.replace('join("store")', 'join("items")'))
+        self.assertIn("windows-check", result["lanes"])
+        self.assertTrue(any("cannot place the change" in reason for reason in result["windows"]["why"]))
+
+    def test_the_windows_layer_is_read_a_whole_file_at_a_time(self):
+        # `hide-platform` writes each system's form: any change to a file with Windows code runs Windows.
+        for name in ("hide-platform/src/layout.rs", "hide-holder/src/layout.rs"):
+            with self.subTest(name=name):
+                result = self.plan(name, LAYOUT, LAYOUT.replace('join("store")', 'join("items")'))
+                self.assertIn("windows-check", result["lanes"])
+                self.assertIn(f"Windows code: {name}", " ".join(result["windows"]["why"]))
+
+
 class Aggregate(unittest.TestCase):
     def test_a_sparse_checkout_carries_every_script_its_scripts_load(self):
         # A job that checks out only some scripts dies at import when one of them
@@ -1452,8 +1936,8 @@ class PullRequest:
         self.git("checkout", "-q", "--detach", "main")
         self.git("merge", "-q", "--no-ff", "-m", "merge", "topic")
 
-    def plan(self, last_green):
-        return ci.plan("pull_request", "HEAD^1", "HEAD", self.repo, CRATES, last_green=last_green)
+    def plan(self, last_green, body_edit=False):
+        return ci.plan("pull_request", "HEAD^1", "HEAD", self.repo, CRATES, last_green=last_green, body_edit=body_edit)
 
 
 LINES = "".join(f"line {n}\n" for n in range(1, 21))
@@ -1618,6 +2102,83 @@ class ReuseGreenRun(unittest.TestCase):
         def last_green():
             raise AssertionError("looked up")
         self.assertEqual(self.pr.plan(last_green)["lanes"], ["policy"])
+
+
+class BodyEdit(unittest.TestCase):
+    """A body edit runs only the checks that read the body when the last green run checked this head."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.pr = PullRequest(directory.name)
+        base = self.pr.commit("main", "base", {"docs/a.md": LINES, "web/src/x.ts": LINES})
+        self.pr.git("checkout", "-qb", "topic")
+        self.head = self.pr.commit("topic", "change", {"web/src/x.ts": LINES.replace("line 2\n", "line two\n")})
+        self.pr.check_out_merge()
+        # The green run of this head, as `last_green_run` answers it.
+        self.green = {"run": 101, "base": base, "head": self.head, "pr_head": self.head, "run_id": 101}
+
+    def test_a_body_edit_of_the_head_a_green_run_checked_runs_only_the_body_check(self):
+        result = self.pr.plan(lambda: self.green, body_edit=True)
+        self.assertEqual(result["lanes"], ["policy"])
+        self.assertIn("which run 101 checked", result["body_only"])
+        self.assertIn("`policy` runs only the checks that read the body", ci.summary(result))
+        # The record keeps the commits the lanes checked, as any reuse does.
+        self.assertEqual(ci.plan_record(result, 7, 202)["verified"], {key: self.green[key] for key in ("run", "base", "head")})
+        # The same run started by a push is a reuse, with the whole `policy`.
+        self.assertNotIn("body_only", self.pr.plan(lambda: self.green))
+
+    def test_a_body_edit_of_a_documentation_only_pull_request_asks_for_the_green_run(self):
+        self.pr.git("checkout", "-q", "topic")
+        self.pr.git("reset", "-q", "--hard", "main")
+        head = self.pr.commit("topic", "guide", {"docs/a.md": "guide\n"})
+        self.pr.check_out_merge()
+        result = self.pr.plan(lambda: {**self.green, "pr_head": head}, body_edit=True)
+        self.assertEqual(result["lanes"], ["policy"])
+        self.assertIn("body_only", result)
+
+    def test_a_body_edit_without_a_green_run_of_this_head_runs_what_it_ran_before(self):
+        expected = self.pr.plan(None)
+        reused = self.pr.plan(lambda: {**self.green, "pr_head": "f" * 40}, body_edit=True)
+        # The last green run checked another head: the plan reuses it as before,
+        # and `policy` runs whole, since this head's structural checks never ran.
+        self.assertEqual(reused["lanes"], ["policy"])
+        self.assertNotIn("body_only", reused)
+
+        def raises():
+            raise ci.NotReused("this pull request has no earlier green run")
+        for last_green in (raises, None):
+            with self.subTest(last_green=last_green):
+                result = self.pr.plan(last_green, body_edit=True)
+                self.assertEqual(result["lanes"], expected["lanes"])
+                self.assertNotIn("body_only", result)
+
+    def test_policy_skips_its_suite_and_structural_checks_only_for_a_body_only_run(self):
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        jobs = pr_jobs()
+        self.assertIn("body-only: ${{ steps.plan.outputs.body-only }}", jobs["plan"])
+        self.assertIn("--body-edit \"${{ github.event.action == 'edited' }}\"", jobs["plan"])
+        self.assertRegex(workflow, r"types: \[[^\]]*\bedited\b[^\]]*\]")
+        steps = {re.search(r"name: (.+)", step).group(1).strip(): step
+                 for step in re.split(r"\n      - ", jobs["policy"])[1:] if re.search(r"name: (.+)", step)}
+
+        def runs(step, event, body_only):
+            condition = re.search(r"\n        if: (.+)", steps[step])
+            if not condition:
+                return True
+            code = (condition.group(1).replace("github.event_name", repr(event))
+                    .replace("needs.plan.outputs.body-only", repr(body_only)).replace("&&", " and ").replace("||", " or "))
+            return eval(code, {"__builtins__": {}})
+        for step in ("Install zsh", "Test the repository scripts, the lane plan included", "Structural checks"):
+            with self.subTest(step=step):
+                self.assertTrue(runs(step, "pull_request", "false"))
+                self.assertFalse(runs(step, "pull_request", "true"))
+        # The check that reads the body runs on every pull request run, body-only included.
+        body = "A pull request that changes a screen shows it"
+        self.assertIn("PR_BODY: ${{ github.event.pull_request.body }}", steps[body])
+        self.assertTrue(runs(body, "pull_request", "true"))
+        self.assertTrue(runs(body, "pull_request", "false"))
+        self.assertFalse(runs(body, "merge_group", "false"))
 
 
 class LastGreenRun(unittest.TestCase):
