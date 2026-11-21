@@ -746,7 +746,7 @@ it("counts a pane's waiting questions as the tail of its second row, on the head
   document.body.append(container);
   const root = createRoot(container);
   const header = { working: true, notice: null, band: null } as PaneHeader;
-  const draw = () => act(async () => root.render(<TooltipProvider><span data-head="true"><PaneOpenAsksMark paneId="solo" actions={actions} /></span><PaneHeaderBand paneId="solo" header={header} actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span><span data-quiet-row="true"><PaneHeaderBand paneId="quiet" header={undefined} actions={actions} /></span></TooltipProvider>));
+  const draw = () => act(async () => root.render(<TooltipProvider><span data-head="true"><PaneOpenAsksMark paneId="solo" header={header} actions={actions} /></span><PaneHeaderBand paneId="solo" header={header} actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" header={undefined} actions={actions} /></span><span data-quiet-row="true"><PaneHeaderBand paneId="quiet" header={undefined} actions={actions} /></span></TooltipProvider>));
   await draw();
   try {
     // With the row off the head holds them and no row is drawn.
@@ -763,6 +763,15 @@ it("counts a pane's waiting questions as the tail of its second row, on the head
     // Beside a request and its progress they follow the progress, and the question's own words stay in the card.
     await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, request: { text: "Proceed as proposed", images: 0 }, progress: "Reading the tab code" } as PaneHeader} actions={actions} /></TooltipProvider>));
     expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("Proceed as proposed→Reading the tab code· Questions 2");
+    // Beside the pane's own question the tail counts the others, right after the ask's words.
+    const question: PaneBand = { kind: "answer", reason: "Merge now or wait for CI", since_unix_ms: null, read: false, action: null, more: 0 };
+    await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, working: false, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect(container.querySelector('[data-pane-header-band="answer"]')?.textContent).toBe("Merge now or wait for CI· +1 more");
+    // With the row off the question's own mark counts them all, and the count beside it is gone.
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
+    await act(async () => root.render(<TooltipProvider><PaneAskMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /><PaneOpenAsksMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect([container.querySelector("[data-pane-ask-mark]")?.textContent, container.querySelector("[data-pane-open-asks]")]).toEqual(["Questions 2", null]);
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
     await draw();
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
     expect(container.querySelector("[data-quiet-row] [data-pane-header-band]")).toBeNull();
@@ -975,7 +984,8 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
   expect((await draw(own, "off"))?.getAttribute("aria-label")).toBe("Approval: Stopped at a permission request");
   expect(await draw(own, "one_line")).toBeNull();
   const left = await draw({ ...own, band: { ...own.band!, kind: "stopped", reason: "Three tests left" } }, "off");
-  expect([left?.getAttribute("aria-label"), left?.className.includes("border-warning")]).toEqual(["Unfinished: Three tests left", false]);
+  // Words alone, no box and no wait: work left in the text colour, an ask in the warning one.
+  expect([left?.getAttribute("aria-label"), left?.className.includes("text-warning"), left?.className.includes("border")]).toEqual(["Unfinished: Three tests left", false, false]);
   // A raised descendant's ask stays on the children button, not the parent's head.
   expect(await draw(header, "off")).toBeNull();
 });
