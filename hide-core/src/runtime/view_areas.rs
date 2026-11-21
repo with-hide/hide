@@ -3213,13 +3213,14 @@ impl Runtime {
     }
 
     /// The tray the Workspace `key` draws: the one of its Agent tab in
-    /// front, while the open lane shows it or the tab is in pair view (PRD
-    /// lane-desk-pair-view D-06, D-16). A tray with no tab draws nothing.
+    /// front, while the open lane shows it or pair view draws it beside the
+    /// tab's pane (PRD lane-desk-pair-view D-06, D-16, D-53). A tray with no
+    /// tab draws nothing.
     pub(super) fn drawn_tray_layout(&self, key: &WorkspaceKey) -> Option<&Layout> {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
         let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
-        ((view.draws_tray(&tab) || self.drawn_pair(key, &tab).is_some())
+        ((view.draws_tray(&tab) || self.pair_desk(key, &tab).is_some())
             && tray.layout.display_count() > 0)
             .then_some(&tray.layout)
     }

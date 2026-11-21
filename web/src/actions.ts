@@ -119,7 +119,7 @@ import {
   type ViewWorkspace,
 } from "./viewLayout";
 import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
-import { drawnPair, pairModeOn, pairOffer } from "./pairView";
+import { drawnPair, pairBesideDesk, pairModeOn } from "./pairView";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -616,7 +616,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
   /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
   const closeDocuments = () => {
-    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    if (pairBesideDesk(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
     setWorkspaceView({ documents: false });
   };
 
@@ -624,8 +624,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    // In pair view the desk is always drawn: the button takes the keyboard to it and folds nothing (D-46).
-    if (drawnPair(view)) return showDocuments(true);
+    // In pair view the desk is always drawn: the button takes the keyboard to it and folds nothing (D-46). A pane
+    // drawn alone has no desk beside it until its agent opens a View (D-53).
+    if (pairBesideDesk(view)) return showDocuments(true);
+    if (drawnPair(view)) return diagnostic("toggle documents: pair view draws this pane alone");
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
     showDocuments(true);
@@ -3266,10 +3268,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * ◧ on a pane's head or in its menus, and the strip's way back (PRD
-     * lane-desk-pair-view B18, B20, B26, D-46): the pane beside its tab's
-     * desk, or, pressed on the pane already there, pair view off everywhere
-     * (D-45). The core decides what the desk puts in front and refuses a
-     * pane with nothing to show.
+     * lane-desk-pair-view B18, B20, B26, D-46, D-53): the pane beside its
+     * tab's desk, or alone while it has no View to show, or, pressed on the
+     * pane already there, pair view off everywhere (D-45). The core decides
+     * what the desk puts in front.
      */
     togglePairView(paneId: string) {
       const pair = drawnPair(workspaceViewOf(rest()));
@@ -3277,16 +3279,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * ⌘. (B18, B26, D-45): the mode turns off wherever the keyboard is, even
-     * on a shell pane that draws its tab's own layout; otherwise the focused
-     * pane goes beside its desk, and a pane with nothing to show changes
-     * nothing (B19).
+     * ⌘. (B18, B26, D-45, D-53): the mode turns off wherever the keyboard
+     * is; otherwise the focused pane enters it, beside its desk or alone.
      */
     pairViewKey() {
-      const view = workspaceViewOf(rest());
-      if (pairModeOn(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      if (pairModeOn(workspaceViewOf(rest()))) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
       const paneId = useShellStore.getState().focusedPaneId;
-      if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
+      if (!paneId) return diagnostic("pair_view: no focused pane");
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
     },
 

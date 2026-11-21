@@ -125,11 +125,11 @@ describe("what the pane head moved into its menus (PRD lane-desk-pair-view B19, 
     expect(items[2]?.separated).toBe(true);
   });
 
-  it("names the way back on the pane in pair view, and says why a pane with nothing to show cannot pair", () => {
+  it("names the way back on the pane in pair view, and offers pair view on a shell too (D-53)", () => {
     expect(paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "on" })[1]).toMatchObject({ label: "Back to the usual view", unavailable: null });
-    const shell = paneMenuItems(row, "zsh", undefined, undefined, false, false, { mention: false, pair: "none" });
+    const shell = paneMenuItems(row, "zsh", undefined, undefined, false, false, { mention: false, pair: "off" });
     expect(shell.map((item) => item.id)).toEqual(["pair_view", "copy_reference", "close_pane"]);
-    expect(shell[0]?.unavailable).toBe("No view opened yet to show beside it");
+    expect(shell[0]).toMatchObject({ label: "Pair view", unavailable: null });
   });
 
   it("draws pair view with a terminal's layout items, and @ with the pane's own", () => {

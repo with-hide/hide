@@ -29,7 +29,7 @@ import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
 import { AncestorPath, usePaneMenu, type PaneHeadOffer, type TerminalMenuContext } from "./PaneRelations";
 import { workspaceViewOf } from "./workspace";
-import { pairLabelKey, pairOffer } from "./pairView";
+import { pairCellShown, pairLabelKey, pairOffer } from "./pairView";
 import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -219,7 +219,7 @@ export const PaneView = memo(function PaneView({
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
-  // What ◧ offers for this pane (`pairOffer`), which the head's split button and the menus read (PRD lane-desk-pair-view B19, D-43).
+  // What ◧ offers for this pane (`pairOffer`), which the head's split button and the menus read (PRD lane-desk-pair-view B19, D-43, D-53).
   const pair = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
   const head: PaneHeadOffer = { mention: Boolean(agentKind), pair };
   // `@` is an item of the pane menu (D-32, B21); its list opens under the `…`.
@@ -570,12 +570,18 @@ export const PaneView = memo(function PaneView({
   );
 });
 
-/** The pane head's views chip and ◧ as one button of two cells (PRD lane-desk-pair-view D-43, B19, B20). */
+/**
+ * The pane head's views chip and ◧ as one button of two cells (PRD
+ * lane-desk-pair-view D-43, B19, B20). ◧ is drawn on a pane whose agent has
+ * a View to show and, pressed, on the pane pair view draws; every other pane
+ * enters pair view from ⌘. and its menus, so its head stays quiet (D-53).
+ */
 function PaneSplit({ paneId, name, agent, actions }: { paneId: string; name: string; agent: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const offer = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
+  const cell = useShellStore((s) => pairCellShown(workspaceViewOf(s.rest), paneId));
   const views = usePaneViewRows(paneId).length > 0 && agent;
-  if (!views && offer === "none") return null;
+  if (!views && !cell) return null;
   const label = t(pairLabelKey(offer));
   const pressed = offer === "on";
   return (
@@ -583,8 +589,8 @@ function PaneSplit({ paneId, name, agent, actions }: { paneId: string; name: str
     // hovered cell filled and ◧ pressed in the pair view accent. Below the narrow breakpoint both cells give way.
     <span data-pane-split={paneId} className="flex shrink-0 items-center gap-xxs pane-head-narrow:hidden">
       {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
-      {views && offer !== "none" ? <Separator orientation="vertical" className="data-[orientation=vertical]:h-(--size-icon) pane-head-tight:hidden" data-pane-split-line="true" /> : null}
-      {offer !== "none" ? (
+      {views && cell ? <Separator orientation="vertical" className="data-[orientation=vertical]:h-(--size-icon) pane-head-tight:hidden" data-pane-split-line="true" /> : null}
+      {cell ? (
         <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
           <Button
             variant="ghost"

@@ -1446,14 +1446,18 @@ impl Runtime {
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
             let every = self.every_view_snapshot(key);
-            let pairable = self.pairable_panes(key);
-            let pair = self.drawn_pair(key, tab).map(|pane| {
+            let panes_with_views = self.panes_with_views(key);
+            let desk = self.pair_desk(key, tab);
+            let pair = self.pair_left_of(key, tab).map(|pane| {
                 let mut pair = crate::model::PairViewSnapshot {
                     tab_id: tab.clone(),
+                    alone: desk.as_ref() != Some(&pane),
                     pane_id: pane,
                     folded: Vec::new(),
                 };
-                pair.folded = self.pair_folded(key, &pair, &layout.root);
+                if !pair.alone {
+                    pair.folded = self.pair_folded(key, &pair, &layout.root);
+                }
                 pair
             });
             WorkspaceViewSnapshot {
@@ -1492,7 +1496,7 @@ impl Runtime {
                     on: store.views.pair.on,
                     ratio: store.views.pair.ratio,
                 },
-                pairable,
+                panes_with_views,
                 // A pane's `N views` lists what its session opened, on a
                 // tray or not (PRD lane-desk-pair-view D-04, D-19).
                 feedback: self.view_feedback_snapshot(key, &every),
@@ -1522,7 +1526,7 @@ impl Runtime {
         }
         self.snapshot.workspace_view = published;
         // A pair drawn without the mode moving onto it (after a restart)
-        // is recorded as it is now.
+        // is recorded as it is now, alone or beside its desk.
         let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
             let pair = view.tray.pair.as_ref()?;
             Some((

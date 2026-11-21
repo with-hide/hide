@@ -11,15 +11,17 @@ import { useShellStore } from "./store";
 // Pair view (PRD lane-desk-pair-view B17, B22, D-16, D-17): the body between
 // the sidebar and the rail, under the tab row, drawn as the strip that says
 // so and the paired pane's own terminal on the left; the lane places the
-// tab's desk on the right half. The tab's own canvas stays under it with
-// its layout and zoom as they were.
+// tab's desk on the right half, or nothing while the pane is drawn alone at
+// the body's full width (D-53). The tab's own canvas stays under it with its
+// layout and zoom as they were.
 
-/** The strip and the left half. `paneWidth` is the left half's width, 0 until the body is measured. */
-export function PairLayer({ paneId, paneWidth, covered, actions }: { paneId: string; paneWidth: number; covered: boolean; actions: Actions }) {
+/** The strip and the pane: the left half, `paneWidth` wide (0 until the body is measured), or the whole width while `alone`. */
+export function PairLayer({ paneId, alone, paneWidth, covered, actions }: { paneId: string; alone: boolean; paneWidth: number; covered: boolean; actions: Actions }) {
+  const width = alone ? "100%" : paneWidth > 0 ? paneWidth : "50%";
   return (
-    <div className="absolute inset-x-0 bottom-0 top-(--size-tab-strip) z-10 flex min-h-0 min-w-0 flex-col bg-background" inert={covered} data-pair-layer={paneId}>
+    <div className="absolute inset-x-0 bottom-0 top-(--size-tab-strip) z-10 flex min-h-0 min-w-0 flex-col bg-background" inert={covered} data-pair-layer={paneId} data-pair-alone={alone ? "true" : undefined}>
       <PairStrip paneId={paneId} actions={actions} />
-      <div className="min-h-0 flex-1" style={paneWidth > 0 ? { width: paneWidth } : { width: "50%" }}>
+      <div className="min-h-0 flex-1" style={{ width }}>
         <PairPaneCanvas paneId={paneId} actions={actions} />
       </div>
     </div>

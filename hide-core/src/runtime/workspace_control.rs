@@ -423,12 +423,15 @@ impl Runtime {
                 self.make_view_room(&key, &place);
             }
             // The View comes in front only on a tray the operator sees now:
-            // the lane open, or the tab in pair view. A closed lane stays
-            // closed, and the tray's count and the To look at mark say a tab
-            // came (B2).
+            // the lane open, or the tab in pair view, where the paired pane's
+            // own View stands the desk beside it even while it is drawn
+            // alone (D-53). A closed lane stays closed, and the tray's count
+            // and the To look at mark say a tab came (B2).
             let in_view = match &place {
                 Place::Tray(tab) => {
-                    self.watched_caller(&key, pane_id) && self.tray_in_view(&key, tab)
+                    self.watched_caller(&key, pane_id)
+                        && (self.tray_in_view(&key, tab)
+                            || self.pair_left_of(&key, tab).as_deref() == Some(pane_id))
                 }
                 Place::Shelf => false,
             };
@@ -927,12 +930,13 @@ impl Runtime {
     }
 
     /// Whether the operator sees `tab`'s tray when a tab lands on it: the
-    /// lane is open, or the tab is in pair view (PRD lane-desk-pair-view B2).
+    /// lane is open, or pair view draws the desk beside the tab's pane (PRD
+    /// lane-desk-pair-view B2, D-53).
     pub(super) fn tray_in_view(&self, key: &(String, String), tab: &str) -> bool {
         self.workspace_views
             .as_ref()
             .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| view.open || self.drawn_pair(key, tab).is_some())
+            .is_some_and(|view| view.open || self.pair_desk(key, tab).is_some())
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of
