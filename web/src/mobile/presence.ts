@@ -1,5 +1,5 @@
 import type { PairedHost } from "./hosts";
-import { gatheredOf } from "./gather";
+import { asksOf, gatheredOf, type GatheredAsk } from "./gather";
 import { refusalOf, type AgentGroup, type ServerFrame } from "./protocol";
 import { RelaySocket } from "./relaySocket";
 
@@ -12,6 +12,10 @@ export type Presence = {
   revoked?: boolean;
   /** Its last list's 내 차례 and 읽을 것 for the gathered view (`gather.ts`); absent until a list arrived and once the socket closed. */
   gathered?: AgentGroup[];
+  /** The agents its last list left out to fit one relay message, which the gathered view says it does not show. */
+  omitted?: number;
+  /** Its automations that stopped for a person, from its last automations frame: more of 내 차례 in the gathered view. */
+  asks?: GatheredAsk[];
 };
 
 /**
@@ -31,6 +35,9 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
     let denied = false;
     let protocolMismatch: number | undefined;
     let revoked = false;
+    // The list and the automations arrive in separate frames; each keeps the other's last value.
+    let listed: Pick<Presence, "needs" | "working" | "gathered" | "omitted"> = {};
+    let asks: GatheredAsk[] | undefined;
     const ws = new RelaySocket(host, (protocol) => { denied = true; protocolMismatch = protocol; }, () => undefined);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ client_kind: "phone", token: host.credential }));
@@ -39,10 +46,20 @@ export function watchHost(host: PairedHost & { credential: string }, changed: (p
       try {
         const frame = JSON.parse(String(event.data)) as ServerFrame;
         if (frame.type === "hello") { attempt = 0; lastSeen = Date.now(); changed({ online: true, lastSeen }); }
-        if (frame.type === "agents") changed({ online: true, lastSeen,
-          needs: frame.groups.find((g) => g.group === "needs_you")?.count ?? 0,
-          working: frame.groups.find((g) => g.group === "working")?.count ?? 0,
-          gathered: gatheredOf(frame.groups) });
+        if (frame.type === "agents") {
+          listed = {
+            needs: frame.groups.find((g) => g.group === "needs_you")?.count ?? 0,
+            working: frame.groups.find((g) => g.group === "working")?.count ?? 0,
+            gathered: gatheredOf(frame.groups),
+            omitted: frame.omitted ?? 0,
+          };
+          changed({ online: true, lastSeen, ...listed, ...(asks ? { asks } : {}) });
+        }
+        if (frame.type === "automations") {
+          asks = asksOf(frame.items, frame.asks ?? []);
+          // Before its list, a computer is still connecting: its asks wait for the list rather than stand alone.
+          if (listed.gathered) changed({ online: true, lastSeen, ...listed, asks });
+        }
         if (frame.type === "refused") { denied = frame.reason !== "mobile_off"; revoked = refusalOf(frame.reason) === "revoked"; ws.close(); }
       } catch { ws.close(); }
     };

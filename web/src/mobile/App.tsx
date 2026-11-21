@@ -149,7 +149,10 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
   const hosts = useConnectableHosts();
   const activeRoom = gathered?.room ?? openRoom();
   const deviceConnect = usePhone((s) => s.deviceConnect);
-  const computers = deviceConnect && hosted && activeRoom && hosts && hosts.length > 1 && hosts.some((host) => host.room === activeRoom) ? hosts : null;
+  const open = hosts?.find((host) => host.room === activeRoom);
+  // Before this computer's hello on this page, its saved answer stands, so a computer that is off still gathers the others (B62).
+  const offered = deviceConnect ?? open?.deviceConnect === true;
+  const computers = offered && hosted && open && hosts && hosts.length > 1 ? hosts : null;
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);

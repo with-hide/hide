@@ -160,3 +160,61 @@ it("keeps a phone paired with one computer on that computer's own list", async (
   expect(container.querySelector('[data-phone-agent="mac|mac-work"]')).not.toBeNull();
   expect(opened).toEqual([]);
 });
+
+// B62, D-69: a page opened on a computer that is off from the start still gathers the others, on that computer's saved answer
+// to whether it offers connections between two Hides; its own line says it is out of reach.
+it("gathers the other computers on a page opened while its own computer is off", async () => {
+  localStorage.setItem(HOSTS_KEY, JSON.stringify([MAC, MINI].map((host) => ({ ...host, noiseKey: "k".repeat(43), credential: `credential-${host.name}`, protocol: 5, lastSeen: 1, deviceConnect: true }))));
+  patch({ connected: false, unreachable: true, groups: null, deviceConnect: null });
+  const { watch, watched, tell } = watcher();
+  await render(watch);
+  expect([...watched.keys()]).toEqual([MINI.room]);
+  expect(line(MAC.room)!.getAttribute("data-phone-host-line")).toBe("offline");
+  await tell(MINI.room, { online: true, lastSeen: 2, gathered: [{ group: "needs_you", count: 1, rows: [agent("mini", "mini-ask", 200)] }] });
+  expect(rows().map(chip)).toEqual(["맥미니"]);
+  expect(line(MINI.room)).toBeNull();
+  // Before it is out of reach, this computer is still connecting.
+  await act(async () => patch({ unreachable: false }));
+  expect(line(MAC.room)!.getAttribute("data-phone-host-line")).toBe("connecting");
+  // Its hello on this page is the answer from then on.
+  await act(async () => patch({ deviceConnect: false }));
+  expect(container.querySelector("[data-phone-computers]")).toBeNull();
+});
+
+// A computer whose saved record has no answer, as one paired before the gathered view, waits for its hello.
+it("waits for the open computer's hello when its saved record has no answer", async () => {
+  pair(MAC, MINI);
+  patch({ connected: false, unreachable: true, groups: null, deviceConnect: null });
+  const { watch, opened } = watcher();
+  await render(watch);
+  expect(container.querySelector("[data-phone-computers]")).toBeNull();
+  expect(opened).toEqual([]);
+});
+
+// B55: an automation that stopped for a person on another computer is 내 차례 here too, with its computer's mark, and opens on it.
+it("gathers another computer's automations that stopped for a person", async () => {
+  pair(MAC, MINI);
+  const { watch, tell } = watcher();
+  await render(watch);
+  await tell(MINI.room, { online: true, lastSeen: 1, gathered: [], asks: [{ id: "nightly", name: "Nightly build", reason: "login_expired" }] });
+  const needs = container.querySelector('[data-phone-group="needs_you"]')!;
+  expect(needs.querySelector("[data-phone-group-count]")!.textContent).toBe("2");
+  const ask = container.querySelector<HTMLElement>(`[data-phone-gathered-ask="${MINI.room}|nightly"]`)!;
+  expect(ask.textContent).toContain("Nightly build");
+  expect(chip(ask)).toBe("맥미니");
+  await act(async () => ask.querySelector<HTMLElement>("button")!.click());
+  expect(assign).toHaveBeenCalledWith(`/?host=${MINI.room}&automation=nightly`);
+});
+
+// A list a computer cut to fit one relay message says so in 모두, per computer, as that computer's own list does.
+it("says which computer's list left agents out", async () => {
+  pair(MAC, MINI);
+  patch({ agentsOmitted: 2 });
+  const { watch, tell } = watcher();
+  await render(watch);
+  await tell(MINI.room, { online: true, lastSeen: 1, gathered: [], omitted: 3 });
+  const said = [...container.querySelectorAll("[data-phone-gathered-omitted]")];
+  expect(said.map((item) => item.getAttribute("data-phone-gathered-omitted"))).toEqual([MAC.room, MINI.room]);
+  expect(said[1]!.textContent).toContain("맥미니");
+  expect(said[1]!.textContent).toContain("3");
+});

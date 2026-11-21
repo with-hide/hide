@@ -6,13 +6,15 @@
 // line and never holds the others back. `gather.ts` holds the rules.
 
 import { useEffect, useState } from "react";
-import { Loader2Icon } from "lucide-react";
+import { ChevronRightIcon, Loader2Icon, RepeatIcon } from "lucide-react";
+import { RowOverlayButton } from "../components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/translator";
-import { AutomationAskRows } from "./AutomationsScreen";
-import { gatherGroups, hostLine, type GatheredGroup, type GatheredHost, type HostLine } from "./gather";
-import { dropHostPush, hostLink, hostStore, type PairedHost } from "./hosts";
+import { AskLine, AutomationAskRows } from "./AutomationsScreen";
+import { gatherGroups, hereLine, hostLine, type GatheredAsk, type GatheredGroup, type GatheredHost, type HostLine } from "./gather";
+import { automationLink, dropHostPush, hostLink, hostStore, type PairedHost } from "./hosts";
 import { FoldButton, GatheredRowItem } from "./ListRows";
+import { DeviceTag } from "./parts";
 import { watchHost, type Presence } from "./presence";
 import { GROUP_TITLE } from "./protocol";
 import { setListScope, usePhone } from "./store";
@@ -105,47 +107,99 @@ function usePresences(hosts: readonly ConnectableHost[], activeRoom: string, wat
   return presence;
 }
 
+/** Another computer's automation that stopped for a person, in the gathered view's 내 차례 with that computer's mark. */
+type OtherAsk = { host: GatheredHost; ask: GatheredAsk };
+
 /**
  * 모두: 내 차례 and 읽을 것 of this computer and of every other one whose list arrived, each row with its computer's mark, then one
- * line for each other computer still connecting, out of reach or speaking another phone protocol (B62).
+ * line for each computer still connecting, out of reach or speaking another phone protocol (B62), this one included, so a page
+ * opened on a computer that is off still gathers the others; and one line for each computer whose list left agents out.
  */
 export function GatheredList({ hosts, activeRoom, dim, watch = watchHost }: { hosts: readonly ConnectableHost[]; activeRoom: string; dim: boolean; watch?: Watch }) {
   const { t } = useInterfaceTranslation();
   const groups = usePhone((s) => s.groups);
-  const asks = usePhone((s) => s.automationAsks.length);
+  const asksHere = usePhone((s) => s.automationAsks.length);
+  const omittedHere = usePhone((s) => s.agentsOmitted);
+  const unreachable = usePhone((s) => s.unreachable);
   const presence = usePresences(hosts, activeRoom, watch);
   const here = hosts.find((host) => host.room === activeRoom);
   const others = hosts.filter((host) => host.room !== activeRoom && !presence[host.room]?.revoked);
+  const listed = others.filter((host) => presence[host.room]?.gathered);
   const gathered = gatherGroups([
     ...(here && groups ? [{ host: here, here: true, groups }] : []),
-    ...others.flatMap((host) => {
-      const lists = presence[host.room]?.gathered;
-      return lists ? [{ host, here: false, groups: lists }] : [];
-    }),
+    ...listed.map((host) => ({ host, here: false, groups: presence[host.room]!.gathered! })),
   ]);
-  const lines = others.flatMap((host) => {
-    const line = hostLine(presence[host.room]);
-    return line ? [{ host, line }] : [];
-  });
+  const otherAsks: OtherAsk[] = listed.flatMap((host) => (presence[host.room]?.asks ?? []).map((ask) => ({ host, ask })));
+  const asks = asksHere + otherAsks.length;
+  const ownLine = here ? hereLine(groups !== null, unreachable) : null;
+  const lines = [
+    ...(here && ownLine ? [{ host: here, line: ownLine }] : []),
+    ...others.flatMap((host) => {
+      const line = hostLine(presence[host.room]);
+      return line ? [{ host, line }] : [];
+    }),
+  ];
+  const omitted = [
+    ...(here && groups && omittedHere > 0 ? [{ host: here, count: omittedHere }] : []),
+    ...listed.flatMap((host) => {
+      const count = presence[host.room]?.omitted ?? 0;
+      return count > 0 ? [{ host, count }] : [];
+    }),
+  ];
   const needs = gathered.find((group) => group.group === "needs_you");
+  const askRows = <AskRows here={here} others={otherAsks} />;
   return (
     <div data-phone-gathered-list="">
       {asks > 0 && !needs ? (
         <section className="px-xl pt-lg" data-phone-group="needs_you">
           <GatheredHead group="needs_you" count={asks} />
-          <AutomationAskRows />
+          {askRows}
         </section>
       ) : null}
-      {gathered.map((group) => <GatheredSection key={group.group} group={group} asks={group.group === "needs_you" ? asks : 0} dim={dim} />)}
-      {gathered.length === 0 && asks === 0 && groups ? (
+      {gathered.map((group) => <GatheredSection key={group.group} group={group} asks={group.group === "needs_you" ? asks : 0} askRows={askRows} dim={dim} />)}
+      {gathered.length === 0 && asks === 0 && (groups || listed.length > 0) ? (
         <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-gathered-empty="">{t("mobile.gather.empty")}</p>
       ) : null}
+      {omitted.map(({ host, count }) => (
+        <p key={host.room} className="px-xl pt-md text-body text-muted-foreground" data-phone-gathered-omitted={host.room}>{t("mobile.gather.omitted", { name: host.name, count })}</p>
+      ))}
       {lines.length > 0 ? (
         <ul className="flex flex-col px-xl pt-lg" data-phone-host-lines="">
           {lines.map(({ host, line }) => <HostLineRow key={host.room} name={host.name} line={line} room={host.room} />)}
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** The automations that stopped for a person on every computer: this one's with their [다시 켜기], another's opening on that computer. */
+function AskRows({ here, others }: { here: GatheredHost | undefined; others: readonly OtherAsk[] }) {
+  return (
+    <>
+      <AutomationAskRows computer={here?.name} />
+      {others.length > 0 ? (
+        <ul className="divide-y divide-border border-b border-border" data-phone-gathered-asks={others.length}>
+          {others.map(({ host, ask }) => <OtherAskRow key={`${host.room}|${ask.id}`} host={host} ask={ask} />)}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
+function OtherAskRow({ host, ask }: OtherAsk) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <li className="relative" data-phone-gathered-ask={`${host.room}|${ask.id}`}>
+      <RowOverlayButton aria-label={`${t("mobile.automations.open", { name: ask.name })}, ${host.name}`} hover={false} className="active:bg-accent" onClick={() => window.location.assign(automationLink(host, ask.id))} />
+      <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
+        <RepeatIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" />
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-xs">
+          <AskLine name={ask.name} reason={ask.reason} />
+          <DeviceTag label={host.name} computer />
+        </span>
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
+      </div>
+    </li>
   );
 }
 
@@ -159,14 +213,14 @@ function GatheredHead({ group, count }: { group: "needs_you" | "done"; count: nu
   );
 }
 
-function GatheredSection({ group, asks, dim }: { group: GatheredGroup; asks: number; dim: boolean }) {
+function GatheredSection({ group, asks, askRows, dim }: { group: GatheredGroup; asks: number; askRows: React.ReactNode; dim: boolean }) {
   const { t } = useInterfaceTranslation();
   const [opened, setOpened] = useState(false);
   const id = group.group === "needs_you" ? "needs_you" : "done";
   return (
     <section className="px-xl pt-lg" data-phone-group={id}>
       <GatheredHead group={id} count={group.count + asks} />
-      {id === "needs_you" ? <AutomationAskRows /> : null}
+      {id === "needs_you" ? askRows : null}
       <ul className="divide-y divide-border border-b border-border">
         {[...group.rows, ...(opened ? group.more : [])].map((item) => <GatheredRowItem key={`${item.host.room}|${item.row.kind === "agent" ? `${item.row.device_id}|${item.row.pane_id}` : item.row.sleep_id}`} item={item} dim={dim} />)}
         {group.more.length > 0 && !opened ? (

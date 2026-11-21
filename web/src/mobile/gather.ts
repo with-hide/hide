@@ -4,7 +4,7 @@
 // own rows, order and folds; this joins them and says, per computer, why its
 // rows are not there yet. Pure, so every rule is tested without a socket.
 
-import type { AgentGroup, GroupId, GroupRow } from "./protocol";
+import type { AgentGroup, GroupId, GroupRow, PhoneAutomation } from "./protocol";
 import type { Presence } from "./presence";
 
 /** The groups the gathered view carries: what waits on the operator and what a notification announces. */
@@ -66,6 +66,26 @@ export function hostLine(presence: Presence | undefined): HostLine | null {
   if (presence.protocolMismatch !== undefined) return "update";
   if (!presence.online) return "offline";
   return presence.gathered ? null : "connecting";
+}
+
+/** An automation of another computer that stopped for a person: what its row in 내 차례 says, and which page it opens. */
+export type GatheredAsk = { id: string; name: string; reason: NonNullable<PhoneAutomation["paused"]>["reason"] };
+
+/** The automations a computer's `asks` names that are paused, as its own list draws them (`AutomationAskRows`); the rest is not kept. */
+export function asksOf(automations: readonly PhoneAutomation[], asks: readonly string[]): GatheredAsk[] {
+  return asks.flatMap((id) => {
+    const automation = automations.find((candidate) => candidate.id === id);
+    return automation?.paused ? [{ id, name: automation.name, reason: automation.paused.reason }] : [];
+  });
+}
+
+/**
+ * The open computer's own line in the gathered view: none once its list arrived (its rows say the rest, dimmed while it is out of
+ * reach), else connecting or out of reach, so a page opened on a computer that is off still gathers the others (B62).
+ */
+export function hereLine(listed: boolean, unreachable: boolean): HostLine | null {
+  if (listed) return null;
+  return unreachable ? "offline" : "connecting";
 }
 
 /** Only a watcher's list of the groups the view carries: the rest of a computer's list is never kept. */

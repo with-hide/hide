@@ -51,7 +51,8 @@ export const mobileRelayEnglish = {
   "mobile.gather.computers": "Computers",
   "mobile.gather.all": "All",
   "mobile.gather.empty": "Nothing waits on you",
-  "mobile.gather.update": "{{name}} needs an update"
+  "mobile.gather.update": "{{name}} needs an update",
+  "mobile.gather.omitted": "{{count}} more agents on {{name}} are not shown here · see them on that computer"
 } as const;
 export const mobileRelayCatalogs = {
   en: mobileRelayEnglish,
@@ -107,7 +108,8 @@ export const mobileRelayCatalogs = {
     "mobile.gather.computers": "컴퓨터",
     "mobile.gather.all": "모두",
     "mobile.gather.empty": "지금 볼 것이 없어요",
-    "mobile.gather.update": "{{name}} 업데이트 필요"
+    "mobile.gather.update": "{{name}} 업데이트 필요",
+    "mobile.gather.omitted": "{{name}}의 에이전트 {{count}}개는 여기 담지 못했어요 · 그 컴퓨터에서 보세요"
   },
   "ja": {
     "mobile.relay.devices": "デバイス",
@@ -161,7 +163,8 @@ export const mobileRelayCatalogs = {
     "mobile.gather.computers": "コンピューター",
     "mobile.gather.all": "すべて",
     "mobile.gather.empty": "いま見るものはありません",
-    "mobile.gather.update": "{{name}} の更新が必要"
+    "mobile.gather.update": "{{name}} の更新が必要",
+    "mobile.gather.omitted": "{{name}} のほかのエージェント{{count}}件はここに表示されません · そのコンピューターで確認してください"
   },
   "zh-CN": {
     "mobile.relay.devices": "设备",
@@ -215,6 +218,7 @@ export const mobileRelayCatalogs = {
     "mobile.gather.computers": "电脑",
     "mobile.gather.all": "全部",
     "mobile.gather.empty": "现在没有需要查看的内容",
-    "mobile.gather.update": "{{name}} 需要更新"
+    "mobile.gather.update": "{{name}} 需要更新",
+    "mobile.gather.omitted": "{{name}} 另有 {{count}} 个智能体未在此显示 · 请在那台电脑上查看"
   }
 } satisfies Catalogs<typeof mobileRelayEnglish>;

@@ -123,14 +123,17 @@ export function seedPairedMac(gathered = false): void {
   }
 }
 
-/** What each other computer of the gathered view says, in place of a socket: Windows PC never answers, so it stays connecting. */
+/** What each other computer of the gathered view says, in place of a socket: Windows PC never answers, so it stays connecting; the iMac also has an automation waiting on a person and a cut list. */
 export function gatheredWatch(host: { room: string }, changed: (presence: Presence) => void): () => void {
   const [imac, , box, home] = GATHERED_COMPUTERS;
   if (host.room === imac.room) {
     changed({ online: true, lastSeen: Date.now(), gathered: [
       { group: "needs_you", count: 1, rows: [row(agent("i1", "야간 미션 · 리뷰 기다림", 7, { device_id: "imac", group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "bot · main", line: asking("리뷰어가 고친 점 두 가지를 반영할까요?") }))] },
       { group: "done", count: 1, rows: [row(agent("i2", "테스트 고치기", 12, { device_id: "imac", group: "done", mark: "done", status_code: "idle", emphasized: true, place: "shop-api · fix/tests", line: { text: "완료 · 바뀐 파일 4개", mode: "news", tone: "news" } }))] },
-    ] });
+    ],
+    // An automation of that computer stopped for a person, and its list left agents out to fit one relay message.
+    asks: [{ id: "morning-report", name: "아침 리포트", reason: "login_expired" }],
+    omitted: 3 });
   }
   if (host.room === box.room) changed({ online: false, lastSeen: Date.now() - 90 * MINUTE });
   if (host.room === home.room) changed({ online: false, lastSeen: null, protocolMismatch: 6 });

@@ -148,8 +148,11 @@ type PhoneState = {
   tab: PhoneTab;
   /** The agents tab of a phone paired with two computers or more: every computer's 내 차례 and 읽을 것 (`all`), or this computer's list (`one`). */
   listScope: "all" | "one";
-  /** The open computer offers connections between two Hides, as its hello said: only then does the agents tab offer the gathered view. */
-  deviceConnect: boolean;
+  /**
+   * Whether the open computer offers connections between two Hides, as its hello on this page said; null until it said hello, when
+   * its saved answer stands (`PairedHost.deviceConnect`). Only then does the agents tab offer the gathered view.
+   */
+  deviceConnect: boolean | null;
   missionOpen: string | null;
   /** Null until the first missions frame; kept across a lost connection, dimmed under the unreachable line (B45). */
   missions: PhoneMission[] | null;
@@ -234,7 +237,7 @@ const initial: PhoneState = {
   detail: null,
   tab: "agents",
   listScope: typeof location === "undefined" ? "all" : listScopeOf(new URLSearchParams(location.search)),
-  deviceConnect: false,
+  deviceConnect: null,
   missionOpen: null,
   missions: null,
   missionsFailed: false,
