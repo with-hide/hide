@@ -146,24 +146,34 @@ struct AssetCache {
     bytes: usize,
 }
 
+/// What an entry costs beyond its body and its names: the map's and the
+/// queue's places for it, so an empty answer is never free.
+const ENTRY_COST: usize = 256;
+
 impl AssetCache {
     fn get(&self, key: &AssetKey) -> Option<(String, Bytes)> {
         self.entries.get(key).cloned()
     }
 
+    /// What `key` with `kind` and `body` holds of the cache's bound.
+    fn cost(key: &AssetKey, kind: &str, body: &Bytes) -> usize {
+        body.len() + key.build.len() + key.path.len() + kind.len() + ENTRY_COST
+    }
+
     fn put(&mut self, key: AssetKey, kind: String, body: Bytes) {
-        if body.len() > ASSET_CACHE || self.entries.contains_key(&key) {
+        let cost = Self::cost(&key, &kind, &body);
+        if cost > ASSET_CACHE || self.entries.contains_key(&key) {
             return;
         }
-        self.bytes += body.len();
+        self.bytes += cost;
         self.entries.insert(key.clone(), (kind, body));
         self.order.push_back(key);
         while self.bytes > ASSET_CACHE {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
-            if let Some((_, body)) = self.entries.remove(&oldest) {
-                self.bytes -= body.len();
+            if let Some((kind, body)) = self.entries.remove(&oldest) {
+                self.bytes -= Self::cost(&oldest, &kind, &body);
             }
         }
     }
@@ -183,8 +193,10 @@ pub struct RemoteScreens {
     state: OnceLock<AppState>,
     /// The guest side's assets of hosts' builds.
     assets: Mutex<AssetCache>,
-    /// The guest side's asset requests open now.
-    asset_streams: Arc<tokio::sync::Semaphore>,
+    /// The guest side's page and asset requests open now, per host: a host
+    /// that answers slowly or not at all holds only its own places. A host
+    /// with none open is dropped from the map at the next request.
+    asset_places: Mutex<HashMap<PeerKey, Arc<tokio::sync::Semaphore>>>,
 }
 
 impl RemoteScreens {
@@ -196,12 +208,32 @@ impl RemoteScreens {
             bulks: Mutex::default(),
             state: OnceLock::new(),
             assets: Mutex::default(),
-            asset_streams: Arc::new(tokio::sync::Semaphore::new(ASSET_STREAMS)),
+            asset_places: Mutex::default(),
         })
     }
 
     /// How many views are seated now; they do not count against this
     /// machine's windows.
+    /// A place for one page or asset request on `host`, waiting at most
+    /// `OPEN_WITHIN` for one of its own to free.
+    async fn asset_place(&self, host: PeerKey) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let places = {
+            let mut places = lock(&self.asset_places);
+            // A host's places are kept while a request holds one: each
+            // request holds the semaphore it took from.
+            places.retain(|_, held| Arc::strong_count(held) > 1);
+            Arc::clone(
+                places
+                    .entry(host)
+                    .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(ASSET_STREAMS))),
+            )
+        };
+        tokio::time::timeout(OPEN_WITHIN, places.acquire_owned())
+            .await
+            .ok()?
+            .ok()
+    }
+
     pub fn seated(&self) -> usize {
         self.views.load(Ordering::SeqCst)
     }
@@ -482,7 +514,7 @@ async fn guest_file(state: AppState, device: String, path: String, headers: Head
     if cached && let Some((kind, body)) = lock(&screens.assets).get(&key) {
         return asset_response(&kind, body);
     }
-    let Ok(_place) = Arc::clone(&screens.asset_streams).acquire_owned().await else {
+    let Some(_place) = screens.asset_place(host).await else {
         return unavailable("not_connected");
     };
     let io = match open_stream(&link, StreamKind::ScreenBulk).await {
@@ -748,6 +780,55 @@ mod tests {
         assert!(cache.get(&asset(1, "b1", "/assets/a.js")).is_none());
         assert!(cache.get(&asset(1, "b1", "/assets/b.js")).is_some());
         assert!(cache.get(&asset(1, "b2", "/assets/b.js")).is_none());
+    }
+
+    // A host that holds every place it has (a stalled answer) holds none of
+    // another host's: that one's page still opens at once, and the stalled
+    // host's next request gives up within its bound.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_that_holds_its_places_holds_no_other_host_s() {
+        let screens = RemoteScreens::new();
+        let (stalled, other) = (PeerKey::from_bytes([1; 32]), PeerKey::from_bytes([2; 32]));
+        let mut held = Vec::new();
+        for _ in 0..ASSET_STREAMS {
+            held.push(
+                screens
+                    .asset_place(stalled)
+                    .await
+                    .expect("a place of its own"),
+            );
+        }
+        let started = tokio::time::Instant::now();
+        assert!(screens.asset_place(other).await.is_some());
+        assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+        assert!(screens.asset_place(stalled).await.is_none());
+        assert_eq!(started.elapsed(), OPEN_WITHIN);
+        drop(held);
+        assert!(screens.asset_place(stalled).await.is_some());
+    }
+
+    // Empty answers under ever new names fill the bound too: what each
+    // entry's names and places take counts, so the oldest go.
+    #[test]
+    fn empty_assets_under_new_names_stay_within_the_bound() {
+        let mut cache = AssetCache::default();
+        let limit = ASSET_CACHE / ENTRY_COST;
+        for n in 0..limit + 100 {
+            cache.put(
+                asset(1, "b1", &format!("/assets/{n}.js")),
+                "text/javascript".into(),
+                Bytes::new(),
+            );
+        }
+        assert!(cache.bytes <= ASSET_CACHE);
+        assert!(cache.entries.len() < limit);
+        assert_eq!(cache.entries.len(), cache.order.len());
+        assert!(cache.get(&asset(1, "b1", "/assets/0.js")).is_none());
+        assert!(
+            cache
+                .get(&asset(1, "b1", &format!("/assets/{}.js", limit + 99)))
+                .is_some()
+        );
     }
 
     // A paired machine that names another's build and path keeps its own
