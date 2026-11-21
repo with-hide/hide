@@ -11,11 +11,18 @@ const TILE_BG: Record<BotColor, string> = {
   charcoal: "bg-bot-charcoal",
 };
 
-/** `tile` is a device tile's size (the rail and Settings' rows), `row` a menu row's mark, `line` a mark inside a line of text. */
+/**
+ * `tile` is a device tile's size (the rail and Settings' rows), `row` a menu
+ * row's mark, `line` a mark inside a line of text, `badge` the corner of an
+ * agent's logo (where Hide AI's owl sits) and `mark` an agent mark's own size,
+ * standing in for the logo while logos are hidden.
+ */
 const SIZE = {
   tile: "size-(--size-icon-button-standard) rounded-md",
   row: "size-(--size-icon-lg) rounded-sm",
   line: "size-(--size-icon) rounded-xs",
+  badge: "size-(--size-hide-badge) rounded-xs",
+  mark: "size-(--size-agent-badge-compact) rounded-xs",
 } as const;
 
 /**
