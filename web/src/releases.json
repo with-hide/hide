@@ -2,6 +2,269 @@
   "schema": 1,
   "versions": [
     {
+      "version": "1.2.11",
+      "date": "2026-11-21",
+      "highlights": [
+        {
+          "drawing": "automation",
+          "chapter": null,
+          "text": {
+            "en": {
+              "title": "Hand your everyday tasks to automations",
+              "line": "Set a time once for things like a morning briefing or a weekly summary, and an agent does them for you; the result waits for you in Needs You."
+            },
+            "ko": {
+              "title": "매일 하는 일은 자동화에 맡겨 두세요",
+              "line": "아침 브리핑, 주간 정리처럼 반복하는 일은 시간만 정해 두면 에이전트가 대신 해요. 결과는 내 차례에서 바로 볼 수 있어요."
+            },
+            "zh-CN": {
+              "title": "把日常工作交给自动化",
+              "line": "像早间简报、每周汇总这样的重复工作，只要设定时间，智能体就会替你完成，结果在“轮到你”里等你查看。"
+            },
+            "ja": {
+              "title": "毎日の作業は自動化に任せましょう",
+              "line": "朝のブリーフィングや週次のまとめなど、繰り返す作業は時間を決めておけばエージェントが代わりにやります。結果は「自分の番」ですぐ見られます。"
+            }
+          }
+        },
+        {
+          "drawing": "pair",
+          "chapter": null,
+          "text": {
+            "en": {
+              "title": "Pair view, for when you want to focus on one agent",
+              "line": "Press Pair view on a pane to see its terminal beside what the agent is making, a website or a slide deck, and watch it change as the agent works."
+            },
+            "ko": {
+              "title": "한 에이전트의 일에 집중하고 싶을 때는 짝 보기",
+              "line": "패널의 짝 보기 버튼을 누르면 터미널과 그 에이전트가 만드는 웹사이트나 발표 자료가 나란히 보여요. 고치는 대로 옆에서 바로 바뀌어요."
+            },
+            "zh-CN": {
+              "title": "想专注于一个智能体时，用并排查看",
+              "line": "按窗格上的“并排查看”，它的终端和智能体正在做的网站或幻灯片会并排显示，修改的同时就能在旁边看到变化。"
+            },
+            "ja": {
+              "title": "一つのエージェントに集中したいときはペア表示",
+              "line": "ペインの「ペア表示」を押すと、ターミナルとそのエージェントが作っているウェブサイトやスライドが並んで表示され、直したそばから変わるのが見えます。"
+            }
+          }
+        },
+        {
+          "drawing": "skills",
+          "chapter": null,
+          "text": {
+            "en": {
+              "title": "Your skills and MCP servers, the same on every agent",
+              "line": "Add one once in Settings › Skills & MCP and Claude, Codex and every other agent can use it; turn it off or update it in the same place."
+            },
+            "ko": {
+              "title": "스킬과 MCP를 모든 에이전트에서 똑같이",
+              "line": "설정 › 스킬·MCP에서 한 번만 넣으면 Claude, Codex 등 모든 에이전트가 같이 써요. 끄고 켜기와 업데이트도 한 곳에서 해요."
+            },
+            "zh-CN": {
+              "title": "技能和 MCP，在每个智能体上都一样",
+              "line": "在 设置 › 技能与 MCP 中添加一次，Claude、Codex 等所有智能体都能使用；关闭或更新也在同一个地方。"
+            },
+            "ja": {
+              "title": "スキルと MCP をすべてのエージェントで同じように",
+              "line": "設定 › スキル・MCP で一度入れれば、Claude や Codex などすべてのエージェントが使えます。オンオフや更新も一か所でできます。"
+            }
+          }
+        }
+      ],
+      "changes": [
+        {
+          "kind": "change",
+          "text": {
+            "en": "After an update, a What's new window shows the version's main features once, and Help › Update history keeps every version.",
+            "ko": "업데이트하면 그 버전의 주요 기능을 새로운 기능 창으로 한 번 보여주고, 도움말 › 업데이트 기록에 모든 버전이 남아요.",
+            "zh-CN": "更新后会弹出一次“新功能”窗口，介绍该版本的主要功能；帮助 › 更新记录会保留每个版本。",
+            "ja": "アップデート後、そのバージョンの主な機能を「新機能」ウィンドウで一度だけ表示し、ヘルプ › 更新履歴にすべてのバージョンが残ります。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A mission node can start as soon as one finish line of the node before it is met, instead of waiting for the whole node.",
+            "ko": "미션 노드가 앞 노드 전체를 기다리지 않고, 앞 노드의 끝 조건 하나가 채워지면 바로 시작할 수 있어요.",
+            "zh-CN": "任务节点不必等前一个节点全部完成，只要满足它的一个完成条件就能开始。",
+            "ja": "ミッションのノードは、前のノード全体を待たずに、その終了条件の 1 つが満たされればすぐ始められます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Mission reviews count their rounds against the mission's strength, and each node's time is split between work and review.",
+            "ko": "미션 리뷰가 미션의 강도에 맞춰 횟수를 세고, 노드마다 시간을 작업과 리뷰로 나눠 보여줘요.",
+            "zh-CN": "任务评审会按任务强度计算轮数，每个节点的时间会分为工作和评审。",
+            "ja": "ミッションのレビューは強度に合わせて回数を数え、ノードごとの時間を作業とレビューに分けて示します。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A mission node's delay or hold is one wait, and the warning about a node with no push is gone.",
+            "ko": "미션 노드의 지연과 보류가 하나의 대기로 합쳐졌고, 푸시가 없다는 경고는 없어졌어요.",
+            "zh-CN": "任务节点的延迟和暂停合并为一种等待，“没有推送”的警告已移除。",
+            "ja": "ミッションのノードの遅延と保留が 1 つの待機になり、プッシュがないという警告はなくなりました。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A mission's Needs You row can be put away.",
+            "ko": "미션의 내 차례 줄을 치워 둘 수 있어요.",
+            "zh-CN": "可以收起任务的“轮到你”行。",
+            "ja": "ミッションの「自分の番」の行をしまっておけます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A finished mission node's panel opens on its result.",
+            "ko": "끝난 미션 노드의 패널이 그 결과부터 보여줘요.",
+            "zh-CN": "已完成的任务节点面板会先显示它的结果。",
+            "ja": "終わったミッションのノードのパネルは、その結果から表示します。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Letters are addressed to an agent, and when another agent takes its pane over, the letter goes to that agent.",
+            "ko": "편지를 에이전트에게 보내고, 다른 에이전트가 그 패널을 이어받으면 편지도 그 에이전트에게 가요.",
+            "zh-CN": "信件发给智能体；如果另一个智能体接手了它的窗格，信件会交给那个智能体。",
+            "ja": "手紙はエージェント宛てに届き、別のエージェントがそのペインを引き継ぐと、手紙もそのエージェントに渡ります。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "After a restart, every cut-off agent resumes, and only working children and participants are told to go on.",
+            "ko": "다시 시작하면 끊긴 에이전트가 모두 이어서 열리고, 일하던 자식과 참여자에게만 계속하라고 알려요.",
+            "zh-CN": "重新启动后，所有中断的智能体都会恢复，只有正在工作的子智能体和参与者会收到继续的提示。",
+            "ja": "再起動すると、途中で切れたエージェントはすべて再開し、作業中だった子と参加者にだけ続けるよう伝えます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "Hide's notices are corner toasts that leave or stay by level, one per subject.",
+            "ko": "Hide의 알림이 구석의 토스트로 뜨고, 수준에 따라 사라지거나 남으며, 대상마다 하나씩만 보여요.",
+            "zh-CN": "Hide 的通知以角落提示的形式出现，按级别自动消失或保留，每个对象只显示一条。",
+            "ja": "Hide の通知は隅のトーストで表示され、レベルによって消えるか残り、対象ごとに 1 つだけ出ます。"
+          }
+        },
+        {
+          "kind": "change",
+          "text": {
+            "en": "A new agent session is given the project's other sessions at its start, so it can pick up their work.",
+            "ko": "새 에이전트 세션이 시작할 때 프로젝트의 다른 세션들을 받아서, 그 일을 이어받을 수 있어요.",
+            "zh-CN": "新的智能体会话在开始时会获得项目的其他会话，便于接手它们的工作。",
+            "ja": "新しいエージェントのセッションは、開始時にプロジェクトのほかのセッションを受け取り、その作業を引き継げます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Pane commands kept working when Hide ran out of open files.",
+            "ko": "Hide가 열 수 있는 파일 수를 다 써도 패널 명령이 계속 돼요.",
+            "zh-CN": "Hide 用尽可打开的文件数后，窗格命令仍可使用。",
+            "ja": "Hide が開けるファイル数を使い切っても、ペインのコマンドが使えます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Sending letters and starting agents no longer stops when the letter record fills up.",
+            "ko": "편지 기록이 가득 차도 편지 보내기와 에이전트 시작이 멈추지 않아요.",
+            "zh-CN": "信件记录写满后，发送信件和启动智能体不再停止。",
+            "ja": "手紙の記録がいっぱいになっても、手紙の送信やエージェントの起動が止まりません。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An agent a letter woke stays awake until the letter is delivered.",
+            "ko": "편지로 깨운 에이전트가 편지를 받을 때까지 깨어 있어요.",
+            "zh-CN": "被信件唤醒的智能体会保持唤醒，直到信件送达。",
+            "ja": "手紙で起こしたエージェントは、手紙が届くまで起きたままです。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An Antigravity agent rings when it waits at an empty prompt.",
+            "ko": "Antigravity 에이전트가 빈 입력창에서 기다릴 때 알림이 울려요.",
+            "zh-CN": "Antigravity 智能体在空提示符处等待时会响铃。",
+            "ja": "Antigravity のエージェントが空のプロンプトで待つと通知が鳴ります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A mission worker starts at its destination in any checkout of the project.",
+            "ko": "미션 작업자가 프로젝트의 어느 체크아웃에서든 정해진 곳에서 시작해요.",
+            "zh-CN": "任务执行者在项目的任何检出中都会从目标位置开始。",
+            "ja": "ミッションの作業者は、プロジェクトのどのチェックアウトでも目的の場所から始まります。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Whether a mission moves on shows on its pane chip at any width.",
+            "ko": "미션이 다음으로 넘어가는지가 너비와 상관없이 패널 칩에 보여요.",
+            "zh-CN": "无论宽度如何，窗格标签上都会显示任务是否继续推进。",
+            "ja": "ミッションが次へ進むかどうかが、幅に関係なくペインのチップに表示されます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "An agent that takes over a mission worker's pane gets the mission's Conductor as its parent.",
+            "ko": "미션 작업자의 패널을 이어받은 에이전트가 그 미션의 Conductor를 부모로 가져요.",
+            "zh-CN": "接手任务执行者窗格的智能体会以该任务的 Conductor 为父级。",
+            "ja": "ミッションの作業者のペインを引き継いだエージェントは、そのミッションの Conductor を親にします。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A workspace purpose is set on the checkout the command runs in.",
+            "ko": "워크스페이스 목적이 명령을 실행한 체크아웃에 정해져요.",
+            "zh-CN": "工作区用途会设置在运行命令的检出上。",
+            "ja": "ワークスペースの目的は、コマンドを実行したチェックアウトに設定されます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A session record lists only outputs that can be opened.",
+            "ko": "세션 기록에 열 수 있는 결과물만 보여요.",
+            "zh-CN": "会话记录只列出可以打开的产出。",
+            "ja": "セッションの記録には、開ける成果物だけが表示されます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "A pane's agent keeps its session when an agent it runs reports another one.",
+            "ko": "패널의 에이전트가 실행한 에이전트가 다른 세션을 알려도 원래 세션을 지켜요.",
+            "zh-CN": "窗格中的智能体在它运行的智能体报告另一个会话时，仍保留原来的会话。",
+            "ja": "ペインのエージェントは、それが動かすエージェントが別のセッションを報告しても、自分のセッションを保ちます。"
+          }
+        },
+        {
+          "kind": "fix",
+          "text": {
+            "en": "Two connections can install Hide on one device account at the same time.",
+            "ko": "두 연결이 한 기기 계정에 동시에 Hide를 설치할 수 있어요.",
+            "zh-CN": "两个连接可以同时在同一设备账户上安装 Hide。",
+            "ja": "2 つの接続が同じ機器のアカウントに同時に Hide をインストールできます。"
+          }
+        }
+      ]
+    },
+    {
       "version": "1.2.10",
       "date": "2026-11-16",
       "highlights": [
