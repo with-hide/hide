@@ -1,5 +1,7 @@
 """Which lanes `scripts/ci-plan.py` plans for real changes, and what `verify` accepts."""
+import contextlib
 import importlib.util
+import io
 from fnmatch import fnmatchcase
 import json
 import os
@@ -1745,11 +1747,24 @@ class WindowsOnPullRequests(unittest.TestCase):
             pr.commit("topic", "relay", {"hide-relay-protocol/src/lib.rs": '#[cfg(windows)]\nfn a() {}\n'})
             pr.check_out_merge()
             output = Path(directory) / "output"
-            subprocess.run([sys.executable, str(ROOT / "scripts/ci-plan.py"), "plan", "--event", "pull_request"],
-                           cwd=directory, check=True, capture_output=True,
-                           env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", ""), "GITHUB_OUTPUT": str(output)})
+            plan = ci.plan
+
+            def plan_the_fixture(*args, **kwargs):
+                # The command plans the checkout its script is in. In CI that is
+                # the pull request's own merge commit, whose paths would decide
+                # the legs, so the fixture is named as the checkout to read.
+                return plan(*args, root=Path(directory), **kwargs)
+
+            environment = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", ""), "GITHUB_OUTPUT": str(output)}
+            with unittest.mock.patch.object(ci, "plan", plan_the_fixture), \
+                    unittest.mock.patch.object(sys, "argv", ["ci-plan.py", "plan", "--event", "pull_request"]), \
+                    unittest.mock.patch.dict(os.environ, environment, clear=True), \
+                    contextlib.redirect_stdout(io.StringIO()) as printed:
+                ci.main()
+            # The plan compared the fixture's merge commit, not this checkout's.
+            self.assertEqual(json.loads(printed.getvalue())["reasons"]["policy"][0].split(":")[0], "crate graph unavailable")
             written = dict(row.split("=", 1) for row in output.read_text().splitlines())
-            # The crate graph comes from this checkout, which has no workspace, so every lane is planned.
+            # The crate graph comes from the fixture, which has no workspace, so every lane is planned.
             self.assertEqual(json.loads(written["windows-legs"]), list(ci.WINDOWS_LEG_LANES))
             self.assertEqual(written["body-only"], "false")
 
