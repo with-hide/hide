@@ -677,19 +677,7 @@ impl Runtime {
                     // so the sleeping row is drawn from the record. The
                     // engine can still list the agent here, and the published
                     // session stream brings the session that no longer does.
-                    match crate::address::pane_device(pane_id) {
-                        None if self.runs_own_engine() => self.request_republish(),
-                        None => {}
-                        Some(device) => {
-                            if let Some(sync) = self
-                                .remote_connections
-                                .get(device)
-                                .and_then(|connection| connection.sync.as_ref())
-                            {
-                                sync.republish_waker().wake();
-                            }
-                        }
-                    }
+                    self.read_session_of(pane_id);
                 }
                 true
             }
@@ -876,9 +864,109 @@ impl Runtime {
         SleepStart::Begun { changed: false }
     }
 
+    /// Asks the session of `pane_id`'s machine again, so its rows are drawn
+    /// from the sleep records as they are now.
+    fn read_session_of(&self, pane_id: &str) {
+        match crate::address::pane_device(pane_id) {
+            None if self.runs_own_engine() => self.request_republish(),
+            None => {}
+            Some(device) => {
+                if let Some(sync) = self
+                    .remote_connections
+                    .get(device)
+                    .and_then(|connection| connection.sync.as_ref())
+                {
+                    sync.republish_waker().wake();
+                }
+            }
+        }
+    }
+
+    /// The pane of the live agent of `kind` that holds conversation `session`
+    /// on `device`'s machine, other than `except`; a sleeping row holds none.
+    pub(super) fn live_conversation_pane(
+        &self,
+        device: &str,
+        kind: &str,
+        session: &str,
+        except: &str,
+    ) -> Option<String> {
+        let kind = hide_agent_adapter::canonical_kind(kind);
+        self.machine_agents(device)
+            .iter()
+            .find(|agent| {
+                agent.pane_id != except
+                    && agent.sleep.is_none()
+                    && hide_agent_adapter::canonical_kind(&agent.agent_kind) == kind
+                    && agent.session_id.as_deref() == Some(session)
+            })
+            .map(|agent| agent.pane_id.clone())
+    }
+
+    /// A sleeping agent whose conversation another pane already runs is not
+    /// woken (with-hide/hide#2590): a resume would be a second writer of the
+    /// one conversation. Its sleep ends as if the agent had ended there,
+    /// leaving the pane its shell, and the operator who asked for it is
+    /// taken to the pane that runs it.
+    fn sleep_live_elsewhere(&mut self, pane_id: &str, live: String, trigger: &str) -> bool {
+        self.snapshot.ui_state.agent_sleep.records.remove(pane_id);
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_sleep",
+            "kind": "agent_sleep.live_elsewhere",
+            "pane_id": pane_id,
+            "live_pane_id": live,
+            "trigger": trigger,
+        }));
+        // The pane's shell takes keys again, and its sleeping row goes.
+        self.sync_terminal_intents();
+        self.refresh_sleep_rows_of(pane_id);
+        self.read_session_of(pane_id);
+        self.show_live_conversation(live, trigger);
+        self.persist_ui_state();
+        true
+    }
+
+    /// Takes the operator to `live`, the pane that runs the conversation a
+    /// wake was asked for; a letter's wake moves no screen.
+    pub(super) fn show_live_conversation(&mut self, live: String, trigger: &str) {
+        if trigger != "letter" {
+            match crate::address::pane_device(&live) {
+                None => self.focus_pane(live, PaneFocusOrigin::Operator, None),
+                Some(device) => {
+                    self.request_remote_control(RemoteControlPayload {
+                        target_id: device.to_owned(),
+                        request_id: format!("agent-sleep:{}:{live}", unix_milliseconds()),
+                        report_pane_focus_outcome: false,
+                        focus_device: false,
+                        request: RemoteControlRequest::FocusPane { pane_id: live },
+                    });
+                }
+            }
+        }
+    }
+
     fn begin_agent_wake(&mut self, pane_id: &str, mode: WakeMode, trigger: &str) -> bool {
         if self.failed_terminal_id(pane_id).is_some() {
             return false;
+        }
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        if let Some(live) = self
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .get(pane_id)
+            .filter(|_| mode == WakeMode::Resume)
+            .and_then(|record| {
+                self.live_conversation_pane(
+                    device,
+                    &record.kind,
+                    record.session_id.as_deref()?,
+                    pane_id,
+                )
+            })
+        {
+            return self.sleep_live_elsewhere(pane_id, live, trigger);
         }
         let Some(context) = self.sleep_target(pane_id) else {
             return false;
