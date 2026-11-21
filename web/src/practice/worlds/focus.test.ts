@@ -76,6 +76,8 @@ describe("the focus flow's world (UI_BEHAVIOR, Practice window)", () => {
     const on = apply(FOCUS_WORLD.initial(), pairView(BUILDER));
     const folded = apply(on, { kind: "pair_view_desk", payload: { shown: false } });
     expect(view(folded).tray.pair).toMatchObject({ pane_id: BUILDER, alone: true, shown: 1 });
+    expect(doneAt("fold", folded)).toBe(true);
+    expect(doneAt("fold", on)).toBe(false);
     expect(view(apply(folded, { kind: "pair_view_desk", payload: { shown: true } })).tray.pair).toMatchObject({ alone: false });
     const alone = apply(FOCUS_WORLD.initial(), pairView(OTHER));
     expect(FOCUS_WORLD.apply(alone, { kind: "pair_view_desk", payload: { shown: true } })).toBeNull();

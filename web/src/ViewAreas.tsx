@@ -185,8 +185,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    // Pair view draws neither the desk's ✕ nor its ◧: only its own ways out end it (D-42, D-46).
-    close: pair === null ? { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <DeskPairButton displayId={front} actions={actions} /> } : undefined,
+    // The desk's ✕ is the same part in focus mode, where it folds the desk as ⌘E does (`closeDocuments`, D-57, D-63); the ◧ is a way in only and is not drawn there (D-42).
+    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: pair === null ? <DeskPairButton displayId={front} actions={actions} /> : undefined },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };

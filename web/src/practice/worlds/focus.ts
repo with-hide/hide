@@ -62,6 +62,8 @@ const hasPage = (model: FocusModel, pane: string) => model.pageOpen && pane === 
 export const besidePage = (model: FocusModel) => model.pair !== null && hasPage(model, model.pair.pane) && !model.pair.folded;
 /** Whether focus mode draws the builder with its page beside it. */
 export const focusedOnBuilder = (model: FocusModel) => besidePage(model) && model.pair?.pane === BUILDER;
+/** Whether focus mode draws the builder with its desk folded: the terminal alone at the full width (⌘E or the band's button). */
+export const deskFolded = (model: FocusModel) => model.pair !== null && hasPage(model, model.pair.pane) && model.pair.folded;
 /** Whether the agent has changed the page. */
 export const pageChanged = (model: FocusModel) => model.stage >= 1;
 /** Whether focus mode is off. */
