@@ -81,6 +81,10 @@ export const pairingEnglish = {
   "pairing.action.request": "Open {{name}} too",
   "pairing.action.requestAgain": "Ask again",
   "pairing.action.forget": "Remove",
+  "remoteScreen.noGrant": "Not allowed",
+  "remoteScreen.reconnects": "Opens on its own once it is reached",
+  "remoteScreen.opening": "Opening its screen…",
+  "remoteScreen.openSettings": "Open device settings",
   "pairing.menu.aria": "More actions for {{name}}",
   "pairing.menu.pauseOutgoing": "Stop opening it",
   "pairing.menu.resumeOutgoing": "Open it again",
@@ -207,6 +211,10 @@ const ko = {
   "pairing.remove.go": "빼기",
   "pairing.rail.hint": "{{name}} · {{state}}",
   "settings.titleOf": "{{machine}} 설정",
+  "remoteScreen.noGrant": "허가 없음",
+  "remoteScreen.reconnects": "다시 닿으면 자동으로 열려요",
+  "remoteScreen.opening": "화면을 여는 중…",
+  "remoteScreen.openSettings": "기기 설정 열기",
 } satisfies Catalog<typeof pairingEnglish>;
 
 const zhCN = {
@@ -309,6 +317,10 @@ const zhCN = {
   "pairing.remove.go": "移除",
   "pairing.rail.hint": "{{name}} · {{state}}",
   "settings.titleOf": "{{machine}} 设置",
+  "remoteScreen.noGrant": "无许可",
+  "remoteScreen.reconnects": "连上后会自动打开",
+  "remoteScreen.opening": "正在打开画面…",
+  "remoteScreen.openSettings": "打开设备设置",
 } satisfies Catalog<typeof pairingEnglish>;
 
 const ja = {
@@ -411,6 +423,10 @@ const ja = {
   "pairing.remove.go": "外す",
   "pairing.rail.hint": "{{name}} · {{state}}",
   "settings.titleOf": "{{machine}} の設定",
+  "remoteScreen.noGrant": "許可なし",
+  "remoteScreen.reconnects": "つながり次第、自動で開きます",
+  "remoteScreen.opening": "画面を開いています…",
+  "remoteScreen.openSettings": "デバイス設定を開く",
 } satisfies Catalog<typeof pairingEnglish>;
 
 export const pairingCatalogs = { en: pairingEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof pairingEnglish>;

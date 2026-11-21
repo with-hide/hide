@@ -33,6 +33,7 @@ import { InlineStartHost } from "./AgentTabStart";
 import { FONT_SIZE_BASE, usableAccent, usableFontSize, usableTerminalFontFamily, usableTerminalFontSize } from "./settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
+import { RemoteStage } from "./RemoteStage";
 import { TitleRow } from "./TitleRow";
 import { readEditorAvailability } from "./host";
 import { RegionFailed, RenderBoundary, ShellFailed, SidebarFailed, TitleRowFailed } from "./RenderBoundary";
@@ -272,6 +273,7 @@ export function App() {
   // window's width under the top row, because while it shows the whole window
   // waits on the core; every other notice stands in the window's corner,
   // newest nearest the corner.
+  const remoteScreen = useUiStore((s) => s.remoteScreen);
   const notices: [string, ReactNode][] = [
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
@@ -317,14 +319,23 @@ export function App() {
           {leftOut(["connection", <ConnectionBadge actions={actions} />])}
           {leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />])}
           <div className="flex min-h-0 flex-1">
-            <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
-              <Sidebar actions={actions} />
-            </RenderBoundary>
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <RenderBoundary region="screen" fallback={<RegionFailed />}>
-                <CenterScreen actions={actions} />
+            {/* A paired machine's own screen takes the sidebar's and the center's place, beside the rail (PRD device-connect-iroh B17). */}
+            {remoteScreen !== null ? (
+              <RenderBoundary region="remote_screen" fallback={<RegionFailed />}>
+                <RemoteStage actions={actions} />
               </RenderBoundary>
-            </main>
+            ) : (
+              <>
+                <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
+                  <Sidebar actions={actions} />
+                </RenderBoundary>
+                <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <RenderBoundary region="screen" fallback={<RegionFailed />}>
+                    <CenterScreen actions={actions} />
+                  </RenderBoundary>
+                </main>
+              </>
+            )}
           </div>
           <ToastStack>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}

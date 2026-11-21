@@ -5,15 +5,15 @@
 // browser displays (issue 155), and the Factory's and agents' notifications with their clicks,
 // withdrawals, the system's permission for them and the app icon's count, the window frame the
 // top row is drawn inside, the window brought forward after `hide <path>`, a folder handed to VS Code, the app's own updates, its Quit, and the
-// practice window.
+// practice window, and where another machine's Hide screen shows.
 // No Node API, no other channel. Browser pages load in their own session with no preload, so none
 // of this reaches them.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import type { BrowserCommand, BrowserHostEvent, BrowserSync } from "../../../web/src/host";
+import type { BrowserCommand, BrowserHostEvent, BrowserRect, BrowserSync, RemoteScreenState } from "../../../web/src/host";
 import type { ExternalGrant, ExternalKind, ExternalRead, FirewallAnswer, FirewallState, NotificationPermission, ProbedPath, UpdateStatus, WhatsNewState, WindowChrome } from "../../../web/src/host";
 import type { RecordUpdate } from "../../../web/src/releases";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL, REMOTE_SHOW_CHANNEL, REMOTE_STATE_CHANNEL } from "../channel";
 
 contextBridge.exposeInMainWorld("hideHost", {
   kind: "electron",
@@ -176,6 +176,18 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
     save(update: RecordUpdate): void {
       ipcRenderer.send(WHATS_NEW_SAVE_CHANNEL, update);
+    },
+  },
+  remoteScreens: {
+    show(view: { device: string; rect: BrowserRect } | null): void {
+      ipcRenderer.send(REMOTE_SHOW_CHANNEL, view);
+    },
+    onState(listener: (state: RemoteScreenState) => void): () => void {
+      const handler = (_event: IpcRendererEvent, state: RemoteScreenState) => listener(state);
+      ipcRenderer.on(REMOTE_STATE_CHANNEL, handler);
+      return () => {
+        ipcRenderer.removeListener(REMOTE_STATE_CHANNEL, handler);
+      };
     },
   },
   browser: {

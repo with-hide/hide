@@ -13,6 +13,7 @@ import type { ProgramCopy } from "./clipboard";
 import { hostBridge, hostKind } from "./host";
 import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
+import { BridgeSocket, HIDDEN_CLOSE, remoteBridge } from "./remoteView";
 
 export type DispatchFn = (event: {
   schema_version: number;
@@ -79,6 +80,11 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
 
   // Decided once: the probe is a measurement seam, not a per-frame branch.
   const probing = probeEnabled();
+  // Another machine's view: its socket is the bridge's, its page holds no
+  // token of the host, and the desktop owns its reconnect (PRD
+  // device-connect-iroh D-67).
+  const bridge = remoteBridge();
+  let hidden = false;
 
   const dispatch: DispatchFn = (event) => {
     // A move holds the window until the machine that takes the core draws
@@ -109,6 +115,8 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   };
 
   const reportAccess = (drawn: boolean) => {
+    // Another machine's view is counted on the machine that shows it (D-67).
+    if (bridge) return;
     if (!accessReported && drawn && useShellStore.getState().connection === "live") {
       // Once per page lifetime, after the first accepted state is usable.
       accessReported = dispatch({ schema_version: 2, kind: "product_analytics_connected", payload: {} }) === true;
@@ -141,14 +149,20 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
 
   const open = () => {
     if (closed) return;
-    const token = tokenFromLocation();
-    if (!token) {
+    const token = bridge ? "" : tokenFromLocation();
+    if (token === null) {
       useShellStore.getState().setConnection("gone");
       return;
     }
     useShellStore.getState().setConnection(socket ? (held() ? "moving" : "reconnecting") : "connecting");
     openedToken = token;
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    // Every connection says again whether it may see the pairings under
+    // way: a window of this machine is sent them first, any other screen
+    // never, so what an earlier connection showed does not stay.
+    useShellStore.getState().clearPairing();
+    const ws = bridge
+      ? (new BridgeSocket(bridge) as unknown as WebSocket)
+      : new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
     // File bytes arrive as binary frames on this same socket; the header and
     // payload are split by the file-bytes reader, not by the snapshot store.
     ws.binaryType = "arraybuffer";
@@ -190,7 +204,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "daemon") {
         announcedCore = (frame.payload as { core_instance?: string } | undefined)?.core_instance ?? null;
       }
-      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link") {
+      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link" || frame.type === "refused") {
         useShellStore.getState().applyFrame(frame);
         return;
       }
@@ -296,6 +310,8 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         useShellStore.getState().setConnection("gone", true);
         return;
       }
+      // A tile the desktop hid opens again when it shows.
+      if (bridge && event.code === HIDDEN_CLOSE) return;
       void scheduleReconnect(ws);
     });
     ws.addEventListener("error", () => {
@@ -305,6 +321,16 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
 
   const scheduleReconnect = async (ended: WebSocket) => {
     useShellStore.getState().setConnection(held() ? "moving" : "reconnecting");
+    // Another machine's view asks no `/health`: the host is reached only
+    // through the bridge, which opens again on the next try or when the
+    // tile shows.
+    if (bridge) {
+      backoff = nextBackoff(backoff);
+      reconnectTimer = window.setTimeout(() => {
+        if (!hidden && socket === ended) open();
+      }, backoff);
+      return;
+    }
     const ok = await healthOk();
     // A new token in the address opened a connection while the health read
     // was out: that one is the window's now, and a second would race it.
@@ -338,6 +364,15 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     replaced?.close();
   };
   window.addEventListener("hashchange", followToken);
+  // A tile shown again opens its view at once; a hidden one stays closed.
+  bridge?.onVisible((visible) => {
+    hidden = !visible;
+    if (!visible || closed) return;
+    if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) return;
+    if (reconnectTimer) window.clearTimeout(reconnectTimer);
+    backoff = BACKOFF_START_MS;
+    open();
+  });
 
   open();
   configureAttachments({ dispatch, sendBinary });

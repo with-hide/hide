@@ -2772,7 +2772,7 @@ The WebSocket handshake is the client's first JSON frame `{token, schema_version
 Schema 2 clients that request `snapshot_format: "semantic-rest-v1"` receive `rest_format: "semantic-rest-v1"` on snapshot payloads: a delta replaces only fields it carries, merging navigator, terminal and status by their direct fields, while arrays replace as complete ordered lists.
 Omission retains a value, `null` clears an optional value and an empty array or map clears a collection; `workspace_view` is explicitly null when absent in this format.
 Without the capability, schema 2 keeps the supported complete-rest delta, including the omitted absent `workspace_view`; an unknown format is refused with `schema_mismatch` before snapshot delivery.
-A mismatched token, Origin, or schema version, or a ninth concurrent client, is closed with a reason code (`invalid_token`, `origin_not_allowed`, `schema_mismatch`, `client_limit`) and a diagnostic log line.
+A mismatched token, Origin, or schema version, or a ninth concurrent window or tool (another machine's views have seats of their own, [Another machine's screen](#another-machines-screen)), is closed with a reason code (`invalid_token`, `origin_not_allowed`, `schema_mismatch`, `client_limit`) and a diagnostic log line.
 The web shell follows a new token in its address by retiring the previous socket's pending file reads with `socket_closed` and clearing its browser-comment state before opening the successor; the previous socket's late close cannot reject the successor's reads.
 After a valid handshake the daemon reads from the revision the client sent (`have_revision`, the cursor `Core::snapshot_delta_payload` takes), and then one delta frame per core notification burst.
 A client with cursor 0 gets a self-contained `snapshot`; a reconnecting client resumes with a `delta` that carries only what changed while it was away.
@@ -2938,7 +2938,7 @@ When `~/.hide/state` already exists nothing is merged: the new folder is used, a
 A folder `HIDE_STATE_DIR` or `XDG_STATE_HOME` chose is never moved (D-04).
 
 With no window attached the daemon does only the work that keeps labels current (D-20, B29).
-`hided` counts web and desktop renderers, tells the core `ui_attached` when the first arrives and when the last leaves (under one lock, so two windows arriving together cannot leave the core told the opposite of the final count), and refuses `ui_attached` from a client, because a window that sent it would pause the readers every other window draws.
+`hided` counts web and desktop renderers, another machine's view among them, tells the core `ui_attached` when the first arrives and when the last leaves (under one lock, so two windows arriving together cannot leave the core told the opposite of the final count), and refuses `ui_attached` from a client, because a window that sent it would pause the readers every other window draws ([Which connection may send what](#which-connection-may-send-what)).
 While none is attached the session-sync coordinator rests the readers that only feed what a window draws: foreground processes, provider usage, ports, worktrees, GitHub and disk, and the Background AI probe.
 Label work, which runs on the coordinator's own wakes, goes on, and the root follower skips its snapshot reads while no client is connected and catches up with one read when the next client arrives (`RootFollower::resume`).
 The readers resume on the coordinator's next wake after a window attaches.
@@ -3264,6 +3264,7 @@ The core role opens this machine's end of it in `hided/src/peer_host.rs`, and on
 A machine whose every host dropped the pairing has nothing to dial and opens none at its start: its rows are read from the saved records (`PeerHost::recorded`, `Pairing::rested`).
 A machine that is paired with nothing binds no socket, attaches to no relay and asks macOS nothing about the local network; once open the endpoint stays open until the daemon ends, which closes it.
 Every stream a peer opens is handed to the one handler its kind's owner registered at the daemon's start (`PeerHost::handle`), each in a task of its own, and a stream of a kind no one handles is dropped, which closes it for the peer.
+A connection's count of each kind is kept by the kind's place in `StreamKind::ALL`, never by its tag, since tags need not follow each other (`screen_bulk` is 12, leaving 11 to the core-to-core stream the letters work adds).
 `HIDE_PEER_DIRECT=<ip>:<port>` binds that one address with no relay and no local network search, for development and tests (`hided/src/env.rs`).
 Until this feature ships (mission-75 release A, which removes the switch), every build offers none of it unless hided runs with `HIDE_DEVICE_CONNECT=1`: `Env::device_connect` (`hided/src/env.rs`) is read once and handed to every part, so without it no endpoint opens, no guest node starts (`Guests::serve` is not called) and no login item is kept (`endpoint_wanted`, `pairing_confirmed`), `Pairing::ask` and the pairing verbs of `hide device`, `switch` among them, refuse with `device_connect_unavailable`, `hide --help` lists those verbs only with the switch and the contract marks them `hidden` (`cli_contract::PAIRING_ONLY`), and the daemon's hello says `device_connect: false`, so Settings › Devices shows no pairing; a login item a paired core adopts carries the switch, and on Windows, whose task carries no environment, it is the account's own.
 The security and ownership specification this connection is built to (the threat model, pairing, who owns a guest's work, the relay's limits) is with-hide/hide-private's `docs/device-connection-security.md`; this section is the runtime contract the code keeps.
@@ -3302,7 +3303,7 @@ The side that opens a stream writes nine bytes, the stream's kind and the genera
 Hello, pairing and revoke need no grant; every other kind is refused unless the direction it serves has an active grant at that generation.
 An accepted stream is bound to the generation it was accepted under (`gate::Guarded`): its next read or write after the generation moves fails, so a pause or a removal ends every stream it allowed without a list of them.
 A connection carries at most 72 streams, and each kind has its own cap inside that (`limits::max_streams_of`), so a flood of one kind never takes another's place.
-The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen (0), and files and pages last (-100).
+The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen's socket (0), and files, pages and the remote screen's page, assets and file bytes last (-100).
 
 **Grants are saved first.**
 The host keeps who may be its guest in `peers/grants.json` and the guest keeps the hosts it paired with in `peers/known.json`, private files of at most 64 KiB replaced atomically.
@@ -3327,7 +3328,7 @@ The two directions are two records: pausing or removing one leaves the other and
 The core keeps them as a list of facts (`hide-core/src/peer_machines.rs`) and publishes them as `navigator.peers`: who opens whom, whether the two are connected and by which path, why not when the relay is unreachable or stopped for the month, and which side must update.
 A machine this one opens becomes a device of the core once its host confirmed the pairing: `Runtime::reconcile_peer_devices` (`hide-core/src/runtime/peer_devices.rs`) registers it under its own device id with `LinkOrigin::Peer { key }` when `opens` turns `active`, keeps it through a pause, and removes it with what Hide recorded for it when the pairing ends; an id another registration already holds is left to that registration, with a `peer_device.id_taken` diagnostic.
 Its connection is dialed by `hided/src/peer_dial.rs`, which has that machine run this core's node only under the active grant that machine tells it: a connection hears its grant in a frame after the hello, so a dial made as the connection comes up, as a daemon's start makes it, waits up to 5 s for that frame rather than read a machine that opened itself as one that did not.
-One machine is one tile: the one place the web shell reads a rail tile's list (`openedMachines` in `web/src/pairing.ts`) leaves a machine that is a device to that device's tile, which leads to its screen, and gives a tile of its own only to one that is not a device yet.
+One machine is one tile: the one place the web shell reads the rail's computer tiles (`computerTiles` in `web/src/computers.ts`, over `openedMachines` in `web/src/pairing.ts`) leaves a machine that is a device to that device's tile, which leads to its screen ([Another machine's screen](#another-machines-screen)), and gives a tile of its own only to one that is not a device yet.
 The device's row says which pairing it is (`DeviceSnapshot::peer_key`, the registration's `LinkOrigin::Peer` key), and both lists go by that key, never by the id a machine says of itself: Settings lists a paired machine once, as its pairing's row, and its device gets no device row (`listedDevices`).
 An ask names a paired machine by its connection id, its device id, its name or the start of its connection id; a device id is what a machine says of itself, so one that two paired machines share is refused as `device_ambiguous`, and a window always sends the row's connection id.
 The relay's reason is asked in a task of its own, at most once in 30 seconds, so neither the loop that publishes the machines nor an ask waits on the relay.
@@ -3369,6 +3370,48 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 
 **Diagnostics.**
 `hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.
+
+### Another machine's screen
+
+A guest's rail tile for its host shows the host's own Hide screen, the page and socket the host serves, drawn in the guest's window (PRD device-connect-iroh D-53, D-67, B17, B20, B63; with-hide/hide-private's `docs/device-connection-security.md` 8.3).
+It travels the one connection the two paired with, on two stream kinds of its own: `screen` (priority 0) carries the socket's control and terminal frames, and `screen_bulk` (-100) carries the page, its assets and file bytes, which the host writes from a task of their own, so neither a page load nor a large read holds the screen's loop.
+A third stream would take only 31 ms off the control's p95 and could reorder control and terminal frames, so there is none.
+
+**The host's side.**
+`hided/src/remote_screen.rs` registers both kinds at start, with the guest nodes, and each stream it is handed serves HTTP/1.1 over the stream's two halves: on `screen`, the upgrade to `/ws`; on `screen_bulk`, `/`, `/assets/*` and the upgrade to `/ws/bulk`; and nothing else, so `/health` and every route a token opens are not there. A connection holds two `screen` streams (a view, and the one taking its place) and eight `screen_bulk` (six page and asset requests at once and the two views' file sockets).
+The stream says which machine opened it and under which grant and generation, read from the host's grants at that moment, and the view's socket ends with that generation ([Streams](#the-peer-connection)), so a pause or a removal ends the view.
+A guest holds one view at a time: the second one it opens replaces the first, and the host holds four in all (`MAX_VIEWS`), apart from the eight seats of this machine's own windows (`MAX_CLIENTS`), so a view never takes a window's place and a window never takes a view's.
+The view's socket asks for no token: the stream already proved the machine, and the page it serves holds none.
+It is a `remote` connection ([Which connection may send what](#which-connection-may-send-what)), drawn as a window but never sent what only this machine's own windows get: no `pairing` frame, no `window_call`, no core move, and a `mobile` frame without the phone's QR code and pairing code.
+Its terminals follow the hub's remote limits (`terminal_hub::Limits::REMOTE`, D-84): 64 KiB of unsent output per pane where a window has 1 MiB, frames of at most 32 KiB, a longer chunk cut on a base64 boundary, the pane that last took a key sent first, and a pane past its limit drawn again whole; a view that comes back is always drawn again rather than resumed, since what it missed may be past those limits.
+A file read the view asks for is answered on its own `screen_bulk` socket, at most four at once (`VIEW_READS`), and a view whose bulk stream is not open is answered `bulk_missing`.
+Assets are kept by the host's key, its build and the path, never by the build alone, since a paired machine could name another's build and have its file run as the other's page; at most 32 MiB each and 48 MiB in all, each entry counting its names and 256 B beside its body so empty answers fill the bound too, the oldest dropped first.
+A guest asks each host for at most six pages and assets at once, waits at most 15 s for one of that host's places and 60 s for the whole answer, so a host that answers slowly or stops holds only its own places.
+
+**The guest's side.**
+The guest's daemon answers its own desktop at `/peer-screen/<device>/` and `/peer-screen/<device>/assets/*` with its own token, and `/peer-screen/<device>/ws` merges the host's screen and bulk sockets into one for the desktop; it opens them only when the host is a machine it opens with an active pairing and an active grant, and answers 503 with `not_paired`, `not_connected`, `paused`, `paused_there` or `no_grant` otherwise.
+The desktop draws the page in a sandboxed `WebContentsView` on its own origin, `hide-remote://<device>/`, in an in-memory session of that machine's own (`desktop/src/main/remoteScreens.ts`): the page's loads are fetched from the guest's daemon with the token the page never holds, and only `/`, `/index.html` and `/assets/*` are fetched; every other request, a navigation away, a new window, a download and every permission are refused and logged.
+Its preload (`desktop/src/preload/remote.ts`) is bridge v1 and nothing else: the one socket, which the main process opens only while the tile shows and closes when it is hidden (close code 4012), and closes at once when more than one largest frame and 8 MiB wait unsent on it (a host that stops reading; the page connects again), a clipboard write while the view holds the keyboard, the app menu's commands while it shows, and whether it shows.
+The page in such a view (`web/src/remoteView.ts`) opens its socket through the bridge, asks no `/health`, draws no rail, counts nothing on the host (`product_analytics_connected` is the guest's), says nothing of its focus (`window_focus`), and opens again at once when its tile shows, from the revision it drew.
+The device chord (⌥⌘n) pressed in the view goes to the guest's rail, every other key and menu command to the view.
+The guest keeps at most three machines' pages loaded, the one hidden longest closed first, and every view closes when its window or its daemon goes.
+
+### Which connection may send what
+
+Every client event kind declares the connections it is for in one table (`hided/src/server/event_class.rs`), and a kind the table does not name is refused: a test reads every kind hide-core's decoder knows, and the kinds hided answers itself, and fails on one with no class, as `wire_enum_tests` does for the wire's enums.
+A connection is this machine's window (desktop or web), another machine's view (`remote`) or a tool's (the Workspace CLI, a pane's command); a class says which of them may send the kind:
+
+| Class | Who may send it | For example |
+|---|---|---|
+| Screen | any window, a view, a tool | moving focus, typing, opening a file |
+| Window | this machine's windows and a view | a phone's removal, a View's comment |
+| Own window | this machine's windows only | pairing, a phone's pairing, external tools, `window_focus`, `product_analytics_connected` |
+| Desktop | the desktop app only | `desktop_activity`, `desktop_notices` |
+| Local | this machine's windows and its tools | a core move, revealing a path, a device's sign-in |
+| Daemon | no client: hided sends it itself | `ui_attached`, `peer_machines`, `guest_panes` |
+
+A refused event never reaches the core, so no screen's `status.last_error` names it: only that connection is answered, with a `refused` frame `{kind, reason}` (`not_here`, or `unclassified`), which the page ignores, and the daemon logs `event.refused` with the kind, the reason, the connection and its kind.
+A relayed screen (a node's screen the core draws through its link) is a window whose pairing asks `hided/src/pairing.rs` still refuses as another screen's.
 
 ### A guest's panes on the host
 

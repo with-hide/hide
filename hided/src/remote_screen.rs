@@ -1,0 +1,863 @@
+//! Another machine's view of this core, and this machine's view of another
+//! (PRD D-53, D-67, B17, B20, B63).
+//!
+//! On the host, a guest the operator granted opens streams of two kinds on
+//! the one connection between the two machines, each carrying HTTP and
+//! nothing else: no `/health`, no other route (D-67). A
+//! [`StreamKind::Screen`] stream carries the view's socket (`/ws`), its
+//! control and terminal frames. A [`StreamKind::ScreenBulk`] stream, behind
+//! everything else, carries this daemon's page (`/`), its assets
+//! (`/assets/*`) and the view's file bytes (`/ws/bulk`, written from their
+//! own task), so neither a page load nor a file read holds the socket's
+//! frames. The socket is a screen of the `remote` kind
+//! (`event_class::Client::Remote`): it attaches with the grant's id and
+//! generation in place of this machine's token, draws terminals under the
+//! hub's remote limits (D-84) and sends only what the class table admits. A guest holds one view at a
+//! time: a new one takes the place of the one before, and the views of all
+//! guests are [`MAX_VIEWS`] at most, apart from this machine's own windows
+//! (`MAX_CLIENTS`). Every stream runs under the grant and ends when it
+//! changes.
+//!
+//! On the guest, the desktop app reaches the host through this daemon:
+//! `/peer-screen/<device>/…` (this machine's token) answers the page and its
+//! assets from the host's bulk streams, keeping each asset by the host's
+//! key and build,
+//! and `/peer-screen/<device>/ws` joins one socket to the host's two
+//! streams. The desktop opens that socket only while the tile shows.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use axum::Router;
+use axum::body::Body;
+use axum::body::Bytes;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use futures_util::{SinkExt, StreamExt};
+use hide_peer::protocol::hello::GrantState;
+use hide_peer::protocol::{PeerKey, StreamKind};
+use hide_peer::store::KnownState;
+use serde_json::{Value, json};
+use tokio::sync::{Notify, mpsc};
+use tokio_tungstenite::tungstenite;
+
+use crate::peer_host::{Incoming, Link, PeerHost};
+use crate::server::AppState;
+
+/// The views of every guest at once. Each guest holds at most one.
+pub const MAX_VIEWS: usize = 4;
+/// The header that ties a view's bulk stream to its screen stream.
+const VIEW_HEADER: &str = "x-hide-view";
+/// The longest asset a guest takes from a host.
+const MAX_ASSET: usize = 32 * 1024 * 1024;
+/// The assets a guest keeps of hosts' builds, in bytes; past it the oldest
+/// go.
+const ASSET_CACHE: usize = 48 * 1024 * 1024;
+/// Page and asset requests a guest has open on a host at once; the view's
+/// bulk socket takes another of the kind's streams, and a second view's
+/// one more while it takes the first's place.
+const ASSET_STREAMS: usize = 6;
+/// The file reads one view runs at once; one more is answered `busy`.
+pub const VIEW_READS: usize = 4;
+/// How long a guest waits for a host's answer to open a view.
+const OPEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long one page or asset may take to arrive whole: `MAX_ASSET` at
+/// about 0.5 MiB/s, so a host that sends slowly or stops holds a request's
+/// place no longer than this.
+const ASSET_WITHIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The guest a screen stream came from, as this host granted it: what its
+/// view attaches with in place of this machine's token.
+#[derive(Clone, Debug)]
+pub struct Viewer {
+    pub key: PeerKey,
+    pub device: String,
+    pub grant: String,
+    pub generation: u64,
+    /// The view the guest named, tying its bulk stream to its socket.
+    pub view: String,
+}
+
+/// A view's place among the guests' views: it ends when a newer view of the
+/// same guest takes it, and frees its place when dropped.
+pub struct Seat {
+    screens: Arc<RemoteScreens>,
+    key: PeerKey,
+    id: u64,
+    pub viewer: Viewer,
+    taken: Arc<Notify>,
+}
+
+impl Seat {
+    /// Resolves when a newer view of the same guest took this one's place.
+    pub async fn taken(&self) {
+        self.taken.notified().await;
+    }
+
+    /// The sender of this view's bulk stream, when the guest opened one.
+    pub fn bulk(&self) -> Option<mpsc::Sender<Message>> {
+        lock(&self.screens.bulks)
+            .get(&(self.key, self.viewer.view.clone()))
+            .cloned()
+    }
+}
+
+impl Drop for Seat {
+    fn drop(&mut self) {
+        let mut seats = lock(&self.screens.seats);
+        if seats.get(&self.key).is_some_and(|held| held.0 == self.id) {
+            seats.remove(&self.key);
+        }
+        self.screens.views.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Why a view was not seated.
+#[derive(Debug, Eq, PartialEq)]
+pub enum SeatRefused {
+    Full,
+}
+
+/// One host's asset: the host by its key, then its build and the path. The
+/// build and the path are what that host says, so two hosts never share an
+/// entry: one machine's file is never served as another's page, which would
+/// run in that machine's origin and on its socket.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct AssetKey {
+    host: PeerKey,
+    build: String,
+    path: String,
+}
+
+#[derive(Default)]
+struct AssetCache {
+    entries: HashMap<AssetKey, (String, Bytes)>,
+    order: VecDeque<AssetKey>,
+    bytes: usize,
+}
+
+/// What an entry costs beyond its body and its names: the map's and the
+/// queue's places for it, so an empty answer is never free.
+const ENTRY_COST: usize = 256;
+
+impl AssetCache {
+    fn get(&self, key: &AssetKey) -> Option<(String, Bytes)> {
+        self.entries.get(key).cloned()
+    }
+
+    /// What `key` with `kind` and `body` holds of the cache's bound.
+    fn cost(key: &AssetKey, kind: &str, body: &Bytes) -> usize {
+        body.len() + key.build.len() + key.path.len() + kind.len() + ENTRY_COST
+    }
+
+    fn put(&mut self, key: AssetKey, kind: String, body: Bytes) {
+        let cost = Self::cost(&key, &kind, &body);
+        if cost > ASSET_CACHE || self.entries.contains_key(&key) {
+            return;
+        }
+        self.bytes += cost;
+        self.entries.insert(key.clone(), (kind, body));
+        self.order.push_back(key);
+        while self.bytes > ASSET_CACHE {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some((kind, body)) = self.entries.remove(&oldest) {
+                self.bytes -= Self::cost(&oldest, &kind, &body);
+            }
+        }
+    }
+}
+
+/// Both sides of other machines' views.
+pub struct RemoteScreens {
+    /// The view each guest holds now, by its seat's id.
+    seats: Mutex<HashMap<PeerKey, (u64, Arc<Notify>)>>,
+    /// Every view seated now.
+    views: AtomicUsize,
+    next: AtomicU64,
+    /// Each view's bulk stream, by its guest and the view it named.
+    bulks: Mutex<HashMap<(PeerKey, String), mpsc::Sender<Message>>>,
+    /// The daemon's state, set once it is built; a stream that comes before
+    /// is closed and the guest opens it again.
+    state: OnceLock<AppState>,
+    /// The guest side's assets of hosts' builds.
+    assets: Mutex<AssetCache>,
+    /// The guest side's page and asset requests open now, per host: a host
+    /// that answers slowly or not at all holds only its own places. A host
+    /// with none open is dropped from the map at the next request.
+    asset_places: Mutex<HashMap<PeerKey, Arc<tokio::sync::Semaphore>>>,
+}
+
+impl RemoteScreens {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            seats: Mutex::default(),
+            views: AtomicUsize::new(0),
+            next: AtomicU64::new(0),
+            bulks: Mutex::default(),
+            state: OnceLock::new(),
+            assets: Mutex::default(),
+            asset_places: Mutex::default(),
+        })
+    }
+
+    /// How many views are seated now; they do not count against this
+    /// machine's windows.
+    /// A place for one page or asset request on `host`, waiting at most
+    /// `OPEN_WITHIN` for one of its own to free.
+    async fn asset_place(&self, host: PeerKey) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let places = {
+            let mut places = lock(&self.asset_places);
+            // A host's places are kept while a request holds one: each
+            // request holds the semaphore it took from.
+            places.retain(|_, held| Arc::strong_count(held) > 1);
+            Arc::clone(
+                places
+                    .entry(host)
+                    .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(ASSET_STREAMS))),
+            )
+        };
+        tokio::time::timeout(OPEN_WITHIN, places.acquire_owned())
+            .await
+            .ok()?
+            .ok()
+    }
+
+    pub fn seated(&self) -> usize {
+        self.views.load(Ordering::SeqCst)
+    }
+
+    /// Takes the two kinds of stream a guest opens for its view. Called once,
+    /// before the endpoint opens.
+    pub fn serve(self: &Arc<Self>, peers: &PeerHost) {
+        for kind in [StreamKind::Screen, StreamKind::ScreenBulk] {
+            let screens = Arc::clone(self);
+            peers.handle(kind, move |incoming| {
+                let screens = Arc::clone(&screens);
+                async move { screens.stream(kind, incoming).await }
+            });
+        }
+    }
+
+    /// The daemon's state, once built.
+    pub fn attach(&self, state: AppState) {
+        let _ = self.state.set(state);
+    }
+
+    /// Seats a view of `viewer`'s guest, taking the place of the one it had.
+    pub fn seat(self: &Arc<Self>, viewer: Viewer) -> Result<Seat, SeatRefused> {
+        let mut seats = lock(&self.seats);
+        let replacing = seats.remove(&viewer.key);
+        let held = self.views.load(Ordering::SeqCst) - usize::from(replacing.is_some());
+        if held >= MAX_VIEWS {
+            if let Some(replacing) = replacing {
+                seats.insert(viewer.key, replacing);
+            }
+            return Err(SeatRefused::Full);
+        }
+        if let Some((_, taken)) = replacing {
+            taken.notify_one();
+        }
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let taken = Arc::new(Notify::new());
+        seats.insert(viewer.key, (id, Arc::clone(&taken)));
+        self.views.fetch_add(1, Ordering::SeqCst);
+        Ok(Seat {
+            screens: Arc::clone(self),
+            key: viewer.key,
+            id,
+            viewer,
+            taken,
+        })
+    }
+
+    /// One stream a guest opened: HTTP to the view's routes, as the guest
+    /// this host granted.
+    async fn stream(self: Arc<Self>, kind: StreamKind, incoming: Incoming) {
+        let Some(state) = self.state.get().cloned() else {
+            return;
+        };
+        let key = incoming.link.key();
+        let Some(grant) = state
+            .peers
+            .peers()
+            .and_then(|peers| peers.grants(|grants, _| grants.current(&key).cloned()))
+        else {
+            return;
+        };
+        let viewer = Viewer {
+            key,
+            device: grant.device,
+            grant: grant.id,
+            generation: grant.generation,
+            view: String::new(),
+        };
+        let route = ViewRoute {
+            state,
+            screens: Arc::clone(&self),
+            viewer,
+        };
+        // The socket's frames on the screen kind; the page, its assets and
+        // the file bytes behind them on the bulk kind (D-67).
+        let router = match kind {
+            StreamKind::ScreenBulk => Router::new()
+                .route("/", get(view_asset))
+                .route("/assets/{*path}", get(view_asset))
+                .route("/ws/bulk", get(bulk_upgrade)),
+            _ => Router::new().route("/ws", get(view_upgrade)),
+        }
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .with_state(route);
+        let io = tokio::io::join(incoming.stream.recv, incoming.stream.send);
+        let service = hyper_util::service::TowerToHyperService::new(router);
+        let _ = hyper::server::conn::http1::Builder::new()
+            .serve_connection(hyper_util::rt::TokioIo::new(io), service)
+            .with_upgrades()
+            .await;
+    }
+}
+
+#[derive(Clone)]
+struct ViewRoute {
+    state: AppState,
+    screens: Arc<RemoteScreens>,
+    viewer: Viewer,
+}
+
+fn view_of(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(VIEW_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|view| !view.is_empty() && view.len() <= 64)
+        .map(str::to_owned)
+}
+
+async fn view_asset(uri: axum::http::Uri, State(route): State<ViewRoute>) -> Response {
+    crate::server::ui_asset(route.state.ui_dir.as_deref(), uri.path()).await
+}
+
+async fn view_upgrade(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(route): State<ViewRoute>,
+) -> Response {
+    let Some(view) = view_of(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let ViewRoute {
+        state,
+        screens,
+        mut viewer,
+    } = route;
+    viewer.view = view;
+    ws.on_upgrade(move |socket| crate::server::remote_client_loop(socket, state, screens, viewer))
+}
+
+async fn bulk_upgrade(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(route): State<ViewRoute>,
+) -> Response {
+    let Some(view) = view_of(&headers) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let key = route.viewer.key;
+    let screens = route.screens;
+    ws.on_upgrade(move |socket| async move {
+        let (mut sink, mut source) = socket.split();
+        let (sender, mut frames) = mpsc::channel::<Message>(2);
+        {
+            let mut bulks = lock(&screens.bulks);
+            // One bulk per guest: a newer view's takes the place of the last.
+            bulks.retain(|(guest, _), _| *guest != key);
+            bulks.insert((key, view.clone()), sender);
+        }
+        loop {
+            tokio::select! {
+                frame = frames.recv() => {
+                    let Some(frame) = frame else { break };
+                    if sink.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+                incoming = source.next() => {
+                    // The guest writes nothing on it; its end ends the view's
+                    // bulk.
+                    if !matches!(incoming, Some(Ok(_))) {
+                        break;
+                    }
+                }
+            }
+        }
+        lock(&screens.bulks).remove(&(key, view));
+    })
+}
+
+/// The mobile frame another machine's view gets: the phones, to remove one,
+/// never the code that pairs a phone (D-70).
+pub fn mobile_frame_for_view(payload: &Value) -> Value {
+    let mut payload = payload.clone();
+    if let Some(fields) = payload.as_object_mut() {
+        fields.insert("qr".to_owned(), Value::Null);
+        fields.insert("code_expires_at_ms".to_owned(), Value::Null);
+    }
+    payload
+}
+
+// The guest side.
+
+/// Why a host's view could not be opened, as the desktop app reads it.
+fn unavailable(reason: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::CONTENT_TYPE, "application/json")],
+        json!({"reason": reason}).to_string(),
+    )
+        .into_response()
+}
+
+/// The live connection to the host whose device id is `device`, and its
+/// key, when this machine is that host's guest now.
+/// The link to `device` while this computer may open it, with its key and the build it says it runs.
+fn host_link(state: &AppState, device: &str) -> Result<(Link, PeerKey, String), &'static str> {
+    let peers = state.peers.peers().ok_or("not_connected")?;
+    let host = peers
+        .hosts()
+        .into_iter()
+        .find(|host| host.device == device)
+        .ok_or("not_paired")?;
+    match host.state {
+        KnownState::Active => {}
+        KnownState::PausedByMe => return Err("paused"),
+        KnownState::Confirming => return Err("not_connected"),
+        KnownState::RevokePending | KnownState::Unpaired => return Err("no_grant"),
+    }
+    let link = peers.link(&host.key).ok_or("not_connected")?;
+    match link.granted() {
+        GrantState::Active => {}
+        GrantState::Paused => return Err("paused_there"),
+        _ => return Err("no_grant"),
+    }
+    let build = link.their_hello().build.clone();
+    Ok((link, host.key, build))
+}
+
+/// A stream of a host's view: its two halves, which end with the grant.
+type ViewIo = tokio::io::Join<
+    hide_peer::gate::Guarded<<crate::peer_host::Conn as hide_peer::PeerConn>::Recv>,
+    hide_peer::gate::Guarded<<crate::peer_host::Conn as hide_peer::PeerConn>::Send>,
+>;
+
+async fn open_stream(link: &Link, kind: StreamKind) -> Result<ViewIo, &'static str> {
+    let stream = tokio::time::timeout(OPEN_WITHIN, link.open(kind))
+        .await
+        .map_err(|_| "not_connected")?
+        .map_err(|error| match error {
+            hide_peer::peers::OpenError::NoGrant(_) => "no_grant",
+            hide_peer::peers::OpenError::Refused(_) => "refused",
+            _ => "not_connected",
+        })?;
+    Ok(tokio::io::join(stream.recv, stream.send))
+}
+
+/// `GET /peer-screen/<device>/`: the host's page, for the desktop app's
+/// view of it.
+pub async fn guest_page(
+    State(state): State<AppState>,
+    Path(device): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    guest_file(state, device, String::new(), headers).await
+}
+
+/// `GET /peer-screen/<device>/<path>`: one of the host's assets.
+pub async fn guest_asset(
+    State(state): State<AppState>,
+    Path((device, path)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    guest_file(state, device, path, headers).await
+}
+
+async fn guest_file(state: AppState, device: String, path: String, headers: HeaderMap) -> Response {
+    if !crate::server::bearer_matches(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let path = format!("/{path}");
+    if path != "/" && path != "/index.html" && !path.starts_with("/assets/") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let (link, host, build) = match host_link(&state, &device) {
+        Ok(found) => found,
+        Err(reason) => return unavailable(reason),
+    };
+    let screens = Arc::clone(&state.remote_screens);
+    let key = AssetKey {
+        host,
+        build,
+        path: path.clone(),
+    };
+    // Assets carry their content in their names; the page itself is read
+    // each time, so a host's new build is drawn from its own page.
+    let cached = path.starts_with("/assets/");
+    if cached && let Some((kind, body)) = lock(&screens.assets).get(&key) {
+        return asset_response(&kind, body);
+    }
+    let Some(_place) = screens.asset_place(host).await else {
+        return unavailable("not_connected");
+    };
+    let io = match open_stream(&link, StreamKind::ScreenBulk).await {
+        Ok(io) => io,
+        Err(reason) => return unavailable(reason),
+    };
+    match fetch(io, &path).await {
+        Ok((status, kind, body)) if status == StatusCode::OK => {
+            if cached {
+                lock(&screens.assets).put(key, kind.clone(), body.clone());
+            }
+            asset_response(&kind, body)
+        }
+        Ok((status, ..)) => status.into_response(),
+        Err(()) => unavailable("not_connected"),
+    }
+}
+
+fn asset_response(kind: &str, body: Bytes) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, kind)
+        .body(Body::from(body))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// One GET over a host's screen stream.
+async fn fetch<IO>(io: IO, path: &str) -> Result<(StatusCode, String, Bytes), ()>
+where
+    IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use http_body_util::{BodyExt, Empty, Limited};
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io))
+            .await
+            .map_err(drop)?;
+    let driver = crate::owned_task::AbortOnDrop(
+        tokio::spawn(async move {
+            let _ = connection.await;
+        })
+        .abort_handle(),
+    );
+    let request = hyper::Request::get(path)
+        .header(header::HOST, "hide")
+        .body(Empty::<Bytes>::new())
+        .map_err(drop)?;
+    let response = tokio::time::timeout(OPEN_WITHIN, sender.send_request(request))
+        .await
+        .map_err(drop)?
+        .map_err(drop)?;
+    let status = response.status();
+    let kind = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let body = tokio::time::timeout(
+        ASSET_WITHIN,
+        Limited::new(response.into_body(), MAX_ASSET).collect(),
+    )
+    .await
+    .map_err(drop)?
+    .map_err(drop)?
+    .to_bytes();
+    drop(driver);
+    Ok((status, kind, body))
+}
+
+/// `GET /peer-screen/<device>/ws`: the desktop app's socket to the host's
+/// view, joined from the host's two streams: the socket's frames and the
+/// file bytes beside them. It ends when either does, or the desktop's.
+pub async fn guest_socket(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(device): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !crate::server::bearer_matches(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let link = match host_link(&state, &device) {
+        Ok((link, ..)) => link,
+        Err(reason) => return unavailable(reason),
+    };
+    ws.on_upgrade(move |socket| join_view(socket, link, device))
+}
+
+/// The close a desktop's view socket gets when the host's view could not be
+/// opened or ended: the page opens it again on its own.
+fn host_gone(reason: &str) -> Message {
+    Message::Close(Some(axum::extract::ws::CloseFrame {
+        code: 4010,
+        reason: reason.to_owned().into(),
+    }))
+}
+
+async fn join_view(mut socket: WebSocket, link: Link, device: String) {
+    let mut view = [0_u8; 12];
+    getrandom::getrandom(&mut view).expect("getrandom");
+    let view = hex::encode(view);
+    let opened = async {
+        let bulk = open_view_socket(&link, StreamKind::ScreenBulk, "/ws/bulk", &view).await?;
+        let screen = open_view_socket(&link, StreamKind::Screen, "/ws", &view).await?;
+        Ok::<_, &'static str>((screen, bulk))
+    }
+    .await;
+    let (screen, bulk) = match opened {
+        Ok(opened) => opened,
+        Err(reason) => {
+            hide_core::diagnostic!(json!({
+                "component": "remote_screen", "kind": "view.open_failed",
+                "device": device, "reason": reason,
+            }));
+            let _ = socket.send(host_gone(reason)).await;
+            return;
+        }
+    };
+    let (mut to_host, mut from_host) = screen.split();
+    let (_bulk_sink, mut from_bulk) = bulk.split();
+    let ended = loop {
+        tokio::select! {
+            frame = socket.recv() => match frame {
+                Some(Ok(Message::Text(text))) => {
+                    if to_host.send(tungstenite::Message::Text(text.as_str().into())).await.is_err() {
+                        break "host_gone";
+                    }
+                }
+                Some(Ok(Message::Binary(bytes))) => {
+                    if to_host.send(tungstenite::Message::Binary(bytes)).await.is_err() {
+                        break "host_gone";
+                    }
+                }
+                Some(Ok(_)) => {}
+                _ => break "closed",
+            },
+            frame = from_host.next() => match frame.and_then(Result::ok).and_then(to_desktop) {
+                Some(frame) => {
+                    if socket.send(frame).await.is_err() {
+                        break "closed";
+                    }
+                }
+                None => break "host_gone",
+            },
+            frame = from_bulk.next() => match frame.and_then(Result::ok).and_then(to_desktop) {
+                Some(frame) => {
+                    if socket.send(frame).await.is_err() {
+                        break "closed";
+                    }
+                }
+                None => break "host_gone",
+            },
+        }
+    };
+    if ended == "host_gone" {
+        let _ = socket.send(host_gone("host_gone")).await;
+    }
+}
+
+/// A host frame as the desktop's socket carries it; `None` at the host's
+/// close.
+fn to_desktop(frame: tungstenite::Message) -> Option<Message> {
+    match frame {
+        tungstenite::Message::Text(text) => Some(Message::Text(text.as_str().into())),
+        tungstenite::Message::Binary(bytes) => Some(Message::Binary(bytes)),
+        tungstenite::Message::Close(_) => None,
+        _ => Some(Message::Ping(Bytes::new())),
+    }
+}
+
+async fn open_view_socket(
+    link: &Link,
+    kind: StreamKind,
+    path: &str,
+    view: &str,
+) -> Result<tokio_tungstenite::WebSocketStream<ViewIo>, &'static str> {
+    use tungstenite::client::IntoClientRequest;
+    let io = open_stream(link, kind).await?;
+    let mut request = format!("ws://hide{path}")
+        .into_client_request()
+        .map_err(|_| "refused")?;
+    request
+        .headers_mut()
+        .insert(VIEW_HEADER, view.parse().map_err(|_| "refused")?);
+    let (socket, _) =
+        tokio::time::timeout(OPEN_WITHIN, tokio_tungstenite::client_async(request, io))
+            .await
+            .map_err(|_| "not_connected")?
+            .map_err(|_| "refused")?;
+    Ok(socket)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn viewer(byte: u8) -> Viewer {
+        Viewer {
+            key: PeerKey::from_bytes([byte; 32]),
+            device: format!("device-{byte}"),
+            grant: format!("grant-{byte}"),
+            generation: 1,
+            view: format!("view-{byte}"),
+        }
+    }
+
+    /// A guest holds one view: its next takes the place of the last, which
+    /// is told so. All guests hold MAX_VIEWS at most, apart from this
+    /// machine's windows (PRD D-67).
+    #[tokio::test]
+    async fn a_guest_holds_one_view_and_all_guests_a_few() {
+        let screens = RemoteScreens::new();
+        let first = screens.seat(viewer(1)).unwrap();
+        let second = screens.seat(viewer(1)).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), first.taken())
+            .await
+            .expect("the first view is told its place was taken");
+        drop(first);
+        assert_eq!(screens.seated(), 1);
+        let others: Vec<_> = (2..=4)
+            .map(|byte| screens.seat(viewer(byte)).unwrap())
+            .collect();
+        assert_eq!(screens.seat(viewer(9)).err(), Some(SeatRefused::Full));
+        // A guest already seated takes its own place even when all are held.
+        let again = screens.seat(viewer(2)).unwrap();
+        drop((second, others, again));
+        assert_eq!(screens.seated(), 0);
+    }
+
+    #[test]
+    fn a_view_never_gets_the_code_that_pairs_a_phone() {
+        let frame = mobile_frame_for_view(&json!({
+            "qr": "hide://pair", "code_expires_at_ms": 5, "phones": [{"id": "p1"}],
+        }));
+        assert_eq!(frame["qr"], Value::Null);
+        assert_eq!(frame["code_expires_at_ms"], Value::Null);
+        assert_eq!(frame["phones"][0]["id"], "p1");
+    }
+
+    fn asset(host: u8, build: &str, path: &str) -> AssetKey {
+        AssetKey {
+            host: PeerKey::from_bytes([host; 32]),
+            build: build.into(),
+            path: path.into(),
+        }
+    }
+
+    #[test]
+    fn the_asset_cache_keeps_a_build_s_assets_within_its_bound() {
+        let mut cache = AssetCache::default();
+        let big = Bytes::from(vec![0_u8; ASSET_CACHE / 2 + 1]);
+        cache.put(
+            asset(1, "b1", "/assets/a.js"),
+            "text/javascript".into(),
+            big.clone(),
+        );
+        cache.put(
+            asset(1, "b1", "/assets/b.js"),
+            "text/javascript".into(),
+            big,
+        );
+        assert!(cache.bytes <= ASSET_CACHE);
+        assert!(cache.get(&asset(1, "b1", "/assets/a.js")).is_none());
+        assert!(cache.get(&asset(1, "b1", "/assets/b.js")).is_some());
+        assert!(cache.get(&asset(1, "b2", "/assets/b.js")).is_none());
+    }
+
+    // A host that holds every place it has (a stalled answer) holds none of
+    // another host's: that one's page still opens at once, and the stalled
+    // host's next request gives up within its bound.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_that_holds_its_places_holds_no_other_host_s() {
+        let screens = RemoteScreens::new();
+        let (stalled, other) = (PeerKey::from_bytes([1; 32]), PeerKey::from_bytes([2; 32]));
+        let mut held = Vec::new();
+        for _ in 0..ASSET_STREAMS {
+            held.push(
+                screens
+                    .asset_place(stalled)
+                    .await
+                    .expect("a place of its own"),
+            );
+        }
+        let started = tokio::time::Instant::now();
+        assert!(screens.asset_place(other).await.is_some());
+        assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+        assert!(screens.asset_place(stalled).await.is_none());
+        assert_eq!(started.elapsed(), OPEN_WITHIN);
+        drop(held);
+        assert!(screens.asset_place(stalled).await.is_some());
+    }
+
+    // Empty answers under ever new names fill the bound too: what each
+    // entry's names and places take counts, so the oldest go.
+    #[test]
+    fn empty_assets_under_new_names_stay_within_the_bound() {
+        let mut cache = AssetCache::default();
+        let limit = ASSET_CACHE / ENTRY_COST;
+        for n in 0..limit + 100 {
+            cache.put(
+                asset(1, "b1", &format!("/assets/{n}.js")),
+                "text/javascript".into(),
+                Bytes::new(),
+            );
+        }
+        assert!(cache.bytes <= ASSET_CACHE);
+        assert!(cache.entries.len() < limit);
+        assert_eq!(cache.entries.len(), cache.order.len());
+        assert!(cache.get(&asset(1, "b1", "/assets/0.js")).is_none());
+        assert!(
+            cache
+                .get(&asset(1, "b1", &format!("/assets/{}.js", limit + 99)))
+                .is_some()
+        );
+    }
+
+    // A paired machine that names another's build and path keeps its own
+    // file: the other machine's page is served the other machine's bytes.
+    #[test]
+    fn two_hosts_saying_the_same_build_and_path_keep_their_own_bytes() {
+        let mut cache = AssetCache::default();
+        cache.put(
+            asset(1, "b1", "/assets/app.js"),
+            "text/javascript".into(),
+            Bytes::from_static(b"one"),
+        );
+        cache.put(
+            asset(2, "b1", "/assets/app.js"),
+            "text/javascript".into(),
+            Bytes::from_static(b"two"),
+        );
+        assert_eq!(
+            cache
+                .get(&asset(1, "b1", "/assets/app.js"))
+                .map(|(_, body)| body),
+            Some(Bytes::from_static(b"one"))
+        );
+        assert_eq!(
+            cache
+                .get(&asset(2, "b1", "/assets/app.js"))
+                .map(|(_, body)| body),
+            Some(Bytes::from_static(b"two"))
+        );
+        assert!(cache.get(&asset(3, "b1", "/assets/app.js")).is_none());
+    }
+}

@@ -25,6 +25,7 @@ import {
   type MobileState,
 } from "./mobileSettings";
 import { coreMachineName } from "./screenMachine";
+import { ownWindow } from "./pairing";
 import { useShellStore } from "./store";
 
 export function MobileTab({ actions }: { actions: Actions }) {
@@ -39,7 +40,18 @@ export function MobileTab({ actions }: { actions: Actions }) {
     actions.observeMobile(true);
     return () => actions.observeMobile(false);
   }, [actions, live]);
+  // Only this machine's own window turns phones on or pairs one; another
+  // machine's view lists the phones and removes one (PRD device-connect-iroh
+  // B52).
+  const own = useShellStore((s) => ownWindow(s.pairing));
   if (!mobile) return <Note tone="pending">{t("mobileSetup.connecting")}</Note>;
+  if (!own) {
+    return (
+      <div data-mobile-tab="true" data-mobile-exposure={mobile.exposure} data-mobile-view-only="true">
+        {mobile.phones.length > 0 ? <Phones state={mobile} actions={actions} /> : null}
+      </div>
+    );
+  }
   return (
     <div data-mobile-tab="true" data-mobile-exposure={mobile.exposure}>
       <Group title={t("mobileSetup.title")}>

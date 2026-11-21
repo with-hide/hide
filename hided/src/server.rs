@@ -82,7 +82,13 @@ pub struct AppState {
     /// view-opener-feedback B9).
     pub browser_comments: Arc<crate::browser_page::comment::CommentSessions>,
     pub allowed_origins: Arc<HashSet<String>>,
+    /// Every connection now, another machine's views among them: while any
+    /// is, the daemon stays and its readers run.
     pub clients: Arc<AtomicUsize>,
+    /// This machine's own connections (windows, tools, phones), the ones
+    /// `MAX_CLIENTS` counts ([`LocalSeat`]); another machine's views have
+    /// seats of their own (`remote_screen`).
+    pub local_seats: Arc<AtomicUsize>,
     /// Authenticated shell windows, distinct from CLI and non-rendering clients.
     pub renderers: Arc<AtomicUsize>,
     pub desktop_renderers: Arc<AtomicUsize>,
@@ -148,6 +154,9 @@ pub struct AppState {
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
     pub relay_grants: Arc<crate::attach::RelayGrants>,
+    /// Other machines' views of this core, and this machine's views of
+    /// theirs (`remote_screen`).
+    pub remote_screens: Arc<crate::remote_screen::RemoteScreens>,
     /// Windows of this machine open now (`OwnScreen`).
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
@@ -224,7 +233,10 @@ fn role_ended_frame() -> CloseFrame {
     }
 }
 
+mod event_class;
 mod relay_routes;
+
+use event_class::Client;
 
 pub use relay_routes::RELAY_GRANT_HEADER;
 use relay_routes::{
@@ -264,6 +276,19 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/", get(static_asset))
         .route("/assets/{*path}", get(static_asset))
+        // The desktop app's view of a paired machine (`remote_screen`).
+        .route(
+            "/peer-screen/{device}/ws",
+            get(crate::remote_screen::guest_socket),
+        )
+        .route(
+            "/peer-screen/{device}/",
+            get(crate::remote_screen::guest_page),
+        )
+        .route(
+            "/peer-screen/{device}/{*path}",
+            get(crate::remote_screen::guest_asset),
+        )
         .route("/m", get(mobile_asset))
         .route("/m/", get(mobile_asset))
         .route("/m/{*path}", get(mobile_asset))
@@ -823,12 +848,14 @@ async fn client_loop(
     };
     let first_value = serde_json::from_str::<Value>(&first).unwrap_or(Value::Null);
     if crate::mobile::phone::is_phone(&first_value) {
-        let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-        if previous >= MAX_CLIENTS {
-            state.clients.fetch_sub(1, Ordering::SeqCst);
-            refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-            return;
-        }
+        let _seat = match LocalSeat::take(&state) {
+            Ok(seat) => seat,
+            Err(count) => {
+                refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+                return;
+            }
+        };
+        state.clients.fetch_add(1, Ordering::SeqCst);
         crate::mobile::phone::serve(
             socket,
             first_value,
@@ -877,7 +904,50 @@ async fn client_loop(
         crate::project_open::operator_request(socket, state, connection).await;
         return;
     }
-    screen_loop(socket, state, connection, handshake, None).await;
+    screen_loop(socket, state, connection, handshake, None, None).await;
+}
+
+/// Another machine's view of this core, over its screen stream (PRD D-53,
+/// D-67): it attaches with the grant its stream runs under in place of this
+/// machine's token, which its page never holds, and takes a view's seat,
+/// apart from this machine's windows.
+pub(crate) async fn remote_client_loop(
+    mut socket: WebSocket,
+    state: AppState,
+    screens: Arc<crate::remote_screen::RemoteScreens>,
+    viewer: crate::remote_screen::Viewer,
+) {
+    let connection = state.connections.fetch_add(1, Ordering::SeqCst);
+    let handshake = match tokio::time::timeout(FIRST_FRAME_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<Handshake>(&text).ok(),
+        _ => None,
+    };
+    let Some(handshake) = handshake else {
+        refuse(&mut socket, CloseReason::InvalidToken, None).await;
+        return;
+    };
+    if handshake.schema_version != SCHEMA_VERSION || !handshake.supported_snapshot_format() {
+        refuse(&mut socket, CloseReason::SchemaMismatch, None).await;
+        return;
+    }
+    let seat = match screens.seat(viewer) {
+        Ok(seat) => seat,
+        Err(crate::remote_screen::SeatRefused::Full) => {
+            refuse(
+                &mut socket,
+                CloseReason::ClientLimit,
+                Some(screens.seated() + 1),
+            )
+            .await;
+            return;
+        }
+    };
+    hide_core::diagnostic!(json!({
+        "component": "remote_screen", "kind": "view.opened", "connection": connection,
+        "device": seat.viewer.device, "grant": seat.viewer.grant,
+        "generation": seat.viewer.generation,
+    }));
+    screen_loop(socket, state, connection, handshake, None, Some(seat)).await;
 }
 
 /// One screen's session after its handshake: the snapshot stream, the
@@ -890,20 +960,40 @@ async fn screen_loop(
     connection: u64,
     handshake: Handshake,
     relay: Option<RelayScreen>,
+    seat: Option<crate::remote_screen::Seat>,
 ) {
+    let remote = seat.is_some();
+    // Another machine's views have their own seats (`remote_screen`) and
+    // never take a place of this machine's windows.
+    let _local = if remote {
+        None
+    } else {
+        match LocalSeat::take(&state) {
+            Ok(local) => Some(local),
+            Err(count) => {
+                refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+                return;
+            }
+        }
+    };
     let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-    if previous >= MAX_CLIENTS {
-        state.clients.fetch_sub(1, Ordering::SeqCst);
-        refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-        return;
-    }
     if previous == 0 {
         state.roots.resume();
     }
     // This screen's hold on a move it asks for, which its end lets go of.
     let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
-    let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
-    let desktop = handshake.client_kind.as_deref() == Some("desktop");
+    // A view draws like a window whatever its page says it is; it is never
+    // this machine's desktop window.
+    let renderer = remote || matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
+    let desktop = !remote && handshake.client_kind.as_deref() == Some("desktop");
+    // A window of this machine: what lets a machine in, moves the core or
+    // brings a project forward reaches only such a window.
+    let own = renderer && relay.is_none() && !remote;
+    let client = match (remote, renderer) {
+        (true, _) => Client::Remote,
+        (false, true) => Client::Window { desktop },
+        (false, false) => Client::Tool,
+    };
     if renderer {
         renderer_count(&state, true);
     }
@@ -954,7 +1044,7 @@ async fn screen_loop(
     // A move of the core is the process's, beside the core's state.
     let mut move_frames = state.seat.moves.subscribe();
     let mut window_calls = state.window_calls.subscribe();
-    if renderer && relay.is_none() {
+    if own {
         let frame = mover.frame(&move_frames.borrow_and_update());
         if socket.send(Message::Text(frame.into())).await.is_err() {
             client_gone(&state, connection, renderer, desktop);
@@ -967,9 +1057,12 @@ async fn screen_loop(
     let mut agent_notices = desktop.then(|| state.desktop_notices.subscribe());
     // Settings > Mobile reads one `mobile` frame, sent now and on each change.
     let mut mobile_frames = state.mobile.subscribe_frame();
+    let mobile_frame = |payload: &Value| match remote {
+        true => crate::remote_screen::mobile_frame_for_view(payload),
+        false => payload.clone(),
+    };
     if renderer {
-        let frame =
-            json!({"type": "mobile", "payload": mobile_frames.borrow_and_update().as_ref()});
+        let frame = json!({"type": "mobile", "payload": mobile_frame(mobile_frames.borrow_and_update().as_ref())});
         if socket
             .send(Message::Text(frame.to_string().into()))
             .await
@@ -984,7 +1077,7 @@ async fn screen_loop(
     // people compare, so only this machine's own windows get it: never a
     // phone, and never a screen another machine shows of this one.
     let mut pairing_frames = state.pairing.subscribe_frame();
-    if renderer && relay.is_none() {
+    if own {
         let frame =
             json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
         if socket
@@ -1006,19 +1099,28 @@ async fn screen_loop(
     // again whole when it names none; one that got a whole snapshot draws
     // each pane from the full frame its view asks for.
     let terminals = relay.is_none().then(|| {
-        state.core.hub.connect(
-            match (
-                first,
-                handshake.have_terminal_sequence,
-                handshake.have_terminal_epoch.clone(),
-            ) {
-                (FrameKind::Snapshot, _, _) => Resume::Fresh,
-                (FrameKind::Delta, Some(cursor), Some(epoch)) => Resume::After { epoch, cursor },
-                // A cursor without the hub it came from is not trusted.
-                (FrameKind::Delta, _, _) => Resume::Redraw,
-            },
-        )
+        let resume = match (
+            first,
+            handshake.have_terminal_sequence,
+            handshake.have_terminal_epoch.clone(),
+        ) {
+            (FrameKind::Snapshot, _, _) => Resume::Fresh,
+            // A view's frame may stop inside a chunk (D-84), so it is drawn
+            // again whole rather than resumed from a cursor.
+            (FrameKind::Delta, _, _) if remote => Resume::Redraw,
+            (FrameKind::Delta, Some(cursor), Some(epoch)) => Resume::After { epoch, cursor },
+            // A cursor without the hub it came from is not trusted.
+            (FrameKind::Delta, _, _) => Resume::Redraw,
+        };
+        let limits = match remote {
+            true => crate::terminal_hub::Limits::REMOTE,
+            false => crate::terminal_hub::Limits::LOCAL,
+        };
+        state.core.hub.connect_with(resume, limits)
     });
+    // A view's file reads, each in its own task writing to the view's bulk
+    // stream; every read ends with the connection.
+    let mut view_reads: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let link = relay.as_ref().map(|relay| relay.link.clone());
     let mut role_ended = state.role_ended.clone();
     let mut ended_with_role = false;
@@ -1028,6 +1130,13 @@ async fn screen_loop(
                 ended_with_role = true;
                 break;
             }
+            // A newer view of the same guest took this one's place.
+            () = async {
+                match &seat {
+                    Some(seat) => seat.taken().await,
+                    None => std::future::pending().await,
+                }
+            } => break,
             changed = notify.recv() => {
                 match changed {
                     Ok(()) => {}
@@ -1118,14 +1227,14 @@ async fn screen_loop(
             // `state` holds the sender, so the channel never closes under
             // this loop; a window that lagged behind calls skips to the
             // newest, which is the project the operator asked for last.
-            call = window_calls.recv(), if renderer && relay.is_none() => {
+            call = window_calls.recv(), if own => {
                 let Ok(payload) = call else { continue };
                 let frame = json!({"type": "window_call", "payload": payload}).to_string();
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     break;
                 }
             }
-            changed = move_frames.changed(), if renderer && relay.is_none() => {
+            changed = move_frames.changed(), if own => {
                 if changed.is_err() {
                     break;
                 }
@@ -1161,12 +1270,12 @@ async fn screen_loop(
                 if changed.is_err() {
                     break;
                 }
-                let frame = json!({"type": "mobile", "payload": mobile_frames.borrow_and_update().as_ref()});
+                let frame = json!({"type": "mobile", "payload": mobile_frame(mobile_frames.borrow_and_update().as_ref())});
                 if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
             }
-            changed = pairing_frames.changed(), if renderer && relay.is_none() => {
+            changed = pairing_frames.changed(), if own => {
                 if changed.is_err() {
                     break;
                 }
@@ -1207,7 +1316,37 @@ async fn screen_loop(
                             }
                             continue;
                         }
-                        match handle_client_text(&state, &text, connection, desktop, renderer) {
+                        // A view's keys bring their pane's output first (D-84).
+                        if remote
+                            && let Some(terminals) = &terminals
+                            && let Some(routed) = screen_event::read(&text, &[Kind::Key])
+                            && let Ok((KeyTarget::Pane(pane), _)) = terminal_key(&routed.event)
+                        {
+                            terminals.keyed(&pane);
+                        }
+                        match handle_client_text(&state, &text, connection, client) {
+                            // A view's file bytes go on its bulk stream, from
+                            // their own task (D-67).
+                            Ok(ClientAction::FileBytes(event)) if remote => {
+                                view_reads.retain(|read| !read.is_finished());
+                                let bulk = seat.as_ref().and_then(crate::remote_screen::Seat::bulk);
+                                let mut answer = None;
+                                match (bulk, event_device(&state.boundary, &event)) {
+                                    (None, _) => answer = Some(file_bytes_error(&payload_str(&event, "request_id"), &payload_str(&event, "path"), "bulk_missing")),
+                                    (Some(bulk), Some(device)) => {
+                                        answer = start_device_read(&state, &mut device_reads, bulk, (device, None), event);
+                                    }
+                                    (Some(_), None) if view_reads.len() >= crate::remote_screen::VIEW_READS => {
+                                        answer = Some(file_bytes_error(&payload_str(&event, "request_id"), &payload_str(&event, "path"), "busy"));
+                                    }
+                                    (Some(bulk), None) => view_reads.push(start_view_read(&state, bulk, event)),
+                                }
+                                if let Some(frame) = answer
+                                    && socket.send(frame).await.is_err()
+                                {
+                                    break;
+                                }
+                            }
                             Ok(ClientAction::FileBytes(event)) => {
                                 if let Some(device) = event_device(&state.boundary, &event) {
                                     let slot = relay.as_ref().map(RelayScreen::slot);
@@ -1236,7 +1375,6 @@ async fn screen_loop(
                                 // the relay; the answer is this client's.
                                 let pairing = Arc::clone(&state.pairing);
                                 let answers = device_frames_tx.clone();
-                                let own = renderer && relay.is_none();
                                 tokio::spawn(async move {
                                     let answer = pairing.window_event(&event, own).await;
                                     let _ = answers.send(answer.to_string()).await;
@@ -1361,6 +1499,9 @@ async fn screen_loop(
     }
     for read in device_reads {
         read.task.abort();
+    }
+    for read in view_reads {
+        read.abort();
     }
     if ended_with_role {
         let _ = socket.send(Message::Close(Some(role_ended_frame()))).await;
@@ -1854,12 +1995,14 @@ async fn scoped_client_loop(
     source: Option<(String, hide_node::ssh::RemoteHost)>,
     attested: Option<Arc<crate::pane_auth::StreamAttestation>>,
 ) {
-    let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-    if previous >= MAX_CLIENTS {
-        state.clients.fetch_sub(1, Ordering::SeqCst);
-        refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-        return;
-    }
+    let _local = match LocalSeat::take(&state) {
+        Ok(local) => local,
+        Err(count) => {
+            refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+            return;
+        }
+    };
+    state.clients.fetch_add(1, Ordering::SeqCst);
     let incoming = tokio::time::timeout(Duration::from_secs(10), socket.recv()).await;
     // Set only for an admitted `browser_relay`: its slot, its display and the
     // gateway socket it pumps once the answer and the claim are through.
@@ -2598,6 +2741,19 @@ fn start_device_read(
     superseded
 }
 
+/// Reads a file of this machine for another machine's view, onto the view's
+/// bulk stream, apart from the socket's frames (PRD D-67).
+fn start_view_read(
+    state: &AppState,
+    mut bulk: tokio::sync::mpsc::Sender<Message>,
+    event: Value,
+) -> tokio::task::JoinHandle<()> {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _ = send_file_bytes(&mut bulk, &state.boundary, &state.roots, &event).await;
+    })
+}
+
 /// Constant in the token's length, so a byte-by-byte mismatch does not leak
 /// how much of the token a caller guessed.
 pub(crate) fn token_matches(offered: &str, expected: &str) -> bool {
@@ -2669,8 +2825,7 @@ fn handle_client_text(
     state: &AppState,
     text: &str,
     connection: u64,
-    desktop: bool,
-    renderer: bool,
+    client: Client,
 ) -> Result<ClientAction, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|error| format!("client json: {error}"))?;
@@ -2679,6 +2834,18 @@ fn handle_client_text(
     } else {
         return Err("expected a core event {schema_version, kind, payload}".to_owned());
     };
+    // Who may send the kind is the class table's alone (PRD D-67); what
+    // follows only routes an admitted event to its handler.
+    let kind = event
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Err(reason) = event_class::admit(kind, client) {
+        event_class::log_refusal(kind, reason, client, connection);
+        return Ok(ClientAction::Replies(vec![event_class::refusal(
+            kind, reason,
+        )]));
+    }
     if event.get("kind").and_then(Value::as_str) == Some("file_bytes") {
         return Ok(ClientAction::FileBytes(event));
     }
@@ -2765,9 +2932,6 @@ fn handle_client_text(
         // A desktop window says whether its notifications are on; the daemon
         // judges agent changes for it only then (`desktop_notices.rs`).
         Some("desktop_activity") => {
-            if !desktop {
-                return Err("desktop_activity is a desktop window's".to_owned());
-            }
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
             struct Activity {
@@ -2780,9 +2944,6 @@ fn handle_client_text(
             return Ok(ClientAction::Replies(Vec::new()));
         }
         Some("desktop_notices") => {
-            if !desktop {
-                return Err("desktop_notices is a desktop window's".to_owned());
-            }
             let Some(wanted) = event
                 .get("payload")
                 .and_then(|payload| payload.get("wanted"))
@@ -2822,9 +2983,6 @@ fn handle_client_text(
         // A window that has the keyboard and draws the Workspace screen; the
         // core hears whether any window does, and a window that leaves
         // without saying so lets go of its focus with its connection.
-        Some("window_focus") if !renderer => {
-            return Err("window_focus is an operator window's".to_owned());
-        }
         Some("window_focus") => {
             let Some(focused) = event
                 .get("payload")
@@ -2855,40 +3013,11 @@ fn handle_client_text(
                 });
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        // The operator's comments and their Send, which writes a letter in
-        // the operator's name, belong to a window the operator works in
-        // (PRD view-opener-feedback D-17); a pane's scoped connection has no
-        // such event at all.
-        Some("view_comment" | "view_feedback_send") if !renderer => {
-            return Err("View feedback is an operator window's".to_owned());
-        }
+        // The operator's comments and their Send write a letter in the
+        // operator's name, so only a window sends them (PRD
+        // view-opener-feedback D-17, the `Window` class).
         Some("view_comment" | "view_feedback_send") => return Ok(ClientAction::Feedback(event)),
-        Some("browser_comment") => {
-            if !renderer {
-                return Err("View feedback is an operator window's".to_owned());
-            }
-            return Ok(ClientAction::BrowserComment(event));
-        }
-        // Approving, refusing, changing the level of and disconnecting an
-        // external tool are the operator's, in a window's Settings (PRD
-        // hide-external-control B8): no `hide` command and no pane sends them.
-        Some(kind) if kind.starts_with("access_") && !renderer => {
-            return Err("External tools are approved in an operator window".to_owned());
-        }
-        // The daemon owns this flag from its renderer count; a window that
-        // sent it would pause the readers every other window draws.
-        Some("ui_attached") => return Err("ui_attached is sent by the daemon only".to_owned()),
-        // The paired machines are what the daemon's pairing settled; a
-        // client that named them would draw machines nobody allowed.
-        Some("peer_machines") => {
-            return Err("peer_machines is sent by the daemon only".to_owned());
-        }
-        // A device's switch is the daemon's own pairing with its machine; a
-        // client that named a step would hand the device to a key nobody
-        // paired.
-        Some("device_switch") => {
-            return Err("device_switch is sent by the daemon only".to_owned());
-        }
+        Some("browser_comment") => return Ok(ClientAction::BrowserComment(event)),
         Some(kind) if kind.starts_with("pairing_") => {
             return Ok(ClientAction::Pairing(event));
         }
@@ -5279,6 +5408,28 @@ fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
 
 /// A window of this machine, counted while it is open; the first to open
 /// and the last to close tell every node whether one draws its panes.
+/// One of this machine's `MAX_CLIENTS` places, held for a connection's life
+/// and let go when it drops, on every path out of its loop.
+pub(crate) struct LocalSeat(Arc<AtomicUsize>);
+
+impl LocalSeat {
+    /// A place, or the count it would have made when all are taken.
+    pub(crate) fn take(state: &AppState) -> Result<Self, usize> {
+        let previous = state.local_seats.fetch_add(1, Ordering::SeqCst);
+        if previous >= MAX_CLIENTS {
+            state.local_seats.fetch_sub(1, Ordering::SeqCst);
+            return Err(previous + 1);
+        }
+        Ok(Self(Arc::clone(&state.local_seats)))
+    }
+}
+
+impl Drop for LocalSeat {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct OwnScreen {
     count: Arc<Mutex<usize>>,
     terminals: Arc<hide_node::terminal::router::Router>,
@@ -5549,6 +5700,51 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// This machine's eight places are taken in one place, `LocalSeat`
+    /// (PRD device-connect-iroh D-67): a way in that compared a count of
+    /// its own with `MAX_CLIENTS`, as the phone's, a pane's command and
+    /// `hide <path>` once did with every connection, would let another
+    /// machine's views take this machine's places. A node daemon serves no
+    /// views and keeps its own count.
+    #[test]
+    fn only_a_local_seat_reads_the_client_limit() {
+        fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        // Spelled apart so this test's own lines are not among them.
+        let limit = ["MAX_", "CLIENTS"].concat();
+        let mut readers = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for line in text.lines() {
+                if line.contains(&limit) && line.contains(">=") {
+                    let name = file
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    readers.push(name);
+                }
+            }
+        }
+        readers.sort();
+        assert_eq!(
+            readers,
+            ["node_daemon/screen.rs", "server.rs"],
+            "take a LocalSeat instead"
+        );
+    }
+
     /// PRD lane-desk-pair-view B32: every page on no desk takes an agent's
     /// input, a desk page behind another tab of its area does not, and a
     /// display outside the caller's checkout, whose Views the list never

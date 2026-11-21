@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
+import { NOTHING_UNDER_WAY } from "./pairing";
 import { MobileTab } from "./MobileTab";
 import type { MobileState } from "./mobileSettings";
 import { useShellStore } from "./store";
@@ -40,7 +41,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(mobile: MobileState) {
+/** `own`: this machine's own window, which hided sends the pairing frame; another machine's view of it gets none (B52). */
+async function mount(mobile: MobileState, own = true) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -50,7 +52,7 @@ async function mount(mobile: MobileState) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", mobile } as never);
+    useShellStore.setState({ connection: "live", mobile, pairing: own ? NOTHING_UNDER_WAY : null } as never);
     root.render(<MobileTab actions={actions} />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
@@ -58,6 +60,19 @@ async function mount(mobile: MobileState) {
 }
 
 const kinds = (events: Parameters<DispatchFn>[0][]) => events.map((event) => event.kind);
+
+// PRD device-connect-iroh B52, D-70: another machine's view of this one
+// pairs no phone and turns nothing on; it lists the phones and removes one.
+it("lists and removes phones, and offers no pairing, in another machine's view", async () => {
+  const phone = { id: "p1", name: "iPhone", last_seen_ms: 0, connected: true, notifications: "on", revoke_at_ms: 0 } as const;
+  const view = await mount(frame({ method: "relay", phones: [phone] }), false);
+  expect(view.q("[data-mobile-view-only]")).not.toBeNull();
+  expect(view.q("[data-mobile-switch]")).toBeNull();
+  expect(view.q("[data-mobile-show-code]")).toBeNull();
+  await act(async () => view.q('[data-mobile-revoke="p1"]')!.click());
+  expect(kinds(view.events)).toEqual(["mobile_observe", "mobile_revoke"]);
+  await view.unmount();
+});
 
 it("opens with no code and sends no code request: only Show QR asks for one (B58)", async () => {
   const { events, q, unmount } = await mount(frame({}));

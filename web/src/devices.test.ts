@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceScope } from "./agentScope";
 import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { numberedDevices } from "./numbering";
+import { computerTiles, numberedComputers } from "./computers";
 import { contextAgents, contextWorkspaces } from "./remote";
 import { searchEntries } from "./search";
 import { wslPlace } from "./screenMachine";
@@ -158,7 +158,7 @@ describe("this PC's WSL distribution as a device (PRD wsl-device B5, B6)", () =>
     expect(tileCounts(windows(WSL), local, WSL)).toEqual({ needs_you: 1, done: 0 });
     expect(tileCounts(windows(WSL), local, "local")).toEqual({ needs_you: 1, done: 0 });
     // ⌥⌘n numbers the tiles in the rail's order: this PC, then each device as the core lists it.
-    expect([...numberedDevices(front.navigator!.devices)]).toEqual([[1, "local"], [2, WSL], [3, "mini"]]);
+    expect([...numberedComputers(computerTiles(front))]).toEqual([[1, "local"], [2, WSL], [3, "mini"]]);
     // A stopped distribution reads as any device that is not connected: no count, the reconnect body.
     const off = windows(WSL);
     off.status!.remote![0]!.state = "not_connected";

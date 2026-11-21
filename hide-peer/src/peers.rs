@@ -293,9 +293,18 @@ struct Place {
     kind: StreamKind,
 }
 
+/// A kind's place in [`Counts`]: its place in [`StreamKind::ALL`], since
+/// tags need not follow each other.
+fn slot(kind: StreamKind) -> usize {
+    StreamKind::ALL
+        .iter()
+        .position(|listed| *listed == kind)
+        .expect("every kind is in ALL")
+}
+
 impl Counts {
     fn take(self: &Arc<Self>, kind: StreamKind) -> Option<Place> {
-        let count = &self.0[kind.tag() as usize - 1];
+        let count = &self.0[slot(kind)];
         if count.fetch_add(1, Ordering::AcqRel) >= limits::max_streams_of(kind) {
             count.fetch_sub(1, Ordering::AcqRel);
             return None;
@@ -309,7 +318,7 @@ impl Counts {
 
 impl Drop for Place {
     fn drop(&mut self) {
-        self.counts.0[self.kind.tag() as usize - 1].fetch_sub(1, Ordering::AcqRel);
+        self.counts.0[slot(self.kind)].fetch_sub(1, Ordering::AcqRel);
     }
 }
 

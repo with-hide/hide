@@ -25,11 +25,17 @@ pub enum StreamKind {
     Terminal,
     File,
     Page,
+    /// Another machine's view of this one: its socket's control and
+    /// terminal frames (PRD D-67).
     Screen,
+    /// The same view's page, its assets and its file bytes, behind
+    /// everything else, so neither a page load nor a file read holds a
+    /// key's echo (D-67).
+    ScreenBulk,
 }
 
 impl StreamKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Hello,
         Self::Pairing,
         Self::Revoke,
@@ -40,6 +46,7 @@ impl StreamKind {
         Self::File,
         Self::Page,
         Self::Screen,
+        Self::ScreenBulk,
     ];
 
     pub const fn tag(self) -> u8 {
@@ -54,6 +61,7 @@ impl StreamKind {
             Self::File => 8,
             Self::Page => 9,
             Self::Screen => 10,
+            Self::ScreenBulk => 12,
         }
     }
 
@@ -73,6 +81,7 @@ impl StreamKind {
             Self::File => "file",
             Self::Page => "page",
             Self::Screen => "screen",
+            Self::ScreenBulk => "screen_bulk",
         }
     }
 
@@ -86,7 +95,7 @@ impl StreamKind {
             Self::Hello | Self::Pairing | Self::Revoke | Self::Management => 75,
             Self::NodeLink => 50,
             Self::Terminal | Self::Screen => 0,
-            Self::File | Self::Page => -100,
+            Self::File | Self::Page | Self::ScreenBulk => -100,
         }
     }
 
@@ -184,7 +193,10 @@ mod tests {
             if kind != StreamKind::Keys {
                 assert!(kind.priority() < StreamKind::Keys.priority(), "{kind:?}");
             }
-            if !matches!(kind, StreamKind::File | StreamKind::Page) {
+            if !matches!(
+                kind,
+                StreamKind::File | StreamKind::Page | StreamKind::ScreenBulk
+            ) {
                 assert!(kind.priority() > StreamKind::File.priority(), "{kind:?}");
             }
         }

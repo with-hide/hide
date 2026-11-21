@@ -3,11 +3,12 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { badgeText, deviceConnected, frontDeviceId, railDeviceIds, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
+import { badgeText, deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
-import { numberOf, numberedDevices } from "../numbering";
-import { openedMachines } from "../pairing";
+import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
+import { numberOf } from "../numbering";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
+import { deviceConnectOffered, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
@@ -21,7 +22,7 @@ import { SidebarMenus } from "./sidebar-menus";
 /** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
 export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
 
-/** A paired machine's tile counts nothing until its screen is shown here. */
+/** A paired machine's tile counts nothing until its core sends its counts over the connection (D-50). */
 const NO_COUNTS: TileCounts = { needs_you: 0, done: 0 };
 
 /** The rounded square every tile is, the add tile included; a tile's marks hang off its corners, and the focus outline stands outside the selected ring. */
@@ -49,23 +50,34 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const tools = useShellStore((s) => toolCells(s.rest));
   // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).
   const toolFront = useFrontTool()?.connection ?? null;
-  const tiles = useMemo<Tile[]>(() => {
+  // Every computer tile in one group before `+`: this computer, each device,
+  // and each paired machine, whose tile shows its own Hide screen (PRD
+  // device-connect-iroh D-37, B47).
+  // Read when the devices or the paired machines change, which are the only facts the tiles are made of.
+  const peers = useShellStore((s) => s.rest?.navigator?.peers);
+  const computers = useMemo(() => computerTiles(useShellStore.getState().rest), [devices, peers]);
+  const remoteScreen = useUiStore((s) => s.remoteScreen);
+  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
+  const tiles = useMemo(() => {
     const own = windowDeviceId(devices);
-    const shared = coreShared(devices);
-    return railDeviceIds(devices).map((id): Tile => ({
-      id,
-      label: machineName(devices, id, t),
-      icon: id === own ? "local" : "remote",
-      core: shared && isCoreMachine(devices, id),
-      place: wslPlace(devices, id, t),
+    // Every computer runs a core of its own once two Hides connect: no tile names the core's (D-80).
+    const shared = !deviceConnect && coreShared(devices);
+    return computers.map((computer): { tile: Tile; computer: ComputerTile } => ({
+      computer,
+      tile: devices?.some((device) => device.id === computer.id)
+        ? {
+            id: computer.id,
+            label: machineName(devices, computer.id, t),
+            icon: computer.id === own ? "local" : "remote",
+            core: shared && isCoreMachine(devices, computer.id),
+            place: wslPlace(devices, computer.id, t),
+          }
+        : { id: computer.id, label: computer.screen?.name ?? computer.id, icon: "remote", core: false },
     }));
-  }, [devices, t]);
-  // A ⌘ hold numbers the tiles ⌘n selects (`numbering.ts`).
+  }, [computers, devices, deviceConnect, t]);
+  // A ⌥⌘ hold numbers the tiles ⌥⌘n selects (`computers.ts`).
   const numbered = useUiStore((s) => s.hint === "devices");
-  const numbers = useMemo(() => (numbered ? numberedDevices(devices) : null), [numbered, devices]);
-  // The Hides this computer opens that are not yet its devices (PRD
-  // device-connect-iroh B3), after its devices.
-  const peers = useShellStore(useShallow((s) => openedMachines(s.rest)));
+  const numbers = useMemo(() => (numbered ? numberedComputers(computers) : null), [numbered, computers]);
   return (
     <EntryContextMenu
       asChild
@@ -76,22 +88,19 @@ export function DeviceRail({ actions }: { actions: Actions }) {
     >
       <nav aria-label={t("settings.tabs.devices")} data-device-rail="true" className="flex w-(--size-rail) shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border py-md">
         <ul className="flex flex-col items-center gap-md">
-          {tiles.map((tile) => (
-            <li key={tile.id} className="flex">
-              <RailTile tile={tile} selected={toolFront === null && tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
-            </li>
-          ))}
-          {peers.map((peer) => (
-            <li key={peer.key} className="flex">
-              <RailTileView
-                tile={{ id: peer.device_id, label: peer.name, icon: "remote", core: false }}
-                selected={false}
-                counts={NO_COUNTS}
-                connected={peer.connected && peer.opens === "active"}
-                onSelect={() => actions.openSettings("devices")}
-              />
-            </li>
-          ))}
+          {tiles.map(({ tile, computer }) => {
+            const number = numbers ? numberOf(numbers, tile.id) : null;
+            const selected = remoteScreen !== null ? computer.screen?.device_id === remoteScreen : toolFront === null && tile.id === front;
+            return (
+              <li key={tile.id} className="flex">
+                {computer.screen ? (
+                  <ScreenTile tile={tile} peer={computer.screen} selected={selected} number={number} onSelect={() => actions.selectComputer(tile.id)} />
+                ) : (
+                  <RailTile tile={tile} selected={selected} number={number} actions={actions} />
+                )}
+              </li>
+            );
+          })}
           <li className="flex">
             <Hint label={t("devices.addTitle")} side="right">
               <button
@@ -121,6 +130,18 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   );
 }
 
+/**
+ * A paired machine's tile (B17, B21): its own Hide screen, or the reason it
+ * cannot show now in its hint (not connected, paused, update needed, not
+ * allowed), dimmed with the cross while it cannot.
+ */
+function ScreenTile({ tile, peer, selected, number, onSelect }: { tile: Tile; peer: Peer; selected: boolean; number: number | null; onSelect: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const state = screenState(peer);
+  const note = state === "ready" ? null : t(screenStateKey(state));
+  return <RailTileView tile={tile} selected={selected} counts={NO_COUNTS} connected={state === "ready"} note={note} number={number} onSelect={onSelect} />;
+}
+
 const RailTile = memo(function RailTile({ tile, selected, number, actions }: { tile: Tile; selected: boolean; number: number | null; actions: Actions }) {
   const counts = useShellStore(useShallow((s) => tileCounts(s.rest, s.agents, tile.id)));
   const connected = useShellStore((s) => deviceConnected(s.rest, tile.id));
@@ -140,15 +161,17 @@ const RailTile = memo(function RailTile({ tile, selected, number, actions }: { t
  * D-80). While a ⌘ hold reveals the numbers, the tile's keycap floats at its
  * top left, the corner the marks leave free.
  */
-export function RailTileView({ tile, selected, counts, connected, number = null, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; number?: number | null; onSelect: () => void }) {
+export function RailTileView({ tile, selected, counts, connected, note = null, number = null, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; note?: string | null; number?: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
   // The name with where it is, `WSL Ubuntu · This PC`; the glyph keeps the name's letters (`WU`).
   const named = tile.place ? `${tile.label} · ${tile.place}` : tile.label;
+  // A paired machine that cannot show says why in its own words (B21).
+  const hint = note ? t("pairing.rail.hint", { name: named, state: note }) : tileHint(named, connected, counts, t, tile.core);
   return (
-    <Hint label={tileHint(named, connected, counts, t, tile.core)} side="right">
+    <Hint label={hint} side="right">
       <button
         type="button"
-        aria-label={tileName(named, connected, counts, t, tile.core)}
+        aria-label={note ? `${named}, ${note}` : tileName(named, connected, counts, t, tile.core)}
         aria-pressed={selected}
         data-rail-tile={tile.id}
         data-rail-connected={connected ? "true" : "false"}
