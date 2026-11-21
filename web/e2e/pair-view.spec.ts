@@ -239,6 +239,7 @@ test("focus mode's desk shows the left pane's tabs and what the operator opens m
     const body = (await page.locator("[data-lane-row]").boundingBox())!;
     const alone = (await paneView(page, left!).boundingBox())!;
     expect(Math.abs(alone.width - body.width)).toBeLessThanOrEqual(1);
+    await expect(paneView(page, left!).locator(".xterm-helper-textarea"), "the folded desk hands the keys to the pane").toBeFocused();
   } finally {
     daemon?.stop();
     engine.stop();

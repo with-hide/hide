@@ -457,9 +457,6 @@ impl Runtime {
             // B5, B14).
             if let Ok(done) = &applied {
                 self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
-                // The lane call above stood the desk before the opener's
-                // stamp made the View the pane's own (D-53).
-                self.settle_pair_desk_choice();
             }
             applied
         })();
@@ -882,7 +879,7 @@ impl Runtime {
                 // right-lane B12, lane-desk-pair-view B33); a pair view stays
                 // on and its desk settles (D-64).
                 if matches!(at, Some(Place::Tray(_))) {
-                    self.settle_pair_desk();
+                    self.keep_pair_front_shown();
                 }
                 (view_id.clone(), true, area)
             }

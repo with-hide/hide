@@ -2535,13 +2535,6 @@ fn an_agent_drawn_alone_that_opens_and_closes_its_view_is_drawn_alone_again() {
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     runtime.sync_workspace_view();
     assert!(!front_pair(&runtime).alone, "its View stands the desk");
-    assert!(
-        runtime
-            .workspace_views
-            .as_ref()
-            .is_some_and(|store| store.pair_desk_choice.is_none()),
-        "the agent's own open is no stood desk"
-    );
     let a = display_id(&runtime, &directory, "a.md");
     view_act(
         &mut runtime,
@@ -3237,4 +3230,56 @@ fn a_stood_desk_left_with_only_folded_tabs_leaves_the_pane_alone() {
     let pair = front_pair(&runtime);
     assert_eq!(pair.pane_id, "w-order:t1:q");
     assert!(pair.alone, "only p's folded b.md is left on the desk");
+}
+
+/// #2775 review 4: a tab the operator opened during the mode keeps the desk
+/// standing after the left agent's own tab closes first; the desk stands by
+/// what its strip shows, not by how it came to stand.
+#[test]
+fn the_operators_tab_opened_in_focus_mode_keeps_the_desk_after_the_agents_tab_closes() {
+    let (mut runtime, checkout, directory) = setup("pair-later-after-own");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    std::fs::write(directory.join("later.md"), "later").expect("later");
+    open(&mut runtime, &checkout, &directory, "later.md");
+    runtime.sync_workspace_view();
+    let a = display_id(&runtime, &directory, "a.md");
+    control(
+        &mut runtime,
+        "w-order:t1:p",
+        Action::Close {
+            view_id: a,
+            expected_browser_area: None,
+        },
+        "agent-close",
+    );
+    runtime.sync_workspace_view();
+    assert!(runtime.pair_mode_on());
+    assert!(!front_pair(&runtime).alone, "later.md is on the strip");
+    assert_eq!(fronts(&runtime, &directory), ["later.md"]);
+}
+
+/// #2775 review 4: moving focus mode to a pane with no View of its own keeps
+/// the desk standing while it holds a tab the operator opened during the
+/// mode, and moving back finds it standing too.
+#[test]
+fn a_pane_with_no_view_keeps_the_desk_the_operator_opened_onto_in_focus_mode() {
+    let (mut runtime, checkout, directory) = setup("pair-move-keeps-later");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    std::fs::write(directory.join("later.md"), "later").expect("later");
+    open(&mut runtime, &checkout, &directory, "later.md");
+    runtime.sync_workspace_view();
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:q");
+    assert!(!pair.alone, "later.md stands the desk beside q");
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:p");
+    assert!(!pair.alone);
 }
