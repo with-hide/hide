@@ -18,8 +18,8 @@ import { CHAPTERS } from "../practice/chapters";
 import type { PracticePreviewKind } from "../practice/chapter";
 import { PracticePreview, PREVIEW_CSS } from "../practice/PracticePreview";
 import { historyVersions, inLanguage, RELEASE_DRAWINGS, unseen, type ReleaseDrawing, whatsNewOffer, type Change, type Offer, type OfferHighlight, type RecordUpdate, type ReleaseEntry, type WhatsNewRecord } from "../releases";
-import { releaseNotesUrl, useUpdateStatus, readyVersion } from "../updates";
-import { chooseUpdateHistoryVersion, closeUpdateHistory, openUpdateHistory, retryUpdateHistory, saveWhatsNew, useUpdateHistory, useWhatsNewState } from "../whatsNew";
+import { releaseNotesUrl } from "../updates";
+import { chooseUpdateHistoryVersion, closeUpdateHistory, openUpdateHistory, saveWhatsNew, useUpdateHistory, useWhatsNewState } from "../whatsNew";
 import type { Actions } from "../actions";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
@@ -29,8 +29,6 @@ import { RowButton } from "./ui/row-button";
 
 /** How long the window waits on one feature before it moves to the next, the drawing's own loop. */
 const ADVANCE_MS = 6000;
-/** After this long from launch the window is not opened in this launch; the next launch asks again (B11). */
-export const OFFER_WINDOW_MS = 30_000;
 
 // The release file's drawing names are exactly the practice cards' moves.
 type SameKinds = [PracticePreviewKind] extends [ReleaseDrawing] ? ([ReleaseDrawing] extends [PracticePreviewKind] ? true : false) : false;
@@ -180,22 +178,20 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
   );
 }
 
-type HistoryRow = ReleaseEntry & { isNew: boolean; isReady: boolean };
+type HistoryRow = ReleaseEntry & { isNew: boolean };
 
 /**
  * The history's words and actions, from values a caller holds (the gallery
  * draws it this way): the versions newest first on the left, the chosen
  * one's features and its changes and fixes on the right.
  */
-export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, onChoose, onTry, onRetry, onLink }: {
+export function UpdateHistoryBody({ rows, appVersion, chosen, language, onChoose, onTry, onLink }: {
   rows: readonly HistoryRow[];
   appVersion: string;
   chosen: string | null;
   language: InterfaceLanguage;
-  state: "ready" | "loading" | "failed";
   onChoose: (version: string) => void;
   onTry: (chapter: string) => void;
-  onRetry: () => void;
   onLink: (url: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
@@ -206,28 +202,11 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
   useEffect(() => {
     for (const row of entry?.highlights ?? []) noteMissing(row);
   }, [entry]);
-  if (state === "failed" && rows.length === 0) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-md p-xl text-center" data-update-history-failed>
-        <DialogTitle className="text-body font-normal">{t("whatsNew.failed")}</DialogTitle>
-        <div className="flex items-center gap-md">
-          <Button onClick={onRetry} data-update-history-retry>{t("whatsNew.retry")}</Button>
-          <Button variant="text-link" size="inline" onClick={() => onLink("https://github.com/with-hide/hide/releases")}>{t("whatsNew.viewOnGithub")}</Button>
-        </div>
-      </div>
-    );
-  }
   if (rows.length === 0) {
     return (
-      <div className="grid h-full grid-cols-[var(--size-settings-nav-w)_1fr]" aria-busy="true" data-update-history-loading>
-        <DialogTitle className="sr-only">{t("whatsNew.loading")}</DialogTitle>
-        <div className="flex flex-col gap-sm border-r border-border p-md">
-          {[0, 1, 2, 3].map((row) => <div key={row} className="h-(--size-control) animate-pulse rounded-md bg-secondary" />)}
-        </div>
-        <div className="flex flex-col gap-md p-lg">
-          <div className="h-(--size-control) w-1/4 animate-pulse rounded-md bg-secondary" />
-          <div className="aspect-[2/1] w-1/2 animate-pulse rounded-md bg-secondary" />
-        </div>
+      <div className="flex h-full flex-col items-center justify-center gap-md p-xl text-center" data-update-history-empty>
+        <DialogTitle className="text-body font-normal">{t("whatsNew.empty")}</DialogTitle>
+        <Button variant="text-link" size="inline" onClick={() => onLink("https://github.com/with-hide/hide/releases")}>{t("whatsNew.viewOnGithub")}</Button>
       </div>
     );
   }
@@ -256,12 +235,12 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
               data-major={major}
             >
               <span className="mt-xxs flex size-sm items-center justify-center">
-                <span className={cn("rounded-full", major ? "size-sm" : "size-xs", row.isReady ? "border border-dashed border-primary" : index === at ? "bg-primary" : "bg-muted-foreground")} />
+                <span className={cn("rounded-full", major ? "size-sm" : "size-xs", index === at ? "bg-primary" : "bg-muted-foreground")} />
               </span>
               <span className="flex min-w-0 flex-col">
                 <span className="flex items-center gap-xs font-mono text-caption text-foreground">
                   {row.version}
-                  {row.isReady ? <Badge variant="outline" className="font-sans">{t("whatsNew.ready")}</Badge> : row.isNew ? <Badge variant="default" className="font-sans" data-update-history-new>{t("whatsNew.new")}</Badge> : null}
+                  {row.isNew ? <Badge variant="default" className="font-sans" data-update-history-new>{t("whatsNew.new")}</Badge> : null}
                 </span>
                 <span className="text-micro text-muted-foreground">
                   {releaseDate(language, row.date)} · {major ? t("whatsNew.features", { count: row.highlights.length }) : count(row.changes)}
@@ -278,7 +257,7 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
             <h3 className="font-mono text-title text-foreground">{entry.version}</h3>
             <span className="text-caption text-muted-foreground">
               {releaseDate(language, entry.date)}
-              {entry.isReady ? ` · ${t("whatsNew.ready")}` : entry.version === appVersion ? ` · ${t("whatsNew.current")}` : ""}
+              {entry.version === appVersion ? ` · ${t("whatsNew.current")}` : ""}
             </span>
           </div>
           {entry.highlights.length ? (
@@ -313,15 +292,15 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
   );
 }
 
-/** The history rows for an app at `appVersion` with `ready` downloaded, each marked NEW or ready. */
-export function historyRows(entries: readonly ReleaseEntry[], record: WhatsNewRecord | null, ready: string | null): HistoryRow[] {
-  return entries.map((row) => ({ ...row, isReady: row.version === ready, isNew: row.version !== ready && unseen(row.version, record) }));
+/** The history rows, each marked NEW until its version is opened. */
+export function historyRows(entries: readonly ReleaseEntry[], record: WhatsNewRecord | null): HistoryRow[] {
+  return entries.map((row) => ({ ...row, isNew: unseen(row.version, record) }));
 }
 
 /**
  * The window after an update and the history, connected to the host. The
- * decision is taken once per launch, when the host's file and the core's
- * snapshot are both in and no later than `OFFER_WINDOW_MS` after launch.
+ * decision is taken once per launch, when the host's state and the core's
+ * snapshot are both in.
  */
 export function WhatsNewHost({ actions }: { actions: Actions }) {
   const { i18n } = useInterfaceTranslation();
@@ -329,18 +308,11 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
   const state = useWhatsNewState();
   const restIn = useShellStore((s) => s.rest !== null);
   const history = useUpdateHistory();
-  const updates = useUpdateStatus();
-  const ready = readyVersion(updates);
   const [offer, setOffer] = useState<{ offer: Offer; save: RecordUpdate } | null>(null);
   const decided = useRef(false);
 
   useEffect(() => {
     if (decided.current || !state || !restIn) return;
-    if (Date.now() - state.launchedAt > OFFER_WINDOW_MS) {
-      decided.current = true;
-      return;
-    }
-    if (!state.feed) return;
     const result = whatsNewOffer(state.feed, state.appVersion, state.record);
     if (result.kind === "none") return;
     decided.current = true;
@@ -359,12 +331,12 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
     openPractice(chapter, true);
   };
 
-  const rows = useMemo(() => (state?.feed ? historyRows(historyVersions(state.feed, state.appVersion, ready), state.record, ready) : []), [state, ready]);
-  const chosen = history.version ?? rows.find((row) => row.version === state?.appVersion)?.version ?? rows.find((row) => !row.isReady)?.version ?? null;
+  const rows = useMemo(() => (state ? historyRows(historyVersions(state.feed, state.appVersion), state.record) : []), [state]);
+  const chosen = history.version ?? rows.find((row) => row.version === state?.appVersion)?.version ?? rows[0]?.version ?? null;
   // Opening a version in the history is what takes its NEW mark away (B17).
   const shownVersion = rows.find((row) => row.version === chosen) ?? null;
   useEffect(() => {
-    if (history.open && shownVersion && !shownVersion.isReady && shownVersion.isNew) saveWhatsNew({ opened: shownVersion.version });
+    if (history.open && shownVersion && shownVersion.isNew) saveWhatsNew({ opened: shownVersion.version });
   }, [history.open, shownVersion]);
 
   return (
@@ -389,10 +361,8 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
               appVersion={state.appVersion}
               chosen={chosen}
               language={language}
-              state={rows.length ? "ready" : state.fetching ? "loading" : "failed"}
               onChoose={chooseUpdateHistoryVersion}
               onTry={tryChapter}
-              onRetry={retryUpdateHistory}
               onLink={(url) => actions.openLink(url, true)}
             />
           </DialogContent>

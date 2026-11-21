@@ -97,11 +97,11 @@ export const ENV_REGISTRY: readonly EnvKey[] = [
     note: "Points a packaged release build's updater at another feed, for the CI update test (PRD auto-update D-29); the build must still be one that updates itself. The update file's sha512 comes from that same feed, so setting it trusts whoever serves the feed with what the app installs; the host logs `update.feed_override` at launch whenever it is set",
   },
   {
-    key: "HIDE_RELEASES_FEED_URL",
+    key: "HIDE_RELEASES_FILE",
     requirement: "optional",
-    shape: "an http or https URL on this machine (127.0.0.1, localhost or [::1]) of a releases file in the shape of site/public/app/releases.json",
-    fallback: "https://withhide.dev/app/releases.json (`whatsNew.ts`)",
-    note: "Points the window after an update and the update history at another releases file, for tests and live checks of a candidate app; the host logs `whats_new.feed_override` at launch whenever it is set",
+    shape: "an absolute path to a releases file in the shape of web/src/releases.json",
+    fallback: "the releases file built into the app (`whatsNew.ts`)",
+    note: "Points the window after an update and the update history at another releases file, for tests and live checks of a candidate app; the host logs `whats_new.file_override` at launch whenever it is set",
   },
   {
     key: "PATH",
@@ -119,8 +119,8 @@ export type DesktopEnv = {
   systemLanguage: string | null;
   /** Another update feed than with-hide/hide's releases; null on a normal launch. */
   updateFeedUrl: string | null;
-  /** Another releases file than withhide.dev's; null on a normal launch. */
-  releasesFeedUrl: string | null;
+  /** Another releases file than the one built in; null on a normal launch. */
+  releasesFile: string | null;
   /** The login shell; null on Windows, and where neither SHELL nor the user database names one. */
   shell: string | null;
   home: string;
@@ -183,7 +183,7 @@ export function loadEnv(source: Record<string, string | undefined>): DesktopEnv 
     userDataDir: absolute("HIDE_DESKTOP_USER_DATA_DIR"),
     systemLanguage: source.HIDE_DESKTOP_SYSTEM_LANGUAGE || null,
     updateFeedUrl: feed("HIDE_UPDATE_FEED_URL"),
-    releasesFeedUrl: feed("HIDE_RELEASES_FEED_URL"),
+    releasesFile: absolute("HIDE_RELEASES_FILE"),
     shell: HAS_LOGIN_SHELL ? (absolute("SHELL") ?? accountShell()) : null,
     home: (process.platform === "win32" ? absolute("USERPROFILE") : absolute("HOME")) ?? os.userInfo().homedir,
     localAppData: windows("LOCALAPPDATA"),

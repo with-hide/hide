@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Checks the releases file before a release publishes its entry (PRD whats-new
-# B29, docs/UI_BEHAVIOR.md, What's new and Update history): the file reads
-# whole, names only drawings and practice chapters this commit has, gives
-# every line in every interface language, and its newest entry is the version
-# being released. The release skill runs it on the release commit; a failure
-# names what is wrong and stops the release.
+# Checks the releases file built into the app (`web/src/releases.json`)
+# before a release candidate is built from it (PRD whats-new B29,
+# docs/UI_BEHAVIOR.md, What's new and Update history): the file reads whole,
+# names only drawings and practice chapters this commit has, gives every line
+# in every interface language, and its newest entry is the version being
+# released. The release skill runs it on the release commit; a failure names
+# what is wrong and stops the release.
 set -euo pipefail
 version="${1:-}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

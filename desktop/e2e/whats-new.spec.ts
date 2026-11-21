@@ -1,17 +1,15 @@
 // The window after an update and the update history in the desktop app (PRD
-// whats-new): the host fetches the releases file from a local server standing
-// in for withhide.dev (`HIDE_RELEASES_FEED_URL`), the shell opens the window
-// once for the version the app runs, and its close and the history's open are
-// kept apart in the profile. A development app reports its package version,
-// `0.1.0`, which the served file names as the version just updated to.
+// whats-new): the host reads a releases file named in place of the built-in
+// one (`HIDE_RELEASES_FILE`), the shell opens the window once for the version
+// the app runs, and its close and the history's open are kept apart in the
+// profile. A development app reports its package version, `0.1.0`, which the
+// named file names as the version just updated to.
 // End to end because what is proved crosses the three owners no cheaper layer
-// holds together: the host's fetch and profile files, the shell's decision and
+// holds together: the host's file and profile record, the shell's decision and
 // drawing, and the practice window the host opens on Try it.
 
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { startEngine, type EngineServer } from "../../web/e2e/engine-fixture";
 import { hostLog, isolate, launchShell, screenshot, test, type Isolated } from "./fixture";
@@ -41,28 +39,17 @@ const RELEASES = {
 let engine: EngineServer;
 let run: Isolated;
 let app: ElectronApplication | null = null;
-let server: http.Server;
-let served = 0;
 
 test.describe.configure({ timeout: 180_000 }); // wait-ok: the app starts its own daemon before the shell draws
 
 test.beforeEach(async () => {
-  served = 0;
-  server = http.createServer((request, response) => {
-    if (request.url !== "/app/releases.json") {
-      response.writeHead(404).end();
-      return;
-    }
-    served += 1;
-    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(RELEASES));
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   engine = await startEngine();
   run = isolate(engine, "whats-new");
-  run.env.HIDE_RELEASES_FEED_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/app/releases.json`;
   // The app ran 0.0.9 before this launch and closed that version's window.
   const profile = run.env.HIDE_DESKTOP_USER_DATA_DIR!;
   fs.mkdirSync(profile, { recursive: true });
+  run.env.HIDE_RELEASES_FILE = path.join(path.dirname(profile), "releases.json");
+  fs.writeFileSync(run.env.HIDE_RELEASES_FILE, JSON.stringify(RELEASES));
   fs.writeFileSync(path.join(profile, "whats-new.json"), JSON.stringify({ shown: "0.0.9", seen: "0.0.9", opened: [] }));
 });
 
@@ -73,7 +60,6 @@ test.afterEach(async () => {
   app = null;
   run.cleanup();
   engine.stop();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
 const record = () => JSON.parse(fs.readFileSync(path.join(run.env.HIDE_DESKTOP_USER_DATA_DIR!, "whats-new.json"), "utf8")) as { shown: string | null; seen: string | null; opened: string[] };
@@ -84,7 +70,7 @@ test("the window opens once for the version just updated to, its close and the h
 
   // B1, B2: the window over the shell, for the running version, with both features and the folded changes.
   const dialog = page.locator(`[data-whats-new="${APP_VERSION}"]`);
-  await expect(dialog).toBeVisible({ timeout: 30_000 }); // wait-ok: the host fetched the file and the core snapshot arrived
+  await expect(dialog).toBeVisible({ timeout: 30_000 }); // wait-ok: the core snapshot arrived
   await expect(dialog.locator("[data-whats-new-feature]")).toHaveCount(2);
   await expect(dialog.locator('[data-whats-new-stage="mission"]')).toBeVisible();
   await expect(dialog.locator('[data-whats-new-try="mission"]')).toBeVisible();
@@ -122,5 +108,4 @@ test("the window opens once for the version just updated to, its close and the h
   await expect(history).toHaveCount(0);
   const window = await practice;
   await expect(window.locator('[data-practice-detail="mission"]')).toBeVisible({ timeout: 30_000 }); // wait-ok: the practice window loaded its page
-  expect(served).toBeGreaterThan(0);
 });

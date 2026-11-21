@@ -124,7 +124,6 @@ export const UPDATE_DISMISS_CHANNEL = "hide:update-dismiss";
  */
 export const WHATS_NEW_STATE_GET_CHANNEL = "hide:whats-new-state-get";
 export const WHATS_NEW_STATE_CHANNEL = "hide:whats-new-state";
-export const WHATS_NEW_REFRESH_CHANNEL = "hide:whats-new-refresh";
 export const WHATS_NEW_SAVE_CHANNEL = "hide:whats-new-save";
 
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */

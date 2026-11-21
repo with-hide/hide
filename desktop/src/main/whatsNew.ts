@@ -1,34 +1,23 @@
 // What each released version brought (docs/UI_BEHAVIOR.md, What's new and
-// Update history): the file withhide.dev serves (`site/public/app/releases.json`),
-// fetched at launch and again when the history opens on a copy an hour old,
-// kept in the profile so the history reads offline, and the record of which
-// version's window closed (`shown`) and which versions the history opened
-// (`seen`, `opened`), kept apart (operator decision m228). A profile no
-// earlier launch wrote to is a new install: its version is recorded at once,
-// so the first-run wizard alone introduces Hide (B8). It shows nothing
-// itself: the shell decides and draws (`web/src/whatsNew.ts`). A failure is
-// an event in the host's log and a `failed` flag the history's empty state
-// reads; nothing else on screen changes.
+// Update history): the releases file built into the app
+// (`web/src/releases.json`), and the record of which version's window closed
+// (`shown`) and which versions the history opened (`seen`, `opened`), kept
+// apart in the profile (operator decision m228). A profile no earlier launch
+// wrote to is a new install: its version is recorded at once, so the
+// first-run wizard alone introduces Hide (B8). It shows nothing itself: the
+// shell decides and draws (`web/src/whatsNew.ts`). A failure is an event in
+// the host's log; nothing on screen changes.
 
 import fs from "node:fs";
 import path from "node:path";
 import type { WhatsNewState } from "../../../web/src/host";
+import bundledReleases from "../../../web/src/releases.json";
 import { announces, mergeRecord, parseReleaseFeed, parseVersion, VERSION_LIMIT, type ReleaseFeed, type WhatsNewRecord } from "../../../web/src/releases";
-import { fetchBoundedJson, type FetchImpl } from "./boundedJson";
 import { rememberedCliPath } from "./cli";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLog } from "./log";
 import { windowStatePath } from "./windowState";
 
-/** The published file; `HIDE_RELEASES_FEED_URL` stands in for it in tests. */
-export const RELEASES_URL = "https://withhide.dev/app/releases.json";
-/** The file is a few KB a version; more is not withhide.dev's answer. */
-export const RELEASES_BYTES_CAP = 1024 * 1024;
-const RELEASES_TIMEOUT_MS = 20_000;
-/** Opening the history fetches again once the copy is this old. */
-export const REFETCH_AFTER_MS = 60 * 60 * 1000;
-
-export const releasesCacheFile = (userData: string) => path.join(userData, "releases.json");
 export const whatsNewRecordFile = (userData: string) => path.join(userData, "whats-new.json");
 /**
  * Files an earlier launch leaves in the profile, named by their owners: the
@@ -38,14 +27,9 @@ export const whatsNewRecordFile = (userData: string) => path.join(userData, "wha
  * its version again.
  */
 const earlierLaunchFiles = (userData: string) => [windowStatePath(userData), rememberedCliPath(userData)];
-/** Try again fetches at once, but not more often than this. */
-const RETRY_FLOOR_MS = 5_000;
-
 export type WhatsNewIo = {
-  fetch: () => Promise<unknown>;
-  now: () => number;
-  readCache: () => unknown;
-  writeCache: (value: { fetchedAt: number; file: unknown }) => void;
+  /** The releases file: the one built in, or the one `HIDE_RELEASES_FILE` names. */
+  releases: unknown;
   readRecord: () => unknown;
   writeRecord: (record: WhatsNewRecord) => void;
   /** An earlier launch left files in the profile: false on a new install. */
@@ -56,96 +40,30 @@ const release = (value: unknown): string | null => (typeof value === "string" &&
 const detail = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 export class WhatsNew {
-  private feed: ReleaseFeed | null = null;
-  private fetchedAt: number | null = null;
-  private fetching = false;
-  private failed = false;
-  private triedAt: number | null = null;
-  private record: WhatsNewRecord | null = null;
-  private readonly launchedAt: number;
+  private readonly feed: ReleaseFeed;
+  private record: WhatsNewRecord | null;
   private readonly listeners = new Set<(state: WhatsNewState) => void>();
 
+  /** Reads the file and the record; a file that does not parse throws, and the host logs it. */
   constructor(
     private readonly appVersion: string,
     private readonly io: WhatsNewIo,
     private readonly log: HostLog,
   ) {
-    this.launchedAt = io.now();
-  }
-
-  /** Reads the kept copy and the record, then fetches; the promise settles when that fetch has. */
-  start(): Promise<void> {
+    this.feed = this.parse(io.releases);
     this.record = this.readRecord();
-    if (this.record === null && !this.io.earlierLaunch && announces(this.appVersion) && this.io.readRecord() === null) {
-      this.log.event("whats_new.new_install", { version: this.appVersion });
-      this.keep({ shown: this.appVersion, seen: this.appVersion, opened: [] });
+    if (this.record === null && !io.earlierLaunch && announces(appVersion) && io.readRecord() === null) {
+      this.log.event("whats_new.new_install", { version: appVersion });
+      this.keep({ shown: appVersion, seen: appVersion, opened: [] });
     }
-    const cached = this.io.readCache();
-    if (cached !== null) {
-      const kept = typeof cached === "object" && cached !== null ? (cached as { fetchedAt?: unknown; file?: unknown }) : {};
-      try {
-        if (typeof kept.fetchedAt !== "number") throw new Error("no fetch time");
-        this.feed = this.parse(kept.file);
-        this.fetchedAt = kept.fetchedAt;
-      } catch (error) {
-        this.log.event("whats_new.cache_unreadable", { detail: String(error).slice(0, 200) });
-      }
-    }
-    this.emit();
-    return this.fetch();
   }
 
   state(): WhatsNewState {
-    return { appVersion: this.appVersion, launchedAt: this.launchedAt, feed: this.feed, fetchedAt: this.fetchedAt, fetching: this.fetching, failed: this.failed, record: this.record };
+    return { appVersion: this.appVersion, feed: this.feed, record: this.record };
   }
 
   onChange(listener: (state: WhatsNewState) => void): void {
     this.listeners.add(listener);
-  }
-
-  /**
-   * The history opening fetches once the copy is `REFETCH_AFTER_MS` old; its
-   * Try again (`always`) fetches whatever the copy's age, at most once per
-   * `RETRY_FLOOR_MS`. A time ahead of the clock (the clock was set back)
-   * counts as long ago.
-   */
-  refresh(always = false): Promise<void> {
-    const since = (at: number | null) => (at === null ? null : this.io.now() - at);
-    const recent = (at: number | null, ms: number) => {
-      const age = since(at);
-      return age !== null && age >= 0 && age < ms;
-    };
-    if (always ? recent(this.triedAt, RETRY_FLOOR_MS) : recent(this.fetchedAt, REFETCH_AFTER_MS)) return Promise.resolve();
-    return this.fetch();
-  }
-
-  /** Fetches the file now unless a fetch is running; a bad answer keeps the copy (B22). */
-  private async fetch(): Promise<void> {
-    if (this.fetching) return;
-    this.triedAt = this.io.now();
-    this.fetching = true;
-    this.emit();
-    try {
-      const file = await this.io.fetch();
-      const feed = this.parse(file);
-      const fetchedAt = this.io.now();
-      this.feed = feed;
-      this.fetchedAt = fetchedAt;
-      this.failed = false;
-      this.log.event("whats_new.fetched", { versions: feed.versions.length });
-      // A copy that cannot be kept leaves this launch's file in use.
-      try {
-        this.io.writeCache({ fetchedAt, file });
-      } catch (error) {
-        this.log.event("whats_new.cache_write_failed", { detail: detail(error) });
-      }
-    } catch (error) {
-      this.failed = true;
-      this.log.event("whats_new.fetch_failed", { detail: detail(error) });
-    } finally {
-      this.fetching = false;
-      this.emit();
-    }
   }
 
   /** Moves the record forward, never back: a version's window closed, or a version opened in the history. */
@@ -196,18 +114,10 @@ export class WhatsNew {
   }
 }
 
-/** The file over Electron's network stack (the system's proxy), bounded in time and size. */
-export function fetchReleasesFile(url: string, fetchImpl: FetchImpl): Promise<unknown> {
-  return fetchBoundedJson(fetchImpl, url, { headers: { Accept: "application/json" }, cap: RELEASES_BYTES_CAP, timeoutMs: RELEASES_TIMEOUT_MS, what: "releases file" });
-}
-
-/** The io a packaged app uses, files in `userData`. */
-export function whatsNewIo(userData: string, fetch: () => Promise<unknown>): WhatsNewIo {
+/** The io a packaged app uses: the built-in file, or `file` read whole when one is named, and the record in `userData`. */
+export function whatsNewIo(userData: string, file: string | null): WhatsNewIo {
   return {
-    fetch,
-    now: Date.now,
-    readCache: () => readJsonFile(releasesCacheFile(userData)),
-    writeCache: (value) => writeJsonFile(releasesCacheFile(userData), value),
+    releases: file === null ? bundledReleases : JSON.parse(fs.readFileSync(file, "utf8")),
     readRecord: () => readJsonFile(whatsNewRecordFile(userData)),
     writeRecord: (record) => writeJsonFile(whatsNewRecordFile(userData), record),
     earlierLaunch: earlierLaunchFiles(userData).some((file) => fs.existsSync(file)),

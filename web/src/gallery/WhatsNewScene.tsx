@@ -1,14 +1,13 @@
 // The window after an update and the update history (PRD whats-new), drawn
-// from the releases file withhide.dev serves (`site/public/app/releases.json`),
-// so a draft the release skill adds there is previewed exactly as the app
+// from the releases file built into the app (`web/src/releases.json`), so a
+// draft the release skill adds there is previewed exactly as the app
 // will draw it (B27). `version` picks the version (the newest when absent);
 // `state` picks what is drawn:
 //   dialog       the window for that version
 //   dialog-more  the same with its changes and fixes open
 //   dialog-skip  the window after skipping from `from` (the third newest when absent)
 //   history      the history at that version, the version in use
-//   history-ready  the history with that version downloaded, waiting for the restart
-//   history-loading, history-failed  the two states before any file is kept
+//   history-empty  the history of a version the file has nothing up to
 import { useLayoutEffect } from "react";
 import { WhatsNewDialogBody, UpdateHistoryBody, historyRows } from "../components/whats-new";
 import { Dialog, DialogContent } from "../components/ui/dialog";
@@ -16,7 +15,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { historyVersions, parseReleaseFeed, whatsNewOffer } from "../releases";
-import releases from "../../../site/public/app/releases.json";
+import releases from "../releases.json";
 
 export function WhatsNewScene({ params }: { params: URLSearchParams }) {
   const language = requireInterfaceLanguage(params.get("lang") ?? "ko");
@@ -43,22 +42,19 @@ export function WhatsNewScene({ params }: { params: URLSearchParams }) {
       <p className="p-lg text-body text-muted-foreground" data-whats-new-scene-empty>{`${version}: ${result.kind}`}</p>
     );
   } else {
-    const ready = state === "history-ready" ? version : null;
-    const app = ready ? (feed.versions[feed.versions.findIndex((row) => row.version === version) + 1]?.version ?? version) : version;
+    const app = version;
     const record = { shown: app, seen: feed.versions[feed.versions.findIndex((row) => row.version === app) + 1]?.version ?? null, opened: [] };
-    const rows = state === "history-loading" || state === "history-failed" ? [] : historyRows(historyVersions(feed, app, ready), record, ready);
+    const rows = state === "history-empty" ? [] : historyRows(historyVersions(feed, app), record);
     body = (
       <Dialog open>
         <DialogContent className="h-(--size-settings-sheet-h) w-(--size-settings-sheet-w) p-0" showCloseButton>
           <UpdateHistoryBody
             rows={rows}
             appVersion={app}
-            chosen={ready ?? app}
+            chosen={app}
             language={language}
-            state={state === "history-failed" ? "failed" : state === "history-loading" ? "loading" : "ready"}
             onChoose={noop}
             onTry={noop}
-            onRetry={noop}
             onLink={noop}
           />
         </DialogContent>

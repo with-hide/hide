@@ -1,9 +1,8 @@
-// The releases file withhide.dev serves (`site/public/app/releases.json`) is
-// checked on every pull request that could change it: the app reads every
-// version of it, names its drawings and practice chapters, and draws its
-// words in every interface language (PRD whats-new B29). The release skill
-// adds a version here and its pull request runs this before the file is
-// deployed.
+// The releases file built into the app (`web/src/releases.json`) is checked
+// on every pull request that could change it: the app reads every version of
+// it, names its drawings and practice chapters, and draws its words in every
+// interface language (PRD whats-new B29). The release skill adds a version
+// here before the release candidate is built, and runs this on that commit.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -12,13 +11,13 @@ import { INTERFACE_LANGUAGES } from "./i18n/locale";
 import { CHAPTERS } from "./practice/chapters";
 import { parseReleaseFeed, RELEASE_DRAWINGS } from "./releases";
 
-const FILE = path.resolve(__dirname, "../../site/public/app/releases.json");
+const FILE = path.resolve(__dirname, "releases.json");
 /** The version a release is about to publish, set by `scripts/check-releases-entry.sh`; unset on an ordinary run. */
 const RELEASING = process.env.HIDE_RELEASE_ENTRY;
 const raw: unknown = JSON.parse(fs.readFileSync(FILE, "utf8"));
 const { feed, dropped } = parseReleaseFeed(raw);
 
-describe("site/public/app/releases.json", () => {
+describe("web/src/releases.json", () => {
   it("reads whole: no version is dropped and each appears once, newest first", () => {
     expect(dropped).toEqual([]);
     const listed = (raw as { versions: { version: string }[] }).versions.map((row) => row.version);

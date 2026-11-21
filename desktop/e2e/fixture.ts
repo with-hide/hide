@@ -93,8 +93,6 @@ export function isolate(engine: IsolatedEngine, label: string): Isolated {
       PATH: fixtureToolPath(path.join(engine.root ?? root, "bin")),
       // `open_external` must not launch a GUI application during a test.
       HIDE_OPEN_COMMAND: fixtureOpenCommand(undefined, root),
-      // The releases file is never fetched from withhide.dev: port 9 on loopback refuses, and a spec that needs the file serves its own.
-      HIDE_RELEASES_FEED_URL: "http://127.0.0.1:9/app/releases.json",
       ...definedEnv(engine.daemonEnv),
     };
   } catch (error) {
