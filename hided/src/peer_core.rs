@@ -405,12 +405,17 @@ impl PeerCore {
     /// A place among the calls of `key` at work, or none while
     /// [`CALLS_AT_ONCE`] of them still are, on whichever streams they came.
     fn place(self: &Arc<Self>, key: &PeerKey) -> Option<Place> {
-        let room = Arc::clone(
-            lock(&self.rooms)
+        // Taken under the rooms' lock: a room found is held, or full,
+        // before the rooms are read again, so none is forgotten between
+        // being found and being held and counted anew beside its old self.
+        let permit = {
+            let mut rooms = lock(&self.rooms);
+            let room = rooms
                 .entry(*key)
-                .or_insert_with(|| Arc::new(Semaphore::new(CALLS_AT_ONCE))),
-        );
-        room.try_acquire_owned().ok().map(|permit| Place {
+                .or_insert_with(|| Arc::new(Semaphore::new(CALLS_AT_ONCE)));
+            Arc::clone(room).try_acquire_owned().ok()
+        }?;
+        Some(Place {
             service: Arc::clone(self),
             permit: Some(permit),
         })
