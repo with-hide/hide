@@ -5,7 +5,7 @@ import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./con
 import { moveUnderWay, type MoveView } from "./coreMove";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
 import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
-import { isOperatorFocus, numbered } from "./operatorFocus";
+import { movesOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
@@ -94,10 +94,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       useShellStore.getState().noteDiagnostic(`dispatch dropped: ${event.kind} while socket not open`);
       return false;
     }
-    // Each operator focus carries this page's next number, so the snapshot
+    // Each operator focus and card open carries this page's next number, so the snapshot
     // can say whether it includes the last one sent (`operatorFocus.ts`).
     // The number counts only once the frame has left.
-    if (isOperatorFocus(event)) {
+    if (movesOperatorFocus(event)) {
       const sequence = operatorFocusSequence + 1;
       socket.send(JSON.stringify(numbered(event, sequence)));
       operatorFocusSequence = sequence;
