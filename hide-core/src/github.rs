@@ -29,9 +29,9 @@ use crate::model::{
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
-    AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS,
-    REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN,
-    is_number,
+    AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS,
+    REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS,
+    VIEWER_LOGIN, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::git::GitCommand;

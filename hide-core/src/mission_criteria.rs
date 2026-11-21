@@ -594,7 +594,10 @@ impl Criterion {
                 let why = if held.is_empty() {
                     format!("the line names no {agent} checker")
                 } else {
-                    format!("every {agent} place is held by a live checker: {}", held.join(", "))
+                    format!(
+                        "every {agent} place is held by a live checker: {}",
+                        held.join(", ")
+                    )
                 };
                 crate::coordination::refusal("mission_checker_unknown", &why)
             })?;

@@ -660,9 +660,7 @@ impl Runtime {
         let machine = (device != self.node.as_str()).then_some(device);
         let github = self
             .catalog_workspaces()
-            .find(|workspace| {
-                workspace.device_id == device && workspace.id == context.workspace_id
-            })
+            .find(|workspace| workspace.device_id == device && workspace.id == context.workspace_id)
             .ok_or_else(|| "The session's project is not in the catalog".to_owned())
             .and_then(|workspace| self.github_place(machine, &workspace.path))
             .map_err(|reason| unconfirmed("plans.repository_unread", reason))?;

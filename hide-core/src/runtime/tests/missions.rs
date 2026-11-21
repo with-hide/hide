@@ -5155,7 +5155,10 @@ fn a_fresh_reviewer_takes_the_place_of_one_whose_registration_ended() {
     let unknown = json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-99"}});
     assert_eq!(
         crate::coordination::split_refusal(&command(&mut runtime, "sender", unknown).unwrap_err()),
-        ("mission_checker_unknown", Some("Hide knows no agent agent-99"))
+        (
+            "mission_checker_unknown",
+            Some("Hide knows no agent agent-99")
+        )
     );
     assert_eq!(reviewers(&runtime), [Some("agent-3".to_owned())]);
     for record in &mut ledger.agents {

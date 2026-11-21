@@ -29,6 +29,10 @@ pub(super) struct RecordedAction {
     result: Option<Result<ActionResult, Refusal>>,
 }
 
+/// What a file read of this machine's checkout answers when its folder is
+/// no longer where Hide opened it.
+const CHECKOUT_FOLDER_GONE: &str = "The checkout's folder could not be found where Hide opened it (moved, renamed or deleted): open the folder from its new place in Hide, then retry";
+
 impl Runtime {
     fn view_caller_identity(
         &self,
@@ -317,13 +321,17 @@ impl Runtime {
                     reason: "invalid_address",
                     next_action: "Use a local file URL with an absolute path",
                 })?;
+                let local = context.device_id == self.node.as_str();
                 let (root, channel) = self
                     .document_source(&context.workspace_id, &context.checkout_id)
                     .map_err(|_| Refusal {
                         reason: "host_unavailable",
-                        next_action: "Reconnect the device and retry",
+                        next_action: if local {
+                            CHECKOUT_FOLDER_GONE
+                        } else {
+                            "Reconnect the device and retry"
+                        },
                     })?;
-                let local = context.device_id == self.node.as_str();
                 return Ok(ActionPreparation::Read(ActionSource::browser(
                     root, channel, path, local,
                 )));
@@ -356,13 +364,19 @@ impl Runtime {
                     && tab.kind == crate::model::EditorTabKind::File
                     && tab.unavailable_reason.is_none()
             });
+        let local = context.device_id == self.node.as_str();
+        // On this machine the read can only fail on the checkout's folder,
+        // gone from where Hide opened it, as after a rename (#2624).
         let (root, channel) = self
             .document_source(&context.workspace_id, &context.checkout_id)
             .map_err(|_| Refusal {
                 reason: "host_unavailable",
-                next_action: "Reconnect the device and check file access consent, then retry",
+                next_action: if local {
+                    CHECKOUT_FOLDER_GONE
+                } else {
+                    "Reconnect the device and check file access consent, then retry"
+                },
             })?;
-        let local = context.device_id == self.node.as_str();
         let source = if file {
             ActionSource::file(root, channel, path.clone(), already_open, local)
         } else {
