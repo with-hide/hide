@@ -1584,12 +1584,16 @@ impl Runtime {
                     }
                     let store = self.workspace_views.as_mut().expect("checked above");
                     let first = store.agent_live.insert(key.clone());
-                    let view = store.views.entry(&key.0, &key.1);
-                    let layout = view.selected_agent_layout();
+                    // A checkout with no tabs has no entry (`reconcile_agent_topology`).
+                    let layout = store
+                        .views
+                        .get(&key.0, &key.1)
+                        .map(|view| view.selected_agent_layout());
+                    let active = layout.and_then(|layout| layout.active());
                     placed_tabs = Some(
                         layout
-                            .tree
-                            .displays()
+                            .into_iter()
+                            .flat_map(|layout| layout.tree.displays())
                             .map(|t| t.id.clone())
                             .chain(
                                 topology
@@ -1608,7 +1612,7 @@ impl Runtime {
                             !checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
                         });
                     unlisted_agent_selection = !first
-                        && layout.active().is_some_and(|id| {
+                        && active.is_some_and(|id| {
                             !checkout
                                 .tabs
                                 .iter()
@@ -1622,7 +1626,7 @@ impl Runtime {
                                 .is_some_and(|placed| !placed.contains(id))
                         })
                     {
-                        restored_agent_tab = layout.active().map(str::to_owned);
+                        restored_agent_tab = active.map(str::to_owned);
                     }
                 }
                 let has_tab = |tab_id: &str| {
