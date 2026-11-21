@@ -133,7 +133,10 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const humanTurn = band ? bandHumanTurn(band, self) : null;
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
   const below = self && (children || self.subagents) ? self : null;
-  if (off || (!band && !below && !ownProgress && !request && !finished && !waiting)) return workingLine;
+  // The questions still waiting end the row, and draw it when nothing else would.
+  const openAsks = useOpenAsks(paneId);
+  if (off || (!band && !below && !ownProgress && !request && !finished && !waiting && openAsks === 0)) return workingLine;
+  const asks = openAsks > 0 ? <OpenAsksButton paneId={paneId} count={openAsks} actions={actions} end /> : null;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
@@ -148,7 +151,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
     {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} variant="outline" reason={unreachable === null} className="shrink-0" /> : null}
   </>;
-  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waiting ? "waiting" : request ? "request" : "children");
+  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waiting ? "waiting" : request ? "request" : below ? "children" : "open_asks");
   // A working turn with no word beyond its request, or a parent with no turn
   // to show, draws no answer at all, so two lines never add an empty one.
   const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
@@ -169,17 +172,20 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     <div className={cn("relative flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
       {request ? <PaneTurnCard paneId={paneId} actions={actions} anchorClassName="peer/turn absolute inset-0" trigger={(state) => <TurnRowButton paneId={paneId} request={request} state={state} />} /> : null}
       {tree || request ? (
-        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full", through, request && "text-subtle-foreground", request && TURN_LIT)} data-pane-turn-part="request">
+        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full", !answered && asks && "grow", through, request && "text-subtle-foreground", request && TURN_LIT)} data-pane-turn-part="request">
           {tree}
           {request ? <span className="min-w-0 truncate" data-pane-turn-request-text="true">{requestWords(t, request)}</span> : null}
+          {answered ? null : asks}
         </div>
       ) : null}
       {answered ? (
         <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0", through, request && TURN_LIT)} data-pane-turn-part="answer">
           {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
           {answer}
+          {asks}
         </div>
       ) : null}
+      {asks && !answered && !tree && !request ? <div className="flex h-(--size-pane-header) grow items-center">{asks}</div> : null}
     </div>
     {workingLine}
   </div>;
@@ -263,20 +269,23 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
   )} />;
 }
 
+/** How many questions the pane's agent put to the operator still wait (status-model.md, A question still waiting). */
+function useOpenAsks(paneId: string): number {
+  return useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.open_asks?.items.length ?? 0);
+}
+
 /**
- * The pane's `질문 N` after its title, in words in the question colour
- * (`--open-ask`): how many questions the agent put to the operator still wait
- * (status-model.md, A question still waiting), at every turn row mode and
- * while the agent works, since the second row then keeps its progress. It takes
- * no warning colour, border or fill: a kept question is no call to act, and
- * only a Needs You ask wears the warning colour. A press opens the turn card,
- * which lists them with 무시하기.
+ * The pane's `질문 N`, in words in the question colour (`--open-ask`): how
+ * many questions the agent put to the operator still wait, while the agent
+ * works too. It takes no warning colour, border or fill: a kept question is no
+ * call to act, and only a Needs You ask wears the warning colour. A press
+ * opens the turn card, which lists them with 무시하기. It ends the pane's
+ * second row (`PaneHeaderBand`), so the head keeps its width for the title;
+ * `PaneOpenAsksMark` puts it on the head while the View menu turns that row off.
  */
-export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
+function OpenAsksButton({ paneId, count, actions, end = false }: { paneId: string; count: number; actions: Actions; /** Stands at the end of its row. */ end?: boolean }) {
   const { t } = useInterfaceTranslation();
-  const count = useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.open_asks?.items.length ?? 0);
-  if (count === 0) return null;
-  return <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => (
+  return <PaneTurnCard paneId={paneId} actions={actions} anchorClassName={end ? "ml-auto flex shrink-0 items-center" : undefined} trigger={(state) => (
     <Button
       variant="text"
       size="inline"
@@ -294,6 +303,14 @@ export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions:
       {t("openAsks.count", { count })}
     </Button>
   )} />;
+}
+
+/** The pane's `질문 N` on its head while the View menu turns the turn row off, as its ask rides there (`PaneAskMark`); in the other modes the row draws it. */
+export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
+  const mode = usePaneTurnRowMode();
+  const count = useOpenAsks(paneId);
+  if (mode !== "off" || count === 0) return null;
+  return <OpenAsksButton paneId={paneId} count={count} actions={actions} />;
 }
 
 /** The pane's own ask's verb, as the row's ask starts with it; a stop is work left, `일 남음`, as the row's line says. */

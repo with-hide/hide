@@ -444,13 +444,13 @@ it("shows a pane's list as its 태스크 row does: a parent's holds its descenda
   try {
     expect(own.container.querySelector("[data-agent-pr=child]")?.textContent).toBe("#" + "1073");
   } finally { await own.unmount(); }
-  // Several PRs are counted per state in each state's colour, worst first:
-  // a mergeable PR beside a merged one is green 1 purple 1, not green 2. The
+  // Several PRs are one mark: how many are still open, in the worst open
+  // state's colour, over how many in all; the name still counts each state. The
   // child that made them has ended; the parent's list keeps them.
   const several = await mountChip("parent", [pullRow("parent", [sessionPull(1074, "mergeable", { own: false }), sessionPull(1073, "merged", { own: false })])]);
   try {
     const mark = several.container.querySelector<HTMLButtonElement>("[data-agent-pr=parent]")!;
-    expect(Array.from(mark.querySelectorAll("[data-pr-count]"), (part) => [part.getAttribute("data-pr-count"), part.textContent])).toEqual([["mergeable", "1"], ["merged", "1"]]);
+    expect([mark.querySelector("[data-pr-count]")?.getAttribute("data-pr-count"), mark.textContent]).toEqual(["mergeable", "1/2"]);
     expect(mark.getAttribute("aria-label")).toBe("PR 2 · Mergeable 1 · Merged 1");
   } finally { await several.unmount(); }
   const none = await mountChip("parent", [pullRow("parent", [])]);
@@ -726,10 +726,11 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
   }
 });
 
-// docs/UI_BEHAVIOR.md, the pane head: the questions still waiting ride after
-// the title as plain words, `질문 N` (`Questions N`), whose press opens the turn
-// card that lists them; a pane with none draws nothing there.
-it("counts a pane's waiting questions in words that open the turn card, and draws nothing without them", async () => {
+// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting end the
+// pane's second row as plain words, `질문 N` (`Questions N`), whose press opens
+// the turn card that lists them; the head draws them only while the row is
+// off, and a pane with none draws nothing in either place.
+it("counts a pane's waiting questions at the end of its second row, on the head only when the row is off, and draws nothing without them", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
@@ -743,11 +744,22 @@ it("counts a pane's waiting questions in words that open the turn card, and draw
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><PaneOpenAsksMark paneId="solo" actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span></TooltipProvider>));
+  const header = { working: true, notice: null, band: null } as PaneHeader;
+  const draw = () => act(async () => root.render(<TooltipProvider><span data-head="true"><PaneOpenAsksMark paneId="solo" actions={actions} /></span><PaneHeaderBand paneId="solo" header={header} actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span><span data-quiet-row="true"><PaneHeaderBand paneId="quiet" header={undefined} actions={actions} /></span></TooltipProvider>));
+  await draw();
   try {
-    const mark = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    // With the row off the head holds them and no row is drawn.
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
+    await draw();
+    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-pane-header-band]")).toBeNull();
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
+    await draw();
+    expect(container.querySelector("[data-head]")?.childElementCount).toBe(0);
+    const mark = container.querySelector<HTMLButtonElement>('[data-pane-header-band="open_asks"] [data-pane-open-asks=solo]')!;
     expect(mark.textContent).toBe("Questions 2");
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
+    expect(container.querySelector("[data-quiet-row] [data-pane-header-band]")).toBeNull();
     await act(async () => mark.click());
     expect(mark.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector("[data-pane-turn-card=solo] [data-turn-card-asks]")?.querySelectorAll("[data-record-ask]")).toHaveLength(2);

@@ -3,7 +3,7 @@ import { recordPending, recordWords } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { cn } from "../lib/utils";
-import { CLOSED_DIM, PR_LOOK, prMarkParts, pullsStaleness, reviewWord, staleLabel, type PrMarkParts, type PrStaleness } from "../prMark";
+import { CLOSED_DIM, PR_LOOK, prCountsSummary, prMarkParts, pullsStaleness, reviewWord, staleLabel, type PrMarkParts, type PrStaleness } from "../prMark";
 import type { PrChip } from "../projectBoard";
 import { pullRequestCard } from "../projects";
 import { catalogWorkspaces, type AgentRow, type PrState, type SessionPull } from "../snapshot";
@@ -42,27 +42,27 @@ export function PrMark({
 }
 
 /**
- * The mark of several PRs: each state's icon and how many PRs stand in it, in
- * that state's colour, worst first, so a mergeable PR beside a merged one
- * reads green 1 purple 1 rather than one colour for both. A stale mark dims.
+ * The mark of several PRs, as one: the icon and colour of the worst state
+ * among those still open with how many are, then `/` and how many there are in
+ * all, muted, so open 1 beside merged 8 reads green `1/9`. With none merged or
+ * closed the count stands alone, and once all are it is the whole count in the
+ * merged (or closed) colour. The hover and the list name each PR. A stale mark dims.
  */
 function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: { state: PrState; count: number }[]; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  const { state, left, total } = prCountsSummary(counts);
+  const { icon: Icon, tone } = PR_LOOK[state];
   return (
     <span
       data-pr-counts={counts.map(({ state, count }) => `${state}:${count}`).join(" ")}
       data-stale={stale ? "true" : undefined}
-      className={cn("inline-flex shrink-0 items-center gap-xs font-mono text-caption", stale && "opacity-(--opacity-dimmed)", className)}
+      className={cn("inline-flex shrink-0 items-center font-mono text-caption", stale && "opacity-(--opacity-dimmed)", className)}
       {...rest}
     >
-      {counts.map(({ state, count }) => {
-        const { icon: Icon, tone } = PR_LOOK[state];
-        return (
-          <span key={state} className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-pr-count={state}>
-            <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
-            {count}
-          </span>
-        );
-      })}
+      <span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-pr-count={state}>
+        <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
+        {left || total}
+      </span>
+      {left > 0 && left < total ? <span className="text-muted-foreground" data-pr-total={total}>/{total}</span> : null}
     </span>
   );
 }

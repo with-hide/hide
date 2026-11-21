@@ -110,6 +110,18 @@ const PR_RANK = Object.fromEntries(Object.keys(PR_LOOK).map((state, rank) => [st
 /** What a mark draws: one PR's state and number, or for several, how many of each state, worst first. */
 export type PrMarkParts = { state: PrState; number: number } | { counts: { state: PrState; count: number }[] };
 
+/**
+ * Several PRs as one mark: the worst state among those still open (`left` of
+ * them), or the worst of all once every one is merged or closed, and how many
+ * there are in all. `counts` is worst first, so its head is that state.
+ */
+export function prCountsSummary(counts: readonly { state: PrState; count: number }[]): { state: PrState; left: number; total: number } {
+  const [worst] = counts;
+  if (!worst) throw new Error("a PR counts mark needs at least one state");
+  const sum = (list: readonly { count: number }[]) => list.reduce((total, { count }) => total + count, 0);
+  return { state: worst.state, left: sum(counts.filter(({ state }) => !settled(state))), total: sum(counts) };
+}
+
 /** The mark of a list of PRs; null for none. */
 export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state">[]): PrMarkParts | null {
   const [first] = pulls;

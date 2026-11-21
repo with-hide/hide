@@ -133,7 +133,8 @@ it("counts a PR held by the root and a descendant once, and the same number in a
     agent("pane:grandchild", "손자", [{ repo: "site", number: 7, state: "merged" }], { delegated: true, lineage_parent_pane_id: "pane:child" }),
   ], [["pane:root", 0], ["pane:child", 1], ["pane:grandchild", 2]]);
   const root = mark(container, "pane:root");
-  expect(counts(root)).toEqual([["mergeable", "1"], ["merged", "1"]]);
+  // One still open of two: the open state's colour and count, then the whole count.
+  expect([counts(root), root?.textContent]).toEqual([[["mergeable", "1"]], "1/2"]);
   expect(root?.getAttribute("aria-label")).toBe("PR 2 · Mergeable 1 · Merged 1");
   // A child row keeps its own PR, as the 태스크 child row does (B5).
   const child = mark(container, "pane:child");
