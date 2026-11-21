@@ -2,10 +2,10 @@ import type { Catalog, Catalogs } from "../../schema";
 
 // Flow 7's words (`practice/chapters/focus.ts`).
 const en = {
-  "practice.focus.title": "Focus on one agent",
-  "practice.focus.summary": "See an agent's terminal beside the page it makes, and watch the page change as it works",
+  "practice.focus.title": "See an agent beside its work",
+  "practice.focus.summary": "When an agent makes something, keep its terminal beside the result and watch it change as the agent works",
   "practice.focus.enter.quest": "Turn on focus mode",
-  "practice.focus.enter.kick": "An agent is building a page",
+  "practice.focus.enter.kick": "To watch what the agent makes",
   "practice.focus.enter.title": "Turn on focus mode",
   "practice.focus.enter.text": "The ◧ icon shows on an agent's pane head once it opens something. Press it, or press ⌘. in the agent.",
   "practice.focus.band.kick": "Focus mode is on",
@@ -25,10 +25,10 @@ const en = {
 };
 
 const ko = {
-  "practice.focus.title": "한 에이전트에 집중하기",
-  "practice.focus.summary": "에이전트의 터미널과 그가 만든 페이지를 나란히 놓고, 고치는 대로 바뀌는 걸 봐요",
+  "practice.focus.title": "에이전트와 결과물 나란히 보기",
+  "practice.focus.summary": "에이전트가 무언가 만들 때, 터미널과 결과물을 나란히 놓고 고치는 대로 바뀌는 걸 봐요",
   "practice.focus.enter.quest": "집중 모드 켜기",
-  "practice.focus.enter.kick": "에이전트가 페이지를 만드는 중",
+  "practice.focus.enter.kick": "결과물을 같이 보고 싶을 때",
   "practice.focus.enter.title": "집중 모드 켜기",
   "practice.focus.enter.text": "에이전트가 무언가 열면 칸 위쪽에 ◧ 아이콘이 생겨요. 그 아이콘을 누르거나, 에이전트에서 ⌘.를 눌러요.",
   "practice.focus.band.kick": "집중 모드 중",
@@ -48,10 +48,10 @@ const ko = {
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
-  "practice.focus.title": "专注于一个智能体",
-  "practice.focus.summary": "把智能体的终端和它做的页面并排放着，看页面随修改而变化",
+  "practice.focus.title": "并排看智能体和它的成果",
+  "practice.focus.summary": "智能体做东西时，把终端和成果并排放着，看成果随修改而变化",
   "practice.focus.enter.quest": "开启专注模式",
-  "practice.focus.enter.kick": "智能体正在做一个页面",
+  "practice.focus.enter.kick": "想同时看成果时",
   "practice.focus.enter.title": "开启专注模式",
   "practice.focus.enter.text": "智能体打开了内容后，窗格顶部会出现 ◧ 图标。按这个图标，或在智能体里按 ⌘.。",
   "practice.focus.band.kick": "专注模式中",
@@ -71,10 +71,10 @@ const zhCN = {
 } satisfies Catalog<typeof en>;
 
 const ja = {
-  "practice.focus.title": "一つのエージェントに集中する",
-  "practice.focus.summary": "エージェントのターミナルと作ったページを並べて、直すそばから変わるのを見ます",
+  "practice.focus.title": "エージェントと成果物を並べて見る",
+  "practice.focus.summary": "エージェントが何かを作るとき、ターミナルと成果物を並べて、直すそばから変わるのを見ます",
   "practice.focus.enter.quest": "集中モードをオンにする",
-  "practice.focus.enter.kick": "エージェントがページを作っています",
+  "practice.focus.enter.kick": "成果物も一緒に見たいとき",
   "practice.focus.enter.title": "集中モードをオンにする",
   "practice.focus.enter.text": "エージェントが何かを開くと、ペインの上に ◧ アイコンが出ます。それを押すか、エージェントで ⌘. を押します。",
   "practice.focus.band.kick": "集中モード中",
