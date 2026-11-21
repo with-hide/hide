@@ -77,6 +77,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_criteria_protected"
             | "mission_checkers_invalid"
             | "mission_checker_is_worker"
+            | "mission_checker_unknown"
             | "mission_external_invalid"
             | "mission_gate_too_many"
             | "mission_gate_invalid"

@@ -4461,7 +4461,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A node's checker is another agent than its worker: start a new agent for the review or verification and bind that one"
         }
         "mission_checker_unknown" => {
-            "Bind a checker the node's plan names: its review or verify lists an unbound agent of the same kind as the registration (hide mission show)"
+            "The reason follows: for an agent Hide does not know, bind the id hide agent spawn answered; for a kind the line names no checker of, start an agent of a kind its review or verify lists (hide mission show) or replan the line to name it; for a place a live checker holds, end that checker with hide agent end <id>, then bind again"
         }
         "mission_criterion_unknown" => {
             "Run hide mission show to see the node's lines and their keys (c1, check, ci, review, verify, d1…)"
