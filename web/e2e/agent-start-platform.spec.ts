@@ -2,7 +2,7 @@
 // Windows cases also exercise npm's PowerShell and cmd launchers over Node.
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 import type { SnapshotRest } from "../src/snapshot";
 import { agentIn, newTab, preparePaneInput, sendKeys, withControl, type AgentRow } from "./daemon-actions";
 import { waitForAgentInput } from "./agent-pane";
@@ -13,6 +13,28 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { enterWorkspace } from "./wire";
 import { afterCleanup } from "./worker-owned";
+
+type StartCase =
+  | { kind: string; executable: string; launcher?: never }
+  | { kind: "pi" | "omp"; executable: "pi" | "omp"; launcher: "ps1" | "cmd" };
+type StartStack = { fixture: CallerFixture; daemon: Daemon; command: string };
+
+const test = base.extend<{ startCase: StartCase; startStack: StartStack }>({
+  startCase: [{ kind: "claude", executable: "claude" }, { option: true }],
+  // Preparing the daemon and caller is not the start under test. Give that
+  // readiness and its cleanup their own bounded budget; the actual start
+  // still has the config's unchanged 30 seconds.
+  startStack: [async ({ page, startCase }, use) => {
+    if (startCase.launcher) {
+      test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
+      await withNpmStack(page, startCase.launcher, startCase.kind,
+        (fixture, daemon, command) => use({ fixture, daemon, command }));
+    } else {
+      await withStartStack(page, startCase.kind, startCase.executable,
+        (fixture, daemon) => use({ fixture, daemon, command: startCase.executable }));
+    }
+  }, { timeout: 30_000 }],
+});
 
 /** The process is recognized and the sidebar renders its resting state. */
 async function listed(page: Page, fixture: CallerFixture, daemon: Daemon, pane: string, kind: string): Promise<void> {
@@ -116,12 +138,15 @@ for (const [kind, executable] of [
   ["claude", "claude"], ["codex", "codex"], ["grok", "grok"],
   ["opencode", "opencode"], ["pi", "pi"], ["omp", "omp"], ["agy", "agy"],
 ] as const) {
-  test(`${kind} starts through spawn with a visible state`, { tag: "@platform" }, async ({ page }) => {
-    await withStartStack(page, kind, executable, (fixture, daemon) => spawnStart(page, fixture, daemon, kind));
-  });
+  test.describe(() => {
+    test.use({ startCase: { kind, executable } });
+    test(`${kind} starts through spawn with a visible state`, { tag: "@platform" }, async ({ page, startStack }) => {
+      await spawnStart(page, startStack.fixture, startStack.daemon, kind);
+    });
 
-  test(`${kind} starts from a typed command with a visible state`, { tag: "@platform" }, async ({ page }) => {
-    await withStartStack(page, kind, executable, (fixture, daemon) => typedStart(page, fixture, daemon, kind, executable));
+    test(`${kind} starts from a typed command with a visible state`, { tag: "@platform" }, async ({ page, startStack }) => {
+      await typedStart(page, startStack.fixture, startStack.daemon, kind, startStack.command);
+    });
   });
 }
 
@@ -165,14 +190,15 @@ async function withNpmStack(page: Page, launcher: "ps1" | "cmd", kind: "pi" | "o
 // Each start path is its own test here too, for the same budget.
 for (const launcher of ["ps1", "cmd"] as const) {
   for (const kind of ["pi", "omp"] as const) {
-    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package through spawn`, { tag: "@platform" }, async ({ page }) => {
-      test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
-      await withNpmStack(page, launcher, kind, (fixture, daemon) => spawnStart(page, fixture, daemon, kind));
-    });
+    test.describe(() => {
+      test.use({ startCase: { kind, executable: kind, launcher } });
+      test(`Windows npm ${launcher} detects ${kind} beside another cli.js package through spawn`, { tag: "@platform" }, async ({ page, startStack }) => {
+        await spawnStart(page, startStack.fixture, startStack.daemon, kind);
+      });
 
-    test(`Windows npm ${launcher} detects ${kind} beside another cli.js package from a typed command`, { tag: "@platform" }, async ({ page }) => {
-      test.skip(process.platform !== "win32", "Windows npm launchers require a real Windows shell and process table");
-      await withNpmStack(page, launcher, kind, (fixture, daemon, command) => typedStart(page, fixture, daemon, kind, command));
+      test(`Windows npm ${launcher} detects ${kind} beside another cli.js package from a typed command`, { tag: "@platform" }, async ({ page, startStack }) => {
+        await typedStart(page, startStack.fixture, startStack.daemon, kind, startStack.command);
+      });
     });
   }
 }
