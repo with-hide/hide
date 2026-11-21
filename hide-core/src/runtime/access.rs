@@ -622,38 +622,26 @@ impl Runtime {
             })
     }
 
-    /// The agent an own-mode bot's command names, read once as `hide agent
-    /// show` reads a key (a registration id, then a spawn the bot admitted,
-    /// by its id or the intent of the bot's own start, then the one
-    /// registration of that name or in that pane), held to `own`, and
-    /// answered as the exact id the command then runs on: a registration's,
-    /// or a spawn's that has none yet. Every command reads an exact id as
-    /// that one identity or refuses it, so what was authorized is what runs
-    /// (mission-87). A key that names nothing is refused as one that is not
-    /// its own, so a bot cannot tell the two apart.
+    /// The agent an own-mode bot's command names, read once by the one
+    /// resolver every command shares (`Runtime::resolve_target`), held to
+    /// `own`, and answered as the exact id the command then runs on: a
+    /// registration's, or a spawn's that has none yet (mission-87). A key
+    /// that names nothing is refused as one that is not its own, so a bot
+    /// cannot tell the two apart.
     pub(super) fn own_target(
         &self,
         own: &OwnWork,
         device: &str,
         key: &str,
     ) -> Result<String, String> {
-        let ledger = self.delivery_ledger.as_ref().map_err(Clone::clone)?;
-        let found = if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
-            Some((record.id.clone(), own.agents.contains(&record.id)))
-        } else if let Some(spawn) = ledger.spawns.iter().find(|spawn| {
-            spawn.id == key || (own.origins.contains(&spawn.parent) && spawn.intent == key)
-        }) {
-            Some(match &spawn.child {
-                Some(child) => (child.clone(), own.agents.contains(child)),
-                None => (spawn.id.clone(), own.spawns.contains(&spawn.id)),
-            })
-        } else {
-            let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
-            crate::coordination::shown_record(ledger, key, &pane)?
-                .map(|record| (record.id.clone(), own.agents.contains(&record.id)))
-        };
-        match found {
-            Some((id, true)) => Ok(id),
+        let bot = self.access_actor(&own.connection).map(|(_, actor)| actor);
+        match self.resolve_target(bot.as_ref(), device, key)? {
+            Some(super::delivery::Target::Agent(record)) if own.agents.contains(&record.id) => {
+                Ok(record.id.clone())
+            }
+            Some(super::delivery::Target::Spawn(spawn)) if own.spawns.contains(&spawn.id) => {
+                Ok(spawn.id.clone())
+            }
             _ => Err(crate::access::NOT_OWN_WORK.to_owned()),
         }
     }

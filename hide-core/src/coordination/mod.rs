@@ -1365,6 +1365,62 @@ fn past_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
     found.next().is_none().then_some(first)
 }
 
+/// What a target key names, read by [`resolve_key`].
+pub(crate) enum Named<'a> {
+    Agent(&'a AgentRecord),
+    /// A spawn with no registration yet.
+    Spawn(&'a SpawnRecord),
+}
+
+/// The one reading of a key that names an agent, which every command
+/// family shares (`hide agent show`, letters, watches, `agent read`, and
+/// what holds an own-mode bot's command, mission-87): a registration's id,
+/// ended or not, wins outright; then a spawn by its id, or one of
+/// `caller`'s own by its intent, as its child once it has one; then the one
+/// live registration of that name or in `pane` (the key as the caller's
+/// machine names a pane), else the last that was ([`shown_record`]).
+/// Nothing else reads a key, so what a command was judged by is what it
+/// runs on.
+pub(crate) fn resolve_key<'a>(
+    ledger: &'a Ledger,
+    caller: Option<&Actor>,
+    pane: &str,
+    key: &str,
+) -> Result<Option<Named<'a>>, &'static str> {
+    if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+        return Ok(Some(Named::Agent(record)));
+    }
+    let own = caller.and_then(|caller| {
+        ledger
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.actor.same_identity(caller))
+            .map(|record| record.id.as_str())
+    });
+    let spawn = ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == key)
+        .or_else(|| {
+            let own = own?;
+            ledger
+                .spawns
+                .iter()
+                .find(|spawn| spawn.parent == own && spawn.intent == key)
+        });
+    if let Some(spawn) = spawn {
+        let child = spawn
+            .child
+            .as_deref()
+            .and_then(|child| ledger.agents.iter().find(|record| record.id == child));
+        return Ok(Some(match child {
+            Some(record) => Named::Agent(record),
+            None => Named::Spawn(spawn),
+        }));
+    }
+    Ok(shown_record(ledger, key, pane)?.map(Named::Agent))
+}
+
 /// The registration `hide agent show` reads for a `key` that is no id: the
 /// one live registration named `key` or sitting in `pane` (the key as the
 /// caller's machine names a pane), as a letter's recipient is named, else
