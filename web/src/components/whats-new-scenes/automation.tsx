@@ -1,13 +1,15 @@
-// What's new scene for automations (1.2.11): the sidebar's 자동화 row and the
-// automation screen at their real size, playing one automation from its making
-// to its first run. A starting point is pressed and becomes the list's row; the
-// night passes and the clock reaches its time; the row runs, its terminal
-// reading the issues; the run ends with its ✓, the unseen dot, the sidebar's
-// count and the corner notice. It is drawn from the screen's own parts and
-// words (`AutomationScreen.tsx`, `sidebar-header.tsx`), so it reads as the
-// screen the operator will open, and plays example work, never theirs.
+// What's new scene for automations (1.2.11): the sidebar and the automation
+// screen at their real size, playing one automation from its making to the
+// operator reading what it found. A starting point is pressed and becomes the
+// list's row; the night passes and the clock reaches its time; the row runs,
+// its terminal reading the issues; the run ends with its ✓ and the corner
+// notice, and what it wrote stands in Needs You as To look at; pressing that
+// row opens the report beside the list and takes the row away. It is drawn
+// from the screen's own parts and words (`AutomationScreen.tsx`,
+// `sidebar-header.tsx`, the Needs You row), so it reads as the screen the
+// operator will open, and plays example work, never theirs.
 
-import { CheckIcon, MoonIcon, MousePointer2Icon, RepeatIcon, SunIcon, WaypointsIcon } from "lucide-react";
+import { CheckIcon, FileTextIcon, MoonIcon, RepeatIcon, SunIcon, WaypointsIcon } from "lucide-react";
 import { agentProductName } from "../../agentAdapters";
 import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES } from "../../automationDraft";
 import { EXAMPLE_WORDS } from "../../AutomationForm";
@@ -16,39 +18,31 @@ import { useInterfaceTranslation } from "../../i18n/translator";
 import { cn } from "../../lib/utils";
 import { AgentLogo } from "../agent-logo";
 import { formatElapsed } from "../elapsed";
+import { StatusMark } from "../status-mark";
 import { Badge } from "../ui/badge";
 import { Toast } from "../ui/toast";
-import type { SceneProps } from "./scene";
+import { ScenePointer } from "./pointer";
+import { SCENE_CSS, type SceneProps } from "./scene";
 
 /** One loop, in ms: the beats below fall inside it. */
-export const AUTOMATION_LOOP_MS = 11_000;
+export const AUTOMATION_LOOP_MS = 15_000;
+/** When the pointer sets off toward the first starting point, and presses it. */
+const POINT = 400;
 const PRESS = 1_100;
 const MADE = 1_800;
 const NIGHT = 3_000;
 const MORNING = 4_000;
 const LINE_EVERY = 650;
 const DONE = 7_700;
+/** When the pointer sets off toward the Needs You row, presses it, and the report opens. */
+const LOOK_POINT = 9_200;
+const LOOK_PRESS = 10_000;
+const LOOKED = 10_400;
 const LINES = ["line1", "line2", "line3", "line4", "line5"] as const;
 /** How long the example run took, as its row and notice say it. */
 const TOOK_MS = 12 * 60_000;
 /** The agent the example automation runs. */
 const AGENT = "claude";
-/** When the pointer sets off toward the first starting point. */
-const POINT = PRESS - 700;
-
-// Each part comes in as the screen would draw it: a row or a line rising into
-// place, a count or a notice popping in. Lengths are in em so they follow the
-// interface scale; reduced motion draws each part in place.
-const CSS = `
-@keyframes wns-rise { from { opacity: 0; transform: translateY(0.6em); } }
-@keyframes wns-pop { from { opacity: 0; transform: scale(0.4); } }
-@keyframes wns-press { from { transform: scale(0.3); opacity: 0.9; } to { transform: scale(1.6); opacity: 0; } }
-.wns-rise { animation: wns-rise 0.4s cubic-bezier(0.2, 1, 0.3, 1) both; }
-.wns-pop { animation: wns-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1) both; }
-.wns-press { animation: wns-press 0.5s ease-out both; }
-.wns-pointer { transition: left 0.7s cubic-bezier(0.4, 0, 0.2, 1), top 0.7s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s; }
-@media (prefers-reduced-motion: reduce) { .wns-rise, .wns-pop, .wns-press { animation: none; } .wns-pointer { transition: none; } }
-`;
 
 export function AutomationScene({ at }: SceneProps) {
   const { t, i18n } = useInterfaceTranslation();
@@ -60,21 +54,35 @@ export function AutomationScene({ at }: SceneProps) {
   const morning = at >= MORNING;
   const running = morning && at < DONE;
   const done = at >= DONE;
+  const looked = at >= LOOKED;
   const lines = morning ? LINES.slice(0, Math.min(LINES.length, Math.floor((at - MORNING) / LINE_EVERY) + 1)) : [];
   const took = formatElapsed(language, TOOK_MS);
+  const pointer = at < MADE
+    ? { left: at >= POINT ? 58 : 92, top: at >= POINT ? 30 : 92, shown: at >= POINT, pressed: at >= PRESS }
+    : { left: at >= LOOK_POINT ? 15 : 60, top: at >= LOOK_POINT ? 39 : 92, shown: at >= LOOK_POINT && at < LOOKED + 500, pressed: at >= LOOK_PRESS };
   return (
-    <div className="relative grid aspect-[2/1] grid-cols-[minmax(0,2fr)_minmax(0,5fr)] overflow-hidden bg-background text-foreground" data-whats-new-scene="automation" data-scene-beat={done ? "done" : running ? "run" : night ? "night" : made ? "made" : "pick"} aria-hidden>
-      <style>{CSS}</style>
-      <div className="flex flex-col border-r border-border bg-sidebar pt-md">
+    <div className="relative grid aspect-[2/1] grid-cols-[minmax(0,2fr)_minmax(0,5fr)] overflow-hidden bg-background text-foreground" data-whats-new-scene="automation" data-scene-beat={looked ? "looked" : done ? "done" : running ? "run" : night ? "night" : made ? "made" : "pick"} aria-hidden>
+      <style>{SCENE_CSS}</style>
+      <div className="flex min-w-0 flex-col border-r border-border bg-sidebar pt-md">
         <div className="flex h-(--size-tab-strip) items-center gap-sm px-md text-body text-subtle-foreground">
           <WaypointsIcon className="size-(--size-icon) shrink-0" />
           <span className="min-w-0 flex-1 truncate">{t("missionScreen.title")}</span>
         </div>
-        <div className="flex h-(--size-tab-strip) items-center gap-sm bg-selected px-md text-body text-foreground">
+        <div className={cn("flex h-(--size-tab-strip) items-center gap-sm px-md text-body", looked ? "text-subtle-foreground" : "bg-selected text-foreground")}>
           <RepeatIcon className="size-(--size-icon) shrink-0" />
           <span className="min-w-0 flex-1 truncate">{t("automationScreen.title")}</span>
-          {done ? <span className="wns-pop text-caption tabular-nums text-foreground">1</span> : null}
+          {done && !looked ? <span className="wns-pop text-caption tabular-nums text-foreground">1</span> : null}
         </div>
+        {done && !looked ? (
+          <div className="wns-rise mt-md flex flex-col gap-xxs">
+            <span className="px-md text-micro font-medium text-warning">{t("agents.group.needs_you")}</span>
+            <div className={cn("flex min-w-0 items-center gap-xs px-md py-xs transition-colors", at >= LOOK_PRESS && "bg-accent")}>
+              <StatusMark mark="look" />
+              <span className="min-w-0 flex-1 truncate text-caption text-foreground">{t("hideAi.task.automation", { name })}</span>
+            </div>
+            <span className="truncate px-md pl-xl text-micro text-muted-foreground">{t("agents.mark.look")}</span>
+          </div>
+        ) : null}
       </div>
       <div className="relative flex min-w-0 flex-col gap-md p-md">
         <div className="flex items-start gap-sm">
@@ -94,7 +102,7 @@ export function AutomationScene({ at }: SceneProps) {
               <div className="flex min-w-0 flex-1 flex-col gap-xxs">
                 <span className="flex min-w-0 items-center gap-xs">
                   <span className="min-w-0 truncate text-body font-semibold">{name}</span>
-                  {done ? <span className="wns-pop size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" /> : null}
+                  {done && !looked ? <span className="wns-pop size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" /> : null}
                   {running ? (
                     <Badge variant="outline" className="wns-pop text-agent-working">
                       <span className="size-(--size-tab-status-dot) rounded-full bg-agent-working" />
@@ -118,7 +126,7 @@ export function AutomationScene({ at }: SceneProps) {
                 )}
               </div>
             </div>
-            {morning ? (
+            {morning && !looked ? (
               <div className="wns-rise flex flex-col gap-xxs border-t border-border bg-background px-md py-sm font-mono text-caption text-subtle-foreground" data-scene-terminal>
                 {lines.map((line, index) => (
                   <span key={line} className={cn("wns-rise truncate", index === LINES.length - 1 && "text-primary")}>{t(`whatsNewScene.automation.${line}`)}</span>
@@ -137,21 +145,43 @@ export function AutomationScene({ at }: SceneProps) {
             ))}
           </div>
         )}
-        {!made ? (
-          <span className="wns-pointer pointer-events-none absolute flex text-foreground" style={{ left: at >= POINT ? "42%" : "88%", top: at >= POINT ? "30%" : "92%", opacity: at >= POINT ? 1 : 0 }}>
-            {at >= PRESS ? <span className="wns-press absolute size-(--size-icon) rounded-full border border-primary" /> : null}
-            <MousePointer2Icon className="size-(--size-icon) fill-foreground" />
-          </span>
-        ) : null}
-        {done ? (
+        {done && !looked ? (
           <div className="wns-rise absolute right-md bottom-md max-w-(--size-onboarding-dialog-w)">
             <Toast level="info">{t("whatsNewScene.automation.finished", { name, time: took })}</Toast>
           </div>
         ) : null}
+        {looked ? <Report /> : null}
       </div>
+      <ScenePointer {...pointer} />
       <div className={cn("pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-sm bg-scrim text-body text-foreground transition-opacity", night ? "opacity-100" : "opacity-0")}>
         <span className="flex items-center gap-sm"><MoonIcon className="size-(--size-icon)" />→<SunIcon className="size-(--size-icon) text-primary" /></span>
         <span>{t("whatsNewScene.automation.night")}</span>
+      </div>
+    </div>
+  );
+}
+
+/** What the run wrote, opened beside the list as the View it opened: the counts, then the first items. */
+function Report() {
+  const { t } = useInterfaceTranslation();
+  const counts = [["bugs", 4], ["requests", 7], ["duplicates", 3]] as const;
+  return (
+    <div className="wns-rise absolute inset-y-md right-md left-xl flex flex-col overflow-hidden rounded-md border border-border bg-popover shadow-overlay">
+      <div className="flex items-center gap-xs border-b border-border px-md py-xs text-caption text-subtle-foreground">
+        <FileTextIcon className="size-(--size-icon-sm) shrink-0" />
+        <span className="truncate font-mono">{t("whatsNewScene.automation.reportFile")}</span>
+      </div>
+      <div className="flex flex-col gap-sm p-md">
+        <span className="text-body font-semibold">{t("whatsNewScene.automation.reportTitle")}</span>
+        <div className="flex gap-sm">
+          {counts.map(([kind, count], index) => (
+            <span key={kind} className="wns-pop flex flex-col items-start rounded-md border border-border px-sm py-xs" style={{ animationDelay: `${150 + index * 120}ms` }}>
+              <span className="text-subhead font-semibold tabular-nums">{count}</span>
+              <span className="text-micro text-muted-foreground">{t(`whatsNewScene.automation.${kind}`)}</span>
+            </span>
+          ))}
+        </div>
+        <span className="wns-fade truncate text-caption text-subtle-foreground" style={{ animationDelay: "500ms" }}>{t("whatsNewScene.automation.reportItem")}</span>
       </div>
     </div>
   );
