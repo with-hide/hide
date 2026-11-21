@@ -160,6 +160,11 @@ pub(super) struct WorkspaceViewStore {
     /// it (D-53, conductor decision on #2775 review 1). Runtime only, and
     /// gone when the mode moves to another pane or ends.
     pub(super) pair_stood: Option<super::pair_view::PairLeft>,
+    /// When focus mode last came on, in the layouts' focus stamps' clock:
+    /// a tab nobody's agent owns shows on the drawn desk's strip only once
+    /// the operator brought it in front since then (D-60). Runtime only, so
+    /// after a restart the mode reads as begun at the load.
+    pub(super) pair_since: u64,
     /// The desks pair view drew since the mode last moved or ended, each
     /// with how it was before the mode first drew it, which it gets back
     /// when the mode leaves it (D-51); a desk the mode passed drawing its
@@ -405,6 +410,7 @@ impl WorkspaceViewStore {
                 pair_left: None,
                 pair_before: None,
                 pair_stood: None,
+                pair_since: unix_milliseconds(),
                 pair_drawn: Vec::new(),
                 tray_floats: None,
             },

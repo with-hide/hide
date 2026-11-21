@@ -2158,8 +2158,8 @@ fn a_pane_in_no_agent_tab_is_refused_pair_view() {
     assert!(!mode_on(&runtime));
 }
 
-/// The desk tab the published snapshot shows in front, as (name, owner pane).
-fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
+/// The desk tab the published snapshot shows in front.
+fn front_display(runtime: &Runtime) -> &crate::model::ViewDisplaySnapshot {
     fn find(node: &crate::model::ViewNodeSnapshot) -> Option<&crate::model::ViewDisplaySnapshot> {
         match node {
             crate::model::ViewNodeSnapshot::Area(area) => area
@@ -2172,7 +2172,17 @@ fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
         }
     }
     let view = runtime.snapshot.workspace_view.as_ref().expect("published");
-    let display = find(&view.layout.root).expect("a front tab");
+    find(&view.layout.root).expect("a front tab")
+}
+
+/// The id of the desk tab the published snapshot shows in front.
+fn front_display_id(runtime: &Runtime) -> String {
+    front_display(runtime).id.clone()
+}
+
+/// The desk tab the published snapshot shows in front, as (name, owner pane).
+fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
+    let display = front_display(runtime);
     let name = if display.card.is_some() {
         "card".to_owned()
     } else {
@@ -2449,11 +2459,11 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
     assert!(runtime.pair_mode_on(), "D-45: the mode stays on");
 }
 
-/// D-41: a desk tab whose agent is in another Agent tab stays on the strip
-/// in pair view, like the operator's own; only another agent of the paired
-/// tab folds.
+/// D-60, narrowing D-41: a desk tab whose agent is in another Agent tab
+/// folds in focus mode like one of another agent of the paired tab; the
+/// left pane stays where it is.
 #[test]
-fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
+fn a_desk_tab_of_an_agent_in_another_tab_folds() {
     let (mut runtime, _checkout, directory) = setup("pair-other-tab");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2474,13 +2484,19 @@ fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
         ("card".into(), Some("w-order:t2:p".into()))
     );
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
-    assert!(front_pair(&runtime).folded.is_empty(), "nothing folds");
+    let card = front_display_id(&runtime);
+    assert_eq!(
+        front_pair(&runtime).folded,
+        [card],
+        "the other tab's agent's card folds"
+    );
 }
 
-/// D-41: the desk on screen folds the tabs another agent of the paired tab
-/// owns, and names them in the snapshot, so the web only reads the list.
+/// D-60: the desk on screen folds every tab the left pane does not own,
+/// another agent's and the operator's from before the mode, and names them
+/// in the snapshot, so the web only reads the list.
 #[test]
-fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
+fn the_drawn_desk_folds_what_the_left_pane_does_not_own() {
     let (mut runtime, checkout, directory) = setup("pair-fold");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2488,12 +2504,55 @@ fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
     control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
     pair_event(&mut runtime, Some("w-order:t1:q"));
     assert_eq!(fronts(&runtime, &directory), ["b.md"]);
-    let a = display_id(&runtime, &directory, "a.md");
+    let mut folded = front_pair(&runtime).folded.clone();
+    folded.sort();
+    let mut expected = [
+        display_id(&runtime, &directory, "a.md"),
+        display_id(&runtime, &directory, "c.md"),
+    ];
+    expected.sort();
     assert_eq!(
-        front_pair(&runtime).folded,
-        [a],
-        "p's tab folds; the operator's c.md stays"
+        folded, expected,
+        "p's tab and the operator's earlier c.md fold"
     );
+}
+
+/// D-60: a tab closed in focus mode is followed by the newest one the
+/// strip shows, the left pane's, never by another agent's tab or the
+/// operator's from before the mode that the layout would bring in front.
+#[test]
+fn a_closed_tab_in_focus_mode_is_followed_by_the_left_panes_own() {
+    let (mut runtime, checkout, directory) = setup("pair-fold-close");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "c.md", "c");
+    control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    // q's b.md was in front last before the mode, so the layout's own
+    // successor of a closed tab would be it.
+    open(&mut runtime, &checkout, &directory, "b.md");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    let first = fronts(&runtime, &directory);
+    assert!(first == ["a.md"] || first == ["c.md"], "{first:?}");
+    let closed = display_id(&runtime, &directory, &first[0]);
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": closed}),
+    );
+    runtime.sync_workspace_view();
+    let other = if first == ["a.md"] { "c.md" } else { "a.md" };
+    assert_eq!(fronts(&runtime, &directory), [other]);
+    assert!(runtime.pair_mode_on());
+    let mut folded = front_pair(&runtime).folded.clone();
+    folded.sort();
+    let mut expected = [
+        display_id(&runtime, &directory, "b.md"),
+        display_id(&runtime, &directory, "notes.md"),
+    ];
+    expected.sort();
+    assert_eq!(folded, expected);
 }
 
 /// B19, D-53: the snapshot lists the panes whose agent has a View to show,

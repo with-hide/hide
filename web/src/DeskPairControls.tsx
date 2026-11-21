@@ -36,10 +36,12 @@ export function DeskPairButton({ displayId, actions }: { displayId: string | nul
 }
 
 /**
- * In pair view the strip shows the left agent's tabs and the operator's own
- * (D-41); every other agent's fold into this one menu at the strip's end,
- * listed under their agent. Choosing one brings it in front, and the left
- * pane follows it to its agent (B24, D-09).
+ * In focus mode the strip shows the left pane's tabs and what the operator
+ * opened since the mode came on; every other agent's, and the operator's
+ * from before, fold into this one menu at the strip's end, listed under
+ * their agent or under the operator (D-60, narrowing D-41). The core names
+ * them. Choosing one brings it in front, and the left pane follows it to an
+ * agent of the same Agent tab (B24, D-09).
  */
 export function PairOthers({ hidden, label, actions }: { hidden: ViewDisplaySnapshot[]; label: (display: ViewDisplaySnapshot) => string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -67,7 +69,7 @@ export function PairOthers({ hidden, label, actions }: { hidden: ViewDisplaySnap
             <DropdownMenuGroup key={owner} data-pair-others-agent={owner}>
               <DropdownMenuLabel className="flex items-center gap-xs">
                 <AgentMark kind={agent?.agent_kind} profile={agent?.profile} />
-                <span className="truncate">{agent?.identity_label ?? owner}</span>
+                <span className="truncate">{owner === "" ? t("panes.pair.yours") : (agent?.identity_label ?? owner)}</span>
               </DropdownMenuLabel>
               {displays.map((display) => (
                 <DropdownMenuItem key={display.id} onSelect={() => actions.focusView(display.id)} data-pair-others-item={display.id}>
