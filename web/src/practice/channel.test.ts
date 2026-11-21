@@ -32,7 +32,10 @@ it("asks the desktop app for no chapter when none is named, so the window opens 
   const bridge = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice: bridge } as never;
   openPractice();
-  expect(bridge).toHaveBeenCalledWith("en", undefined);
+  expect(bridge).toHaveBeenCalledWith("en", undefined, false);
   openPractice(FIRST_CHAPTER);
-  expect(bridge).toHaveBeenLastCalledWith("en", "mission");
+  expect(bridge).toHaveBeenLastCalledWith("en", "mission", false);
+  // What's new asks for the chapter's card instead of playing it.
+  openPractice(FIRST_CHAPTER, true);
+  expect(bridge).toHaveBeenLastCalledWith("en", "mission", true);
 });

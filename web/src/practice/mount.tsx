@@ -14,7 +14,7 @@ import { PracticeApp } from "./PracticeApp";
 export function standInHost(platform: string): HostBridge {
   const quiet = (name: string) => (name.startsWith("on") ? () => () => {} : () => Promise.resolve(null));
   const part = <T extends object>(fixed: Record<string, unknown>): T => new Proxy(fixed, { get: (target, name) => (typeof name !== "string" || name === "then" ? undefined : name in target ? target[name] : quiet(name)) }) as T;
-  return part<HostBridge>({ kind: "electron", platform, browser: part({}), updates: part({}) });
+  return part<HostBridge>({ kind: "electron", platform, browser: part({}), updates: part({}), whatsNew: part({}) });
 }
 
 export function mountPractice(root: Root, params: URLSearchParams) {
@@ -26,7 +26,7 @@ export function mountPractice(root: Root, params: URLSearchParams) {
   }
   root.render(
     <StrictMode>
-      <PracticeApp opening={params.get("chapter")} />
+      <PracticeApp opening={params.get("chapter")} show={params.get("show") === "1"} />
     </StrictMode>,
   );
 }

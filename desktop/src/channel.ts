@@ -115,6 +115,17 @@ export const UPDATE_RESTART_CHANNEL = "hide:update-restart";
 export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
 export const UPDATE_DISMISS_CHANNEL = "hide:update-dismiss";
 
+/**
+ * What each released version brought (docs/UI_BEHAVIOR.md, What's new and
+ * Update history): the shell asks for the state once (invoke) and hears every
+ * change (main -> renderer); it asks for a fetch when the history opens and
+ * saves which version's window closed and which version it opened
+ * (renderer -> main).
+ */
+export const WHATS_NEW_STATE_GET_CHANNEL = "hide:whats-new-state-get";
+export const WHATS_NEW_STATE_CHANNEL = "hide:whats-new-state";
+export const WHATS_NEW_SAVE_CHANNEL = "hide:whats-new-save";
+
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
 export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";
 

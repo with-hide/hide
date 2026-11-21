@@ -13,14 +13,14 @@ const CHAPTER_ID = /^[a-z0-9-]{1,32}$/;
 
 /**
  * The practice page on `origin` in `language`, opening on `chapter` when one
- * is asked for and on the chapter list otherwise, or why a request for it is
- * refused.
+ * is asked for (playing it, or with `show` on its card in the list) and on the
+ * chapter list otherwise, or why a request for it is refused.
  */
-export function practiceUrl(origin: string, language: unknown, platform: string, chapter?: unknown): string | { refused: "language" | "chapter" } {
+export function practiceUrl(origin: string, language: unknown, platform: string, chapter?: unknown, show = false): string | { refused: "language" | "chapter" } {
   if (!isInterfaceLanguage(language)) return { refused: "language" };
   if (chapter !== undefined && (typeof chapter !== "string" || !CHAPTER_ID.test(chapter))) return { refused: "chapter" };
   const url = new URL("/", origin);
-  url.search = new URLSearchParams({ practice: "1", lang: language, ...(chapter === undefined ? {} : { chapter }), host: "electron", platform }).toString();
+  url.search = new URLSearchParams({ practice: "1", lang: language, ...(chapter === undefined ? {} : { chapter }), ...(chapter !== undefined && show ? { show: "1" } : {}), host: "electron", platform }).toString();
   return url.href;
 }
 

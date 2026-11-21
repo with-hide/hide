@@ -37,6 +37,7 @@ import { PrCardScene } from "./PrCardScene";
 import { PrListScene } from "./PrListScene";
 import { CloseTreeScene } from "./CloseTreeScene";
 import { ViewsCloseScene } from "./ViewsCloseScene";
+import { WhatsNewScene } from "./WhatsNewScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
 import { SharedPartsScene } from "./SharedPartsScene";
@@ -114,6 +115,11 @@ export function mountGallery(root: Root) {
     if (scene === "close-tree") {
       document.title = "hide · Close tree scene";
       root.render(<StrictMode><CloseTreeScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "whats-new") {
+      document.title = "hide · What's new scene";
+      root.render(<StrictMode><WhatsNewScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "views-close") {
