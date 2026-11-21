@@ -2517,6 +2517,39 @@ fn the_drawn_desk_folds_what_the_left_pane_does_not_own() {
     );
 }
 
+/// D-46, D-53 (#2775 review 2): an agent drawn alone whose own first
+/// `hide file open` stands the desk owns that View, so closing it, its last,
+/// ends focus mode; the open stands no desk the operator's open would keep.
+#[test]
+fn an_agent_drawn_alone_that_opens_and_closes_its_view_ends_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-alone-own-open");
+    engine_splits_first_tab(&mut runtime, &directory);
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert!(front_pair(&runtime).alone, "nothing to show yet");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone, "its View stands the desk");
+    assert!(
+        runtime
+            .workspace_views
+            .as_ref()
+            .is_some_and(|store| store.pair_stood.is_none()),
+        "the agent's own open is no stood desk"
+    );
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert!(
+        !runtime.pair_mode_on(),
+        "D-46: its last View closing ends it"
+    );
+}
+
 /// D-60: a tab closed in focus mode is followed by the newest one the
 /// strip shows, the left pane's, never by another agent's tab or the
 /// operator's from before the mode that the layout would bring in front.

@@ -372,9 +372,39 @@ impl Runtime {
     pub(super) fn end_pair_view_if_undrawn(&mut self) -> bool {
         let ended = self.end_pair_view_if_emptied();
         if !ended {
+            self.settle_pair_stood();
             self.keep_pair_front_shown();
         }
         ended
+    }
+
+    /// Drops the desk the operator's open stood beside a pane drawn alone
+    /// once it no longer stands for that: its desk emptied, so the pane is
+    /// drawn alone again and the next View comes by the usual rule, or the
+    /// pane now has a View of its own, whose last closing ends the mode
+    /// (D-46, D-53, #2775 review 2).
+    pub(super) fn settle_pair_stood(&mut self) {
+        let Some(stood) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.pair_stood.clone())
+        else {
+            return;
+        };
+        let place = Place::Tray(stood.tab.clone());
+        let emptied = self
+            .view_layout_at(&stood.key, &place)
+            .is_none_or(|layout| layout.display_count() == 0);
+        let own = self
+            .pair_content(&stood.key, &stood.pane, &self.pair_reads(&stood.key))
+            .is_some();
+        if !(emptied || own) {
+            return;
+        }
+        if let Some(store) = self.workspace_views.as_mut() {
+            store.pair_stood = None;
+            store.generation += 1;
+        }
     }
 
     /// `end_pair_view_if_undrawn`'s end: whether the View that left took the
