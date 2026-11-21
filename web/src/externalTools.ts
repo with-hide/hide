@@ -38,8 +38,9 @@ export function connectionLine(connection: AccessConnection, machine: string, no
 
 /**
  * Whether the row says that disconnecting hands the bot's work to the
- * operator (B13, D-14): every connected bot keeps what it started.
+ * operator (B13, D-14): only a bot in own mode keeps what it started; an
+ * all-mode bot's work is the operator's already.
  */
 export function warnsOfWork(connection: AccessConnection): boolean {
-  return connection.agent_count + connection.mission_count > 0;
+  return connection.mode.kind === "own" && connection.agent_count + connection.mission_count > 0;
 }

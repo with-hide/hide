@@ -30,15 +30,18 @@ impl Runtime {
         acting: Option<&str>,
         desk_may_act: bool,
     ) -> Result<Actor, String> {
-        // Desk, and an external tool at Act, which does what the operator
-        // does (PRD hide-external-control D-27), act as their own identity
-        // on any live registration; a tool at View only is refused.
+        // Desk, and a bot, which does what the operator does (PRD
+        // hide-external-control D-27), act as their own identity on any live
+        // registration, an own-mode bot on one of its own work (mission-87).
         let desk_authority = match Caller::parse(caller) {
-            Caller::Access { connection, .. } => Some((
-                expected.clone(),
-                self.access_authority(device, connection, crate::access::Need::Workspace)?
-                    .0,
-            )),
+            Caller::Access { connection, .. } => {
+                let (actor, _) =
+                    self.access_authority(device, connection, crate::access::Need::Work)?;
+                if let Some(own) = self.own_work(caller) {
+                    super::super::access::hold(self.is_own(&own, device, id))?;
+                }
+                Some((expected.clone(), actor))
+            }
             Caller::Desk if desk_may_act => Some(self.desk_authority(device)?),
             _ => None,
         };

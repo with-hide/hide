@@ -20,9 +20,10 @@ impl Runtime {
         command: PaneCommand,
     ) -> Result<Prepared, String> {
         command.check()?;
-        // An external tool reads panes and, at Act, types into them as the
-        // operator does (PRD hide-external-control B20, B21, B28); it has
-        // no pane to open another beside or a checkout to name.
+        // A bot reads panes and types into them as the operator does (PRD
+        // hide-external-control B20, B21, B28), an own-mode bot those of its
+        // own work (mission-87); it has no pane to open another beside or a
+        // checkout to name.
         let (caller_pane, context) = match Caller::parse(caller) {
             Caller::Pane(caller_pane) => {
                 let context = self
@@ -35,6 +36,16 @@ impl Runtime {
             }
             Caller::Access { connection, .. } => {
                 self.access_authority(device, connection, crate::access::pane_need(&command))?;
+                if let Some(own) = self.own_work(caller) {
+                    let named = match &command {
+                        PaneCommand::Read { pane, .. }
+                        | PaneCommand::ReadScreen { pane }
+                        | PaneCommand::Send { pane, .. } => Some(pane),
+                        PaneCommand::AgentRead { agent, .. } => Some(agent),
+                        PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => None,
+                    };
+                    super::access::hold(named.is_some_and(|key| self.is_own(&own, device, key)))?;
+                }
                 ("", expected.clone())
             }
             _ => return Err("pane_required".into()),

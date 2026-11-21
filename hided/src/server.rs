@@ -1803,8 +1803,8 @@ impl ScopedRequest {
     }
 
     /// What a bot's mode must allow for this command (PRD
-    /// hide-external-control B20-B23, mission-87 D3). A command family the
-    /// core also runs for a bot takes its need from the core's one table
+    /// hide-external-control B20-B23, mission-87). A command family the core
+    /// also runs for a bot takes its need from the core's one table
     /// (`hide_core::access`), which the core judges again with what the
     /// command names; the rest are this boundary's alone
     /// (`docs/ARCHITECTURE.md`, Bots, has every row).
@@ -1815,25 +1815,24 @@ impl ScopedRequest {
             Self::Pane(command) => access::pane_need(command),
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
-            // The core lists a workspace-mode bot's own workspace only, and
-            // holds what the rest name, or the folder they run in, to it.
-            Self::Ps { .. }
-            | Self::AgentSleep { .. }
-            | Self::AgentArchive { .. }
-            | Self::Query(..)
+            // The core lists an own-mode bot's own work only, and holds the
+            // agent the rest name to it.
+            Self::Ps { .. } | Self::AgentSleep { .. } | Self::AgentArchive { .. } => Need::Work,
+            // Which agents and models a machine offers is no one's work,
+            // and a spawn into any project on any device takes it.
+            Self::AgentCatalog(..) => Need::Work,
+            // The operator's screen and the project's records (Views, files,
+            // pages, links, sessions, worktrees), the bots and requests, the
+            // skills and MCP servers, the agents' profiles, the automations
+            // book and a new project are no one bot's work.
+            Self::Query(..)
             | Self::Action(..)
             | Self::BrowserConnect(..)
             | Self::BrowserRelay(..)
             | Self::Links(..)
             | Self::Session(..)
-            | Self::WorktreeRemove(..) => Need::Workspace,
-            // Which agents and models a machine offers names nothing of any
-            // workspace, and a spawn into its own needs it.
-            Self::AgentCatalog(..) => Need::Workspace,
-            // The bots and the requests, the skills and MCP servers, the
-            // agents' profiles, the automations book and a new project are
-            // Hide's as a whole.
-            Self::AccessList
+            | Self::WorktreeRemove(..)
+            | Self::AccessList
             | Self::Store(..)
             | Self::AgentProfile(..)
             | Self::Automation(..)
@@ -2154,7 +2153,7 @@ async fn scoped_client_loop(
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
                                 }
-                                // A tool outside every checkout has none to
+                                // A bot outside every checkout has none to
                                 // read: it asks from inside one (B25).
                                 ScopedRequest::Links(_) | ScopedRequest::Session(_)
                                     if cap.access_mode().is_some()

@@ -101,18 +101,18 @@ it("lists connected tools under n / 16, each line naming machine, last use and h
   await unmount();
 });
 
-it("disconnects at once with no confirmation, and warns only on a bot that holds work (B13)", async () => {
+it("disconnects at once with no confirmation, and warns only on an own-mode bot that holds work (B13)", async () => {
   const { events, q, press, unmount } = await mount(section({
     connections: [
-      tool({ id: "busy", agent_count: 1 }),
-      tool({ id: "idle" }),
-      tool({ id: "held", mode: { kind: "workspace", workspace_id: "workspace:1" }, mission_count: 1 }),
+      tool({ id: "busy", mode: { kind: "own" }, agent_count: 1 }),
+      tool({ id: "idle", mode: { kind: "own" } }),
+      tool({ id: "whole", agent_count: 1, mission_count: 1 }),
     ],
   }), "ko");
   expect(q('[data-access-warning="busy"]')?.textContent).toBe("끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요");
   expect(q('[data-access-warning="idle"]')).toBeNull();
-  // A bot in one workspace keeps its work too (mission-87 D5).
-  expect(q('[data-access-warning="held"]')).not.toBeNull();
+  // An all-mode bot's work is the operator's already, so nothing moves on a disconnect (mission-87).
+  expect(q('[data-access-warning="whole"]')).toBeNull();
   await press('[data-access-revoke="busy"]');
   expect(sent(events)).toEqual([["access_revoke", { id: "busy" }]]);
   expect(document.querySelector('[role="alertdialog"]')).toBeNull();

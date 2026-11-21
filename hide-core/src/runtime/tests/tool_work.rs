@@ -428,13 +428,14 @@ fn connect_as(
     connection
 }
 
-/// B16, D-14, D-40, mission-87 D5: whose the work is follows the bot's
-/// connection on the event that moved it. A mode, either way, moves none of
-/// it; a disconnect hands the bot's agent to the operator at once, and a new
-/// connection under the same name is another connection, which takes
-/// nothing.
+/// B16, D-14, D-40, mission-87: whose the work is follows the bot's
+/// connection on the event that moved it. An own-mode bot keeps what it
+/// started; the whole Hide works as the operator, so all mode hands the
+/// bot's agent to the operator at once, still naming the bot, and own mode
+/// takes it back; a disconnect hands it over, and a new connection under the
+/// same name is another connection, which takes nothing.
 #[test]
-fn the_bots_work_is_the_operators_the_moment_it_disconnects_and_a_mode_moves_none() {
+fn the_bots_work_is_the_operators_in_all_mode_or_once_it_disconnects() {
     use crate::access::Mode;
     use crate::runtime::access::AccessEvent;
     let mut runtime = runtime();
@@ -452,7 +453,7 @@ fn the_bots_work_is_the_operators_the_moment_it_disconnects_and_a_mode_moves_non
     let mut agent = row(Owner::Operator, Doing::Working);
     agent.lineage_session = Some("tool-session".into());
     runtime.snapshot.navigator.agents = vec![agent];
-    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::All);
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::Own);
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
         name: "nightly".into(),
@@ -474,24 +475,26 @@ fn the_bots_work_is_the_operators_the_moment_it_disconnects_and_a_mode_moves_non
         assert_eq!(sessions, !subject.unlisted, "one decision for every list");
         (subject.tool.as_ref().map(|tool| tool.owns), sessions)
     };
-    assert_eq!(listed(&runtime), (Some(true), false), "kept while connected");
+    assert_eq!(listed(&runtime), (Some(true), false), "kept in own mode");
 
-    assert!(runtime.access_event(AccessEvent::Mode {
-        id: connection.clone(),
-        mode: Mode::Workspace {
-            workspace_id: "project".into(),
-        },
-    }));
-    assert_eq!(
-        listed(&runtime),
-        (Some(true), false),
-        "one workspace keeps it"
-    );
     assert!(runtime.access_event(AccessEvent::Mode {
         id: connection.clone(),
         mode: Mode::All,
     }));
-    assert_eq!(listed(&runtime), (Some(true), false), "the whole Hide keeps it");
+    assert_eq!(
+        listed(&runtime),
+        (Some(false), true),
+        "the whole Hide works as the operator, still naming the bot"
+    );
+    assert!(runtime.access_event(AccessEvent::Mode {
+        id: connection.clone(),
+        mode: Mode::Own,
+    }));
+    assert_eq!(
+        listed(&runtime),
+        (Some(true), false),
+        "own mode takes it back"
+    );
 
     assert!(runtime.access_event(AccessEvent::Revoke {
         id: connection.clone(),
@@ -501,7 +504,7 @@ fn the_bots_work_is_the_operators_the_moment_it_disconnects_and_a_mode_moves_non
         (Some(false), true),
         "a disconnect lets it go"
     );
-    let again = connect(&mut runtime, "00000000000000a8", "8", Mode::All);
+    let again = connect(&mut runtime, "00000000000000a8", "8", Mode::Own);
     assert_ne!(again, connection);
     runtime.refresh_agent_lineage();
     runtime.sync_session_state();
@@ -587,8 +590,8 @@ fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
     let mut agent = row(Owner::Operator, Doing::Working);
     agent.lineage_session = Some("tool-session".into());
     runtime.snapshot.navigator.agents = vec![agent];
-    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::All);
-    let idle = connect_as(&mut runtime, "weekly", "00000000000000a8", "8", Mode::All);
+    let connection = connect(&mut runtime, "00000000000000a7", "7", Mode::Own);
+    let idle = connect_as(&mut runtime, "weekly", "00000000000000a8", "8", Mode::Own);
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
         name: "nightly".into(),
@@ -710,7 +713,7 @@ fn kept_by_tool(agent: SidebarAgentSnapshot) -> (Runtime, String) {
         &mut runtime,
         "00000000000000a7",
         "7",
-        crate::access::Mode::All,
+        crate::access::Mode::Own,
     );
     runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),

@@ -3450,7 +3450,7 @@ export type DeskMentions = {
 /**
  * The `access` section (PRD hide-external-control B2, B11, B15; mission-87):
  * the requests waiting for the operator and the approved bots on the core's
- * machine, each with its mode, the whole Hide or one workspace. The shapes
+ * machine, each with its mode, the whole Hide or its own work. The shapes
  * are the contract's (`accessSnapshot` in `contracts/hided-ws.schema.json`).
  */
 export type { AccessConnection, AccessMode, AccessPending, AccessSnapshot as AccessSection } from "./generated/hided-ws";

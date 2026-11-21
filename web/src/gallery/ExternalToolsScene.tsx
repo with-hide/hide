@@ -19,7 +19,7 @@ function fixture(state: string): AccessSection {
     last_used_ms: now - 3 * MINUTE, agent_count: 2, mission_count: 1,
   };
   const quiet: AccessConnection = {
-    id: "gallery-conn-2", name: "nightly-cron", mode: { kind: "workspace", workspace_id: "workspace:gallery" }, program: "/usr/local/bin/nightly", created_ms: now - 9 * 86_400_000,
+    id: "gallery-conn-2", name: "nightly-cron", mode: { kind: "own" }, program: "/usr/local/bin/nightly", created_ms: now - 9 * 86_400_000,
     last_used_ms: now - 26 * 60 * MINUTE, agent_count: 0, mission_count: 0,
   };
   return {
