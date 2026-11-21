@@ -97,6 +97,22 @@ async fn until(socket: &mut Socket, what: &str, wanted: impl Fn(&Value) -> bool)
     }
 }
 
+/// The code the daemon closes `window` with; the frames before it are passed over.
+async fn close_code(window: &mut Window) -> u16 {
+    let deadline = Instant::now() + WITHIN;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, window.0.next()).await {
+            Err(_) => panic!("the daemon did not close the screen"),
+            Ok(Some(Ok(Message::Close(frame)))) => {
+                return frame.map_or(1005, |frame| u16::from(frame.code));
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(None | Some(Err(_))) => return 1006,
+        }
+    }
+}
+
 /// How many clients the host's daemon counts now (`/health`).
 async fn host_clients(running: &hided::RunningDaemon) -> u64 {
     let (_, body) = get(running.port, "/health", None).await;
@@ -194,6 +210,41 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
         snapshot["payload"]["rest"]["status"]
     );
     drop(own);
+
+    // D-67: the view takes none of this machine's eight places. With it
+    // open, seven windows and a phone are this machine's own: the phone is
+    // answered as a phone (refused for its credential, not for room), an
+    // eighth window draws, and only a ninth is refused `client_limit`, while
+    // the view still answers.
+    let mut windows = Vec::new();
+    for _ in 0..7 {
+        let mut window = Window::open(&running, "web").await;
+        window
+            .frame("a window's snapshot", |frame| frame["type"] == "snapshot")
+            .await;
+        windows.push(window);
+    }
+    let mut phone = Window::open(&running, "phone").await;
+    let answer = phone
+        .frame("the phone's answer", |frame| frame["type"] == "refused")
+        .await;
+    assert_ne!(answer["reason"], "client_limit", "{answer}");
+    drop(phone);
+    let mut eighth = Window::open(&running, "web").await;
+    eighth
+        .frame("the eighth window's snapshot", |frame| {
+            frame["type"] == "snapshot"
+        })
+        .await;
+    windows.push(eighth);
+    let mut ninth = Window::open(&running, "web").await;
+    assert_eq!(close_code(&mut ninth).await, 4004, "client_limit");
+    send(&mut view, "pairing_share", json!({"request_id": "v2"})).await;
+    until(&mut view, "the view still answering", |frame| {
+        frame["type"] == "refused"
+    })
+    .await;
+    drop(windows);
 
     // B63: the view's end leaves nothing on the host.
     drop(view);
