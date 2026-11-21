@@ -548,7 +548,7 @@ impl Runtime {
                 let before = previous.filter(|plan| !plans::finished(plan));
                 let asks = plans::judge(before, &mut next, proofs)?;
                 if !asks.is_empty() {
-                    return self.plan_proof(device, &root, &own, &next, asks);
+                    return self.plan_proof(device, &context, &own, &next, asks);
                 }
                 let before = before.cloned();
                 if previous.is_none() {
@@ -579,7 +579,7 @@ impl Runtime {
                     Some(mut next) => {
                         let asks = plans::judge(Some(plan), &mut next, proofs)?;
                         if !asks.is_empty() {
-                            return self.plan_proof(device, &root, &own, &next, asks);
+                            return self.plan_proof(device, &context, &own, &next, asks);
                         }
                         let before = plan.clone();
                         self.keep_plan(&own, Some(&before), next)?;
@@ -633,24 +633,39 @@ impl Runtime {
         })
     }
 
-    /// The reads `asks` needs, made off the lock on the session's machine;
-    /// a machine Hide cannot reach now refuses the change as unconfirmed.
+    /// The reads `asks` needs, made off the lock: files and branches on the
+    /// session's machine, pull requests with the core's own `gh` where the
+    /// project's GitHub list is read (a device refuses `gh`, D-18); a
+    /// machine Hide cannot reach now, or a repository not named yet, refuses
+    /// the change as unconfirmed.
     fn plan_proof(
         &mut self,
         device: &str,
-        root: &str,
+        context: &Context,
         session: &SessionIdentity,
         plan: &Plan,
         asks: plans::Asks,
     ) -> Result<PlanTurn, String> {
-        let link = self.node_link(device).map_err(|reason| {
+        let unconfirmed = |kind: &str, reason: String| {
             crate::diagnostic!(json!({
-                "component": "plans", "kind": "plans.proof_unreachable",
+                "component": "plans", "kind": kind,
                 "plan": plan.id(), "session_id": session.session_id, "device": device,
                 "reason": reason,
             }));
             asks.unconfirmed()
-        })?;
+        };
+        let link = self
+            .node_link(device)
+            .map_err(|reason| unconfirmed("plans.proof_unreachable", reason))?;
+        let machine = (device != self.node.as_str()).then_some(device);
+        let github = self
+            .catalog_workspaces()
+            .find(|workspace| {
+                workspace.device_id == device && workspace.id == context.workspace_id
+            })
+            .ok_or_else(|| "The session's project is not in the catalog".to_owned())
+            .and_then(|workspace| self.github_place(machine, &workspace.path))
+            .map_err(|reason| unconfirmed("plans.repository_unread", reason))?;
         let branches = self
             .delivery_state()
             .map(|ledger| {
@@ -670,7 +685,9 @@ impl Runtime {
             .unwrap_or_default();
         Ok(PlanTurn::Prove(PlanProof {
             link,
-            root: root.to_owned(),
+            github,
+            own: self.own_node(),
+            root: context.checkout_path.clone(),
             branches,
             asks,
             plan: plan.id(),
