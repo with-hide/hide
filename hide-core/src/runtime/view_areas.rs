@@ -3213,15 +3213,35 @@ impl Runtime {
     }
 
     /// The tray the Workspace `key` draws: the one of its Agent tab in
-    /// front, while the open lane shows it or the tab is in pair view (PRD
-    /// lane-desk-pair-view D-06, D-16). A tray with no tab draws nothing.
+    /// front, while the open lane shows it, the tab is in pair view (PRD
+    /// lane-desk-pair-view D-06, D-16), or the automation screen shows a run
+    /// of that tab beside its desk (operator decision 2026-11-21). A tray
+    /// with no tab draws nothing.
     pub(super) fn drawn_tray_layout(&self, key: &WorkspaceKey) -> Option<&Layout> {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
         let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
-        ((view.draws_tray(&tab) || self.drawn_pair(key, &tab).is_some())
+        ((view.draws_tray(&tab)
+            || self.drawn_pair(key, &tab).is_some()
+            || self.viewed_run_tab(key, &tab))
             && tray.layout.display_count() > 0)
             .then_some(&tray.layout)
+    }
+
+    /// Whether `tab` of the Workspace `key` holds the terminal of a run the
+    /// automation screen shows, which draws the tab's desk beside it.
+    fn viewed_run_tab(&self, key: &WorkspaceKey, tab: &str) -> bool {
+        let viewed = self.viewed_panes();
+        !viewed.is_empty()
+            && self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .filter(|checkout| checkout.path == key.1)
+                .flat_map(|checkout| &checkout.tabs)
+                .filter(|row| row.id.as_deref() == Some(tab))
+                .flat_map(|row| &row.panes)
+                .any(|pane| viewed.contains(&pane.id))
     }
 
     /// The card in front of the area in use of the tray the front Workspace

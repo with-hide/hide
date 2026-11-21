@@ -779,6 +779,7 @@ pub(crate) fn tab(
         label: Some("Session".to_owned()),
         empty: pane.is_none(),
         delegated: false,
+        automation: false,
         panes: pane.into_iter().collect(),
     }
 }

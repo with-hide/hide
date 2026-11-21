@@ -1356,6 +1356,7 @@ mod tests {
                 label: None,
                 empty: false,
                 delegated: false,
+                automation: false,
             }],
             ..Default::default()
         };

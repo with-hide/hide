@@ -2023,9 +2023,20 @@ impl Runtime {
             Call::RunStop { id, run } => self.stop_run(&id, run, now),
             Call::RunOpen { id, run } => self.open_run(&id, run, now),
             Call::Seen { id } => self.see_automation(&id),
-            Call::RunViewing { id, run, on } => {
+            Call::RunViewing {
+                id,
+                run,
+                on,
+                restore,
+            } => {
+                let before = (!on).then(|| self.viewed_run_pane(&id, run)).flatten();
                 let answer = self.view_run(&id, run, on, now);
-                return (answer, self.sync_viewed_panes());
+                let synced = self.sync_viewed_panes();
+                let restored = match (before, restore) {
+                    (Some(pane), Some(back)) => self.give_focus_back(&pane, back),
+                    _ => false,
+                };
+                return (answer, synced || restored);
             }
             Call::List => {
                 return (Ok(json!({"items": self.automations_view().items})), false);
@@ -2096,6 +2107,27 @@ impl Runtime {
             self.automations.viewing.remove(&key);
         }
         Ok(json!({"id": id, "run": number, "on": on}))
+    }
+
+    /// The pane of the run `number` of `id` while it has one.
+    fn viewed_run_pane(&self, id: &str, number: u64) -> Option<String> {
+        let id = self.automations.book.find(id)?.id.clone();
+        let run = self.run_of(&(id, number))?;
+        let ledger = self.delivery_state().ok();
+        self.run_pane(run, ledger.as_ref())
+    }
+
+    /// The automation screen left a run whose pane it had given the focus
+    /// (operator decision 2026-11-21): the pane the operator was on takes it
+    /// back, unless something since moved the focus off the run's pane (a
+    /// press that opened another pane arrives before the screen's leaving,
+    /// so it wins).
+    fn give_focus_back(&mut self, run_pane: &str, back: String) -> bool {
+        if self.snapshot.focused.pane_id.as_deref() != Some(run_pane) || back == run_pane {
+            return false;
+        }
+        self.focus_pane(back, super::events::PaneFocusOrigin::Operator, None);
+        true
     }
 
     /// A finished run the operator opened is dealt with (operator decision
@@ -2614,6 +2646,52 @@ impl Runtime {
         Ok(json!({"id": automation.id}))
     }
 
+    /// The panes of the runs' terminals, each run's or its opened
+    /// conversation's, as the section names them.
+    /// Marks each catalog tab whose panes are all automation runs'
+    /// (`TabSnapshot::automation`), on this machine's checkouts and each
+    /// device's, so the sidebar's tree and its numbers leave it out as the tab
+    /// strip does (`Runtime::automation_run_tabs`).
+    pub(super) fn mark_automation_run_tabs(&mut self) {
+        let runs: std::collections::HashSet<String> =
+            self.automation_run_panes().map(str::to_owned).collect();
+        let sessions = self
+            .snapshot
+            .status
+            .remote
+            .iter_mut()
+            .filter_map(|remote| remote.session.as_mut())
+            .flat_map(|session| session.workspaces.iter_mut());
+        for workspace in self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .chain(sessions)
+        {
+            for tab in workspace
+                .checkouts
+                .iter_mut()
+                .flat_map(|checkout| checkout.tabs.iter_mut())
+            {
+                tab.automation =
+                    !tab.panes.is_empty() && tab.panes.iter().all(|pane| runs.contains(&pane.id));
+            }
+        }
+    }
+
+    pub(super) fn automation_run_panes(&self) -> impl Iterator<Item = &str> {
+        self.snapshot
+            .automations
+            .iter()
+            .flat_map(|section| &section.items)
+            .flat_map(|automation| &automation.records)
+            .filter_map(|record| match record {
+                crate::automations::RecordSnapshot::Run(run) => run.pane_id.as_deref(),
+                _ => None,
+            })
+    }
+
     /// The `automations` section, made again only when the book or the
     /// ledger moved (a run's pane is read from its agent's registration).
     pub(super) fn refresh_automations(&mut self) {
@@ -2670,6 +2748,11 @@ impl Runtime {
                 live.then(|| pane(run.agent_id.as_deref())).flatten()
             },
             |opened| pane(opened.agent_id.as_deref()),
+            |id, number| {
+                self.automations
+                    .viewing
+                    .contains_key(&(id.to_owned(), number))
+            },
         )
     }
 

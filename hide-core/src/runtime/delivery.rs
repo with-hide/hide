@@ -3186,6 +3186,7 @@ pub(crate) mod tests {
                     label: None,
                     empty: false,
                     delegated: false,
+                    automation: false,
                     panes,
                 }],
                 ..Default::default()

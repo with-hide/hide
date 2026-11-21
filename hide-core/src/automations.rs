@@ -739,6 +739,12 @@ pub enum Call {
         id: String,
         run: u64,
         on: bool,
+        /// With `on` false, the pane the operator was on before the screen
+        /// gave the run's pane the focus: it takes the focus back unless
+        /// something since moved it off the run's pane (operator decision
+        /// 2026-11-21).
+        #[serde(default)]
+        restore: Option<String>,
     },
     /// The operator looked at the automation's runs (B11).
     Seen {
@@ -1020,17 +1026,25 @@ pub struct RunSnapshot {
     /// What its conversation spent (B39); absent until the ledger read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend: Option<Spend>,
+    /// The agent's last answer, one paragraph, while a window shows the run:
+    /// the run screen's summary beside a terminal whose agent opened nothing
+    /// (operator decision 2026-11-21). Only a shown run carries it, so the
+    /// section does not grow by a paragraph for each of its runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
 }
 
 impl AutomationsSnapshot {
-    /// The section of `book`, each run's terminal named by `run_pane` and
-    /// each opened conversation's by `opened_pane`.
+    /// The section of `book`, each run's terminal named by `run_pane`, each
+    /// opened conversation's by `opened_pane`, and the answer of each run
+    /// `shown` names (automation id, run number).
     pub fn of(
         book: &Stored,
         zone: &TimeZone,
         own_folder_root: Option<String>,
         run_pane: impl Fn(&Run) -> Option<String>,
         opened_pane: impl Fn(&Opened) -> Option<String>,
+        shown: impl Fn(&str, u64) -> bool,
     ) -> Self {
         let items: Vec<AutomationSnapshot> = book
             .automations
@@ -1078,6 +1092,9 @@ impl AutomationsSnapshot {
                             branch: run.branch.clone(),
                             seen: run.seen,
                             spend: run.spend,
+                            answer: shown(&automation.id, run.number)
+                                .then(|| run.answer.clone())
+                                .flatten(),
                         }),
                         Entry::Skipped {
                             at_unix_ms,
@@ -1527,6 +1544,38 @@ mod tests {
         assert_eq!(own_folder_name("a/b:c?", "a1b2c3"), "abc-a1b2c3");
         assert_eq!(own_folder_name("  ", "a1b2c3"), "a1b2c3");
         assert_eq!(own_folder_name("..", "a1b2c3"), "a1b2c3");
+    }
+
+    /// Operator decision 2026-11-21: a run's last answer is in the section
+    /// only while a window shows the run, the run screen's summary.
+    #[test]
+    fn a_runs_answer_rides_the_section_only_while_the_run_is_shown() {
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let number = automation.new_run(Trigger::Manual, None, now);
+        let run = automation.run_mut(number).unwrap();
+        run.state = RunState::Succeeded;
+        run.answer = answer_paragraph("보고서를 열었어요.");
+        let stored = Stored {
+            automations: vec![automation],
+            ..Stored::default()
+        };
+        let answer = |shown: bool| {
+            let section = AutomationsSnapshot::of(
+                &stored,
+                &seoul(),
+                None,
+                |_| None,
+                |_| None,
+                |id, run| shown && id == "abc123" && run == number,
+            );
+            match &section.items[0].records[0] {
+                RecordSnapshot::Run(run) => run.answer.clone(),
+                other => panic!("a run's record, not {other:?}"),
+            }
+        };
+        assert_eq!(answer(false), None);
+        assert_eq!(answer(true).as_deref(), Some("보고서를 열었어요."));
     }
 
     #[test]

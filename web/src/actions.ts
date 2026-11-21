@@ -2127,8 +2127,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
     },
     /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
-    automationRunViewing(id: string, run: number, on: boolean) {
-      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on } });
+    automationRunViewing(id: string, run: number, on: boolean, restore: string | null = null) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on, ...(restore ? { restore } : {}) } });
+    },
+
+    /**
+     * A run's terminal shown in the automation screen (operator decision
+     * 2026-11-21): the core's focus moves to the run's tab, so the desk in
+     * front is the run's, with what its agent opened and the operator has
+     * not seen brought forward, and the screen draws it beside the
+     * terminal. No opening begins, so the screen stays where it is.
+     */
+    showAutomationRunPane(paneId: string) {
+      dispatch(openPaneEvent(paneId, { revealUnseen: true }).event);
     },
 
     /**

@@ -258,6 +258,7 @@ mod tests {
             branch: Some("secret-branch".into()),
             seen: false,
             spend: None,
+            answer: None,
         })
     }
 
