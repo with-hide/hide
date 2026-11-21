@@ -865,13 +865,13 @@ Web owners: `web/src/hideAiOrigin.ts` (the words, the place line, the turn line,
 
 ### Work an external tool keeps
 
-An external tool the operator approved at Act in Settings › External tools starts agents for its own purposes, and while it stays connected at Act those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
+A bot the operator approved in its own space (자기 공간) in Settings › 봇 starts agents for its own purposes, and while it stays connected in its own space those agents are the tool's work, not the operator's (PRD hide-external-control D-09): the agent it started and the agents that one started under itself with `--parent here` (a Conductor's workers among them).
 `docs/status-model.md`, Work an external tool keeps, owns the ownership value and the group rule; this section owns what the screen draws, with-hide/hide-private `docs/tasks-and-pr-list.md`, The sidebar's 태스크 list, how the 태스크 list draws it, and with-hide/hide-private `docs/missions.md`, A mission a bot conducts, what such a mission gives the operator.
 
-Each tool connected at Act has a cell of its own on the device rail, after the devices ([Device rail](#device-rail)), and its work is drawn there and in no device's cell (PRD hide-external-control D-45, operator decision 2026-11-14).
+Each bot connected in its own space has a cell of its own on the device rail, after the devices ([Device rail](#device-rail)), and its work is drawn there and in no device's cell (PRD hide-external-control D-45, operator decision 2026-11-14).
 In a device's cell the agents are in no list of the operator's: not the sidebar's tree, Needs You, Done or Working, not the 태스크 list, Sessions, Overview's requests, graph or counts, not a Project tool's session count, a checkout's count or the device's tile, not the phone's agent list, and they move no app badge, desktop notification or push (B26, B27).
 The tool reads them and answers them itself, so an agent's own question, approval, block or finished turn never reaches the operator while the tool keeps it.
-They are still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › External tools counts each tool's agents and missions.
+They are still found by ⌘K, the recent panel, the tab strip and `hide agent list`, and Settings › 봇 counts each bot's agents and missions.
 
 A mission such an agent conducts is the tool's too (B30, D-36): a device's mission screen, the sidebar's `미션` number, its 내 차례 rows, its decision, gate and safety-net cards, the device's Needs You, its notices and the phone's mission list leave it out, and the tool's cell lists it.
 
@@ -908,18 +908,23 @@ The operator can answer in a row's pane from the cell; the answer takes the row 
 ⌥n numbers the list the cell shows as it numbers a device's: the 태스크 list's rows as the chip narrows them, else the 프로젝트 list's session roots.
 
 The tool's name is drawn wherever the tool's work reaches the operator's own cells, and never inside the tool's own cell (B31, D-15): as a quiet badge cut short in a narrow space after the title of the agent's pane head, its ⌘K result, and the mission screen's row and the map head of a mission its agent conducts, and, in the sidebar's rows (the projects list and the 태스크 list, an agent's or a mission's) and the Overview's `나를 기다리는 것` card and graph node, as muted words leading the line under the title, `nightly · 어느 순서로 할까요`, since such a first line keeps only the title, its chips and the time (operator decision 2026-11-14; `ToolLed`).
-Its hint says the work is the tool's (`외부 도구 nightly의 일`); once the tool lets go the name stays as where the work came from, and the hint says so (`외부 도구 nightly에서 시작됨`).
+The name is led by the bot's owl, and its hint says the work is the bot's (`봇 nightly의 일`); once the bot lets go the name stays as where the work came from, and the hint says so (`봇 nightly에서 시작됨`).
+
+An agent a 전체 bot started is the operator's from the start, in every list, count and notice as the operator's own (the row's `tool` with `owns` false), and says who started it (mission-87 c3).
+Its logo wears the bot's owl as a corner badge, where Hide AI's owl sits on an agent Hide AI started, in 내 차례, the sidebar's rows, the pane head and the Agent tab; with logos hidden the owl stands alone in the logo's place.
+Its hint and accessible name end with `<name>(봇)이 띄움` (`Started by <name> (bot)`), and the pane head's quiet tool badge is drawn only for work a bot keeps, not for this.
+Web owners: `BotFace` in `web/src/components/bot-mark.tsx`, `BotBadge` in `web/src/AgentMark.tsx`, `botStarter` in `web/src/bots.ts` and `agentWithProfile` in `web/src/agentRow.ts`.
 
 One thing of the agents reaches the operator anyway, as one row in the sidebar's Needs You and the 태스크 list's Needs You of the device's cell, never in a tree, the row staying in the tool's cell too (B29, D-37): a step only a person can take (`hide agent ask-human auth|permission`), the agent's own or a child's, which also notifies on the desktop and the phone.
 A View an agent the tool keeps opened with `hide file open`, `hide diff open` or `hide browser open` shows exactly as an operator agent's does, but inside the tool's cell only: its row carries the `볼 것` mark and the View is in that session's Files list, until the operator looks at it (D-38, D-55, B29).
 It calls no one: the row stays out of 내 차례, the counts, the app badge, notices and the phone, and in the cell it does not move the row into `도구가 답할 차례` or add to the tile's grey number.
 A View the tool itself opens, with no Hide session behind it, is the operator's own open as any caller's that is no agent.
-When the operator disconnects the tool, the tool leaves, or the operator sets it to View only, all its work is the operator's from that moment, still running: its agents and missions enter the lists, counts and graph at once, and their next question is the operator's turn; the tool's tile goes, and a window showing its cell shows This Mac (B16, B44).
-Setting the same connection to Act again takes the work back, and a new connection under the same name takes none of it.
+When the operator disconnects the bot, the bot leaves, or the operator changes it to 전체, all its work is the operator's from that moment, still running: its agents and missions enter the lists, counts and graph at once, and their next question is the operator's turn; the tool's tile goes, and a window showing its cell shows This Mac (B16, B44).
+Changing the same connection back to its own space takes the work back, and a new connection under the same name takes none of it.
 A connected device's agents follow the same rules.
 A checkout Hide made for the tool's agent is drawn in a device's tree by the rule of a checkout Hide AI made ([Work Hide AI does for a home](#work-hide-ai-does-for-a-home)), only while it is in front or an agent the operator started works in it, and without Hide AI's task line; once the tool lets go it is an ordinary checkout.
 The phone has no tool's cell (B46; `docs/INSTALL.md`, What each system supports); a tool's person's turn on the phone's list leads its second line with the tool's name, as the desktop's sidebar row does, and a View its agent opened is not on the phone at all.
-Web owner: `web/src/toolCells.ts` (which cell is in front, `frontTool`, read from the center's page and the pane in front, and what it holds, `toolSidebarProjects` the projects its 프로젝트 and PR tabs draw, `toolProjectChoice` the stored project read for the tool), `ToolProjectFilter` in `web/src/SidebarProjectFilter.tsx`, `ToolTaskLens` in `web/src/TaskLens.tsx`, `ProjectList` in `web/src/sidebar.tsx` and `SidebarPrs` in `web/src/SidebarPrs.tsx` with their `tool`, `ToolTileView` in `web/src/components/device-rail.tsx`, `toolGraphActivity` in `web/src/overviewGraphModel.ts` (the map's filter in the cell), `drawnInTree` in `web/src/hideAiOrigin.ts` (the tool's checkout), and `ToolMark`, `ToolLabel` and `ToolLed` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
+Web owner: `web/src/toolCells.ts` (which cell is in front, `frontTool`, read from the center's page and the pane in front, and what it holds, `toolSidebarProjects` the projects its 프로젝트 and PR tabs draw, `toolProjectChoice` the stored project read for the tool), `ToolProjectFilter` in `web/src/SidebarProjectFilter.tsx`, `ToolTaskLens` in `web/src/TaskLens.tsx`, `ProjectList` in `web/src/sidebar.tsx` and `SidebarPrs` in `web/src/SidebarPrs.tsx` with their `tool`, `BotTileView` in `web/src/components/device-rail.tsx`, `toolGraphActivity` in `web/src/overviewGraphModel.ts` (the map's filter in the cell), `drawnInTree` in `web/src/hideAiOrigin.ts` (the tool's checkout), and `ToolMark`, `ToolLabel` and `ToolLed` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
 
 ### Agent logo view mode
 
@@ -2420,18 +2425,21 @@ Every tile is a button reached with Tab and chosen with Enter or Space, named fo
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents stay on it, and the rail stays.
 
-Each external tool connected at Act (Settings › External tools) has a tile after `+`, under a short line, one per tool in the order the tools were approved, and only the tools of this window's core (PRD hide-external-control D-50, D-51).
-A tool's tile is the size of a device's, a ring rather than a filled square so it never reads as a machine, and holds the monogram of the tool's name; its hint is `<name> · 외부 도구`, with `도구 차례 N` while something waits on the tool.
-Its one mark is a grey pill (`--muted-foreground`) with the number of what waits on the tool's answer, `9+` from 10, and no Needs You, app badge or notice of the operator's counts it (B39, B41).
-A tool with nothing waiting has no mark, and a tool at View only has no tile (D-47).
-Selecting a tool's tile shows the tool's Overview as the center's page, never as a layer over the Workspace, and its cell in the sidebar ([Work an external tool keeps](#work-an-external-tool-keeps)), with This Mac in front under it, so the center no longer keeps This Mac's agent panes as if nothing had changed (PRD hide-external-control D-54, B47) and a tool that leaves Act, and its tile with it, leaves the window on This Mac (B44).
+Each bot (an external tool, Settings › 봇) connected in either mode has a tile after `+`, under a short line, one per bot in the order the bots were approved, and only the bots of this window's core (PRD hide-external-control D-50, D-51; mission-87).
+A bot's tile is the size of a device's and draws the bot's owl on its tile colour, both chosen from its name (`botLook` in `web/src/bots.ts`: one of seven owls and one of seven `--bot-*` colours), so the same bot looks the same on the rail, in Settings, in a menu and on its agents' marks, and never reads as a machine.
+A 전체 bot, which also works in the operator's workspaces, wears a lime ring (`--primary`); a bot in its own space (자기 공간) wears none.
+Its hint is `<name> · 봇 · 전체` or `<name> · 봇 · 자기 공간`, with `봇 차례 N` while something waits on the bot.
+Its one mark is a grey pill (`--muted-foreground`) with the number of what waits on the bot's answer, `9+` from 10, and no Needs You, app badge or notice of the operator's counts it (B39, B41).
+A bot with nothing waiting has no mark, and a 전체 bot never has one, since its work is the operator's and is counted where the operator's is.
+A 전체 bot keeps no cell, so its tile opens Settings › 봇, where its mode is changed; a bot in its own space opens its cell as follows.
+Selecting an own-space bot's tile shows the tool's Overview as the center's page, never as a layer over the Workspace, and its cell in the sidebar ([Work an external tool keeps](#work-an-external-tool-keeps)), with This Mac in front under it, so the center no longer keeps This Mac's agent panes as if nothing had changed (PRD hide-external-control D-54, B47) and a tool that leaves Act, and its tile with it, leaves the window on This Mac (B44).
 The selected tile, a device's or a tool's, follows what the center shows: landing on a pane of a tool's agent by any path selects the tool's tile, and landing on any other pane selects that pane's device.
 A device's tile takes the center back to that device's Workspace; from a tool's cell, to the Workspace as the core holds it unless the pane it focuses is the tool's, else to that device's pane the keyboard was in last that no tool keeps, else to the device's Overview, so the press never lands back on the tool's work.
 Which cell a window shows is the window's own: another window and the phone keep theirs.
 ⌥⌘1-9 numbers the devices only.
 
 A right-click on the rail offers `기기 목록 숨기기`.
-While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), then, after a line, the tools with their letters and their grey number, `기기 추가…` and `기기 목록 표시`; while a tool's cell is in front the top row names the tool, `nightly 외부 도구`.
+While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), then, after a line, the bots in their own space with their owls and their grey number, `기기 추가…` and `기기 목록 표시`; while a bot's cell is in front the top row names the bot, `nightly 봇`.
 The View menu of the desktop app carries `Toggle device rail` (`toggle_device_rail`, no default chord, bindable in Settings › Shortcuts like the sidebar switch); a browser tab uses the `This Mac ⌄` menu.
 The hidden state is the core's `ui_state.device_rail_visible`, kept beside `left_sidebar_visible`, so it survives a restart.
 
@@ -2910,7 +2918,7 @@ All pages use the four interface languages, existing settings rows, system contr
 Settings opens as one modal, from ⌘,, the sidebar's gear and the desktop menu's Settings…, about 880 wide (`--size-settings-sheet-w`) and as wide and tall as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side (PRD settings-left-nav B1, B13).
 Its left is a list of pages and its right the chosen page; the list keeps its width (`--size-settings-nav-w`) and its place while only the page scrolls, down to the smallest window, 720×480 (B12, B13).
 The title above the list names the computer whose settings these are, as the window names it: `이 Mac 설정` on that machine's own window, and the machine's name in its place on a window another machine shows of it (`settings.titleOf`, operator decision 2026-11-19).
-The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Skills & MCP, Hide AI, Mission, Mobile, External tools, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
+The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Skills & MCP, Hide AI, Mission, Mobile, Bots, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
 Its top inset uses `spacing-sm` and group labels use `spacing-xs` above and below, so the additional Usage page fits at 720×480 with the default Interface text without shrinking row targets.
 When Interface text makes the list overflow, its grouped pages scroll independently while About and Privacy stay pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
 Each page has its mark and its name, the names are the same in every language, and a group name is a label, never a page.
@@ -3381,23 +3389,24 @@ The phones group is titled 연결된 폰 · n / 4; each row shows the phone's na
 The phone pause switch is on Settings > Notifications, and its choice survives a restart.
 A phone is told only when an agent waits on the operator’s answer, a question, an approval or a block, never when it finishes (status-model.md, Phone notices).
 
-### Settings > External tools
+### Settings > Bots
 
-External tools (외부 도구) is a page of Settings' machine group, after Mobile, drawn from the core's `access` section (`web/src/settings/ExternalToolsTab.tsx`, `web/src/externalTools.ts`).
-It is where a program outside Hide's panes that ran `hide access request --name <name>` is approved, and the only place: a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command approves, refuses, changes or disconnects a tool.
-Every tool runs on the core's machine, so each line names that machine the way Settings names it.
+Bots (봇) is a page of Settings' machine group, after Mobile, drawn from the core's `access` section (`web/src/settings/ExternalToolsTab.tsx`, `web/src/externalTools.ts`).
+A bot is a program outside Hide's panes that ran `hide access request --name <name>`, and this page is the only place it is approved: a request never reaches 내 차례, a badge, a notice or the phone, and no `hide` command approves, refuses, changes or disconnects a bot.
+Every bot runs on the core's machine, so each line names that machine the way Settings names it.
+Each bot is drawn as its owl on its tile colour, the same as its rail tile, with the lime ring while it is 전체.
 
-승인 대기 (with its count) leads the page while a request waits, one row per request: the name the tool asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
-Under them two choices with one line each, 보기만 · Hide에 보이는 것(상태, 에이전트 화면, 미션)을 볼 수만 있어요 and 시키기 · 보기에 더해 에이전트를 띄우고 끝내고 말을 넣고, 미션을 맡길 수 있어요, with 보기만 chosen.
-The approve button names the choice, 보기만으로 승인 or 시키기로 승인, beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
+승인 대기 (with its count) leads the page while a request waits, one row per request: the owl the bot will get and the name it asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
+Under them two choices with one line each, 자기 공간 · 자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요 and 전체 · 내가 쓰는 workspace와 에이전트까지, 연결된 기기 전부에서 다뤄요, with 자기 공간 chosen, the narrower.
+The approve button names the choice, 자기 공간으로 승인 or 전체로 승인, in the secondary grey beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
 
-연결된 도구 · n / 16 lists the approved tools in the order they were approved, under one line naming the two levels (보기만 볼 수만 · 시키기 일까지 시킴).
-Each row shows the tool's name and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; the 보기만 and 시키기 segments, where pressing the other one changes the level from the tool's next command; and 끊기, which disconnects at once with no confirmation.
-A 시키기 tool that started agents or missions also says 끊거나 보기만으로 바꾸면 이 도구의 일은 내 것이 돼요 under its line; a 보기만 tool's work is already the operator's, so it does not.
-With no tool connected the list holds 연결된 도구가 없어요 and the command that asks, `hide access request --name <이름>`.
+연결된 봇 · n / 16 lists the approved bots in the order they were approved.
+Each row shows the owl, the bot's name with its mode as a pill (자기 공간 or 전체), and one line, its machine, its last use (moved at most once a minute) and `에이전트 N · 미션 N`, each piece kept whole when the line wraps; 모드 바꾸기, a menu of the two modes whose other one changes the mode from the bot's next command; and 끊기, which disconnects at once with no confirmation.
+A bot in its own space that started agents or missions also says 끊으면 이 봇이 하던 일은 내 것이 돼요 under its line; a 전체 bot's work is already the operator's, so it does not.
+With no bot connected the list holds 연결된 봇이 없어요 and the command that asks, `hide access request --name <이름>`.
 
-A row opens nothing: the counts are the whole of what it says about the tool's work, which the operator finds in the tool's cell on the device rail, by ⌘K and by the pane head's tool name (operator decision 2026-11-14).
-The gallery draws the page from invented tools at `?scene=external-tools&state=pending|connected|empty`.
+A row opens nothing: the counts are the whole of what it says about the bot's work, which the operator finds in the bot's cell on the device rail, by ⌘K and by the pane head's bot name (operator decision 2026-11-14).
+The gallery draws the page from invented bots at `?scene=external-tools&state=pending|connected|empty`, and the rail's bot tiles alone at `state=rail`.
 
 ### The phone app
 
