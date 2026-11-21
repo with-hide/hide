@@ -34,11 +34,6 @@ use crate::terminal_hub::TerminalHub;
 
 pub type SnapshotReply = hide_core::SnapshotDeltaPayload;
 
-type MoveSourceAnswer =
-    Result<(hide_core::MoveSource, serde_json::Value), hide_core::MoveSourceRefusal>;
-type ReleaseSourceAnswer =
-    Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
-
 /// What a hook's answer is read from: Memory's scope or why there is none,
 /// the open questions' when the hook asks at a prompt, and the Project's
 /// other sessions' when it starts a session.
@@ -57,9 +52,6 @@ enum Command {
     OperatorActive(hide_core::product_analytics::ActiveSurface),
     DeliveryHuman {
         reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
-    },
-    ReleaseEffects {
-        reply: Sender<bool>,
     },
     DeliveryPrepare {
         device_id: String,
@@ -272,14 +264,6 @@ enum Command {
         node: String,
         reply: Sender<Option<String>>,
     },
-    ReleaseSource {
-        node: String,
-        reply: Sender<ReleaseSourceAnswer>,
-    },
-    MoveSource {
-        device: String,
-        reply: Sender<MoveSourceAnswer>,
-    },
     DeviceSwitchSource {
         device: String,
         reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
@@ -420,18 +404,6 @@ impl CoreHandle {
             .send(Command::DeliveryHuman { reply })
             .map_err(|_| "delivery_unavailable")?;
         result.recv().map_err(|_| "delivery_unavailable")?
-    }
-
-    /// The move's link committed this core: what it held while pending
-    /// runs now. Returns whether this released the hold.
-    pub fn release_effects(&self) -> Result<bool, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::ReleaseEffects { reply })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        result
-            .recv()
-            .map_err(|_| "core owner thread dropped the release reply".to_owned())
     }
 
     pub fn prepare_delivery(
@@ -1270,20 +1242,6 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the device connection reply".to_owned())
     }
 
-    /// What a move of the core to `device` is made from, and the device's
-    /// label records (PRD core-host-node-move B4).
-    pub fn release_source(&self, node: &str) -> Result<ReleaseSourceAnswer, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::ReleaseSource {
-                node: node.to_owned(),
-                reply,
-            })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the release source".to_owned())
-    }
-
     /// What `device`'s switch to its machine's own connection starts from;
     /// see `Core::device_switch_source`.
     pub fn device_switch_source(
@@ -1298,18 +1256,6 @@ impl CoreHandle {
             })
             .map_err(|_| "hide_unavailable")?;
         rx.recv().map_err(|_| "hide_unavailable")?
-    }
-
-    pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::MoveSource {
-                device: device.to_owned(),
-                reply,
-            })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the move source".to_owned())
     }
 
     /// Why a node dialing this core would be refused, before its link is
@@ -1772,9 +1718,6 @@ fn owner_loop(
             Command::DeliveryHuman { reply } => {
                 let _ = reply.send(core.prepare_delivery_human());
             }
-            Command::ReleaseEffects { reply } => {
-                let _ = reply.send(core.release_effects());
-            }
             Command::ProductEvent(event) => {
                 if let Some(worker) = &analytics {
                     hide_core::product_analytics::Sink::capture(&*worker.client, event);
@@ -2045,14 +1988,8 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::MoveSource { device, reply } => {
-                let _ = reply.send(core.move_source(&device));
-            }
             Command::DeviceSwitchSource { device, reply } => {
                 let _ = reply.send(core.device_switch_source(&device));
-            }
-            Command::ReleaseSource { node, reply } => {
-                let _ = reply.send(core.release_source(&node));
             }
             Command::InboundNode {
                 node,
@@ -2183,7 +2120,6 @@ impl CoreHandle {
                 workspace_views_path: None,
                 shortcut_import_path: None,
                 local_issues_path: None,
-                effects_held: false,
                 machine_name: None,
                 windows_drives: None,
                 account_state_folder: false,

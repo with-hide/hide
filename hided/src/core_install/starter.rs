@@ -26,7 +26,7 @@ pub enum CoreStarter {
     Fixture,
 }
 
-/// This `hided`, which a move starts as the core.
+/// This `hided`, started as the core.
 pub fn this_program() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|error| format!("this hided has no path: {error}"))
 }

@@ -4,8 +4,10 @@
 //! the core's machine and this daemon runs in the node role: it starts no
 //! core and dials that machine instead.
 //!
-//! Only the move (layer 5), the node's disconnect and reconnect (B16) and
-//! test fixtures write the record. It is the
+//! No build writes a new record: only a core moved to another machine
+//! before 1.2.0 left one, and this build changes it for the node's
+//! disconnect and reconnect (B16) and its core's update, and sets it aside
+//! once the two machines are split (`moved_core::split`). It is the
 //! account's own private file; one that is anything else is refused rather
 //! than read, and so is one that names this machine as its own core.
 
@@ -35,11 +37,6 @@ pub struct Placement {
     /// account's default.
     #[serde(default)]
     pub state_dir: Option<String>,
-    /// The move that placed the core there, until it committed: the node's
-    /// links name it, and the core's first link with it commits the move
-    /// (PRD core-host-node-move amendment 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub move_intent: Option<String>,
     /// The operator ended the link from this machine's window (PRD
     /// core-host-node-move B16): the node dials nothing until they
     /// reconnect, across restarts.
@@ -48,9 +45,8 @@ pub struct Placement {
 }
 
 /// Every change this process makes to a record already there: the node's
-/// update of its core rewrites the program, the move's commit clears its
-/// intent, and the operator's disconnect sets its flag, each reading the
-/// record as the others left it.
+/// update of its core rewrites the program and the operator's disconnect
+/// sets its flag, each reading the record as the other left it.
 static CHANGES: Mutex<()> = Mutex::new(());
 
 /// Changes the record `state_dir` holds with `change`, after any change
@@ -87,10 +83,14 @@ pub fn write(state_dir: &Path, placement: &Placement) -> Result<(), String> {
     .map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// Removes the record: this machine is its own core again.
-pub fn remove(state_dir: &Path) -> Result<(), String> {
+/// Sets the record aside, beside what this machine held before its core
+/// moved away (`moved-out/`): this machine is its own core again, and
+/// nothing the move left is deleted. A record already set aside is done.
+pub fn set_aside(state_dir: &Path) -> Result<(), String> {
     let path = record_path(state_dir);
-    match std::fs::remove_file(&path) {
+    let kept = hide_kit::layout::moved_out(state_dir);
+    private::create_dir_all(&kept).map_err(|error| format!("{}: {error}", kept.display()))?;
+    match std::fs::rename(&path, kept.join("core-placement.json")) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("{}: {error}", path.display())),
@@ -195,10 +195,47 @@ mod tests {
                 node: "core-node".to_owned(),
                 program: "/opt/hided".to_owned(),
                 state_dir: Some("/tmp/c".to_owned()),
-                move_intent: None,
                 disconnected: false,
             }))
         );
+    }
+
+    /// The operator's disconnect is in the record itself, so a daemon that
+    /// starts anew reads it and dials nothing; their reconnect takes it out
+    /// again, and neither touches what else the record says (PRD
+    /// core-host-node-move B16).
+    #[test]
+    fn the_operator_s_disconnect_is_read_again_from_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let placement = Placement {
+            alias: "mini".to_owned(),
+            node: "core-node".to_owned(),
+            program: "/opt/hided".to_owned(),
+            state_dir: None,
+            disconnected: false,
+        };
+        super::write(dir.path(), &placement).unwrap();
+        let saved = || std::fs::read_to_string(record_path(dir.path())).unwrap();
+        assert!(!saved().contains("disconnected"), "{}", saved());
+
+        assert_eq!(
+            update(dir.path(), OWN, |record| record.disconnected = true),
+            Ok(true)
+        );
+        assert!(saved().contains("\"disconnected\": true"), "{}", saved());
+        assert_eq!(
+            read(dir.path(), OWN),
+            Ok(Some(Placement {
+                disconnected: true,
+                ..placement.clone()
+            }))
+        );
+
+        assert_eq!(
+            update(dir.path(), OWN, |record| record.disconnected = false),
+            Ok(true)
+        );
+        assert_eq!(read(dir.path(), OWN), Ok(Some(placement)));
     }
 
     #[test]

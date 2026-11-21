@@ -26,9 +26,8 @@ use serde_json::Value;
 
 use crate::node::{LEGACY_LOCAL_DEVICE_ID as LEGACY, NodeId};
 
-pub mod copy;
 mod devices;
-mod reown;
+mod id_map;
 #[cfg(test)]
 pub(crate) mod upgrade_tests;
 pub use devices::{DeviceNames, name_devices};
@@ -36,9 +35,8 @@ pub use devices::{DeviceNames, name_devices};
 /// The first place in `value`, a core state as it is saved or sent, that
 /// still names the device `device` after it took another id.
 pub(crate) fn still_naming_device(value: &Value, device: &str) -> Option<String> {
-    reown::still_naming_id(value, device, true, "")
+    id_map::still_naming_id(value, device, true, "")
 }
-pub use reown::{IdTable, KnownProject, OwnerChange, ReownOutcome, id_table, reown, staging_dir};
 
 pub const MARKER_FILE: &str = "node.json";
 /// The Hide AI settings' name in a move's copy. They move with the core
@@ -78,56 +76,6 @@ pub(crate) const MISSIONS: &str = "missions.json";
 /// the same way (`mission_files`), including the index metadata identities.
 pub(crate) const MISSIONS_DIR: &str = hide_kit::layout::MISSIONS_DIR;
 const FACTORY: &str = "factory.sqlite3";
-/// Where a move keeps its staging copies (`reown::staging_dir`); the
-/// move's other files, which `hide_kit::layout` names, are `UNBOUND`.
-pub const MOVE_STAGING: &str = "move-staging";
-
-/// The brain state a core move copies to the core's new machine (PRD
-/// core-host-node-move Q8): each store `KEYS` names, except what the new
-/// machine rebuilds ([`REBUILT_AFTER_MOVE`]), and the stores that name no
-/// machine but belong to the core (the Factory, phone pairing). The old
-/// session search file travels as its record retention alone
-/// (`copy::stage`). `node.json` is last: a folder holds a marker only once
-/// everything it names is there.
-pub const MOVES_WITH_CORE: &[&str] = &[
-    CORE_STATE,
-    WORKSPACE_VIEWS,
-    LABELS,
-    // The old file goes with the store, which replaced it, so a machine the
-    // core left never imports it again.
-    DELIVERY_LEDGER,
-    DELIVERY_STORE,
-    LINKS,
-    hide_kit::layout::USAGE_STORE,
-    hide_kit::layout::SUGGESTIONS_STORE,
-    // Names no machine: the operator's instructions for every Project.
-    hide_kit::layout::GLOBAL_INSTRUCTION,
-    hide_kit::layout::PRODUCT_ANALYTICS_ID,
-    LOCAL_ISSUES,
-    MISSIONS,
-    MISSIONS_DIR,
-    // Mission ids and node keys only; no machine is named in it.
-    hide_kit::layout::MISSION_EVENTS,
-    PROJECT_MEMORY,
-    SESSION_SEARCH,
-    FACTORY,
-    "factory.v1.sqlite3",
-    "factory-files",
-    "mobile.json",
-    "phones.json",
-    // External tools' connections, which name no machine: each is a tool on
-    // the core's own machine.
-    hide_kit::layout::ACCESS_STORE,
-    // Automations, which name no machine: each runs on the core's own, and
-    // its runs are named by ledger ids.
-    hide_kit::layout::AUTOMATIONS_STORE,
-    MARKER_FILE,
-];
-
-/// The store a core move does not copy: the GitHub snapshot, which the new
-/// core rebuilds from what its nodes report.
-pub const REBUILT_AFTER_MOVE: &[&str] = &["github-snapshot.json"];
-
 /// How one machine-bound key is kept pointing at the right machine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mechanism {
@@ -138,9 +86,10 @@ pub enum Mechanism {
     Owned,
 }
 
-/// How a machine-bound key moves when the core moves to another machine and
-/// the folder changes owner (`reown`). A move never guesses: a key the
-/// table leaves naming the new owner by its old id stops the move.
+/// How a machine-bound key changes when a machine it names is given
+/// another id, as the naming of devices by their machines' ids does
+/// (`devices`). A change never guesses: a key the table leaves naming a
+/// machine by its old id stops it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Moves {
     /// A machine id: the new owner's old id becomes its node id, the old
@@ -158,10 +107,10 @@ pub enum Moves {
     Checkout,
     /// A session fold: a registration id or `cleanup/<machine>`.
     Fold,
-    /// The owner's own setting, swapped with the `device_*` map beside it
-    /// (`reown::OWN_PATHS`).
+    /// The owner's own setting, which stays, beside the `device_*` map that
+    /// keeps the same setting for every other machine (`id_map::OWN_PATHS`).
     OwnPath(&'static str),
-    /// The label records, which travel one hop (`reown`, labels).
+    /// The label records, which name the owner alone on disk.
     Labels,
     /// Moved by code that reads the whole file, not by the pattern: the
     /// ledger's host scopes and spawn machines, the View layouts' tabs.
@@ -1210,8 +1159,9 @@ pub const UNBOUND: &[&str] = &[
     BACKUP_DIR,
     // The plan of a device renaming in progress (`devices`).
     devices::JOURNAL,
-    // A core move's own files (`hide_kit::layout`).
-    MOVE_STAGING,
+    // What a core move before 1.2.0 left (`hide_kit::layout`); no build
+    // moves a core now.
+    "move-staging",
     "move-incoming",
     "moved-out",
     "core-move.json",

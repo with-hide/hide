@@ -2364,8 +2364,8 @@ fn wait_for_item_core(env: &Env) -> Result<Healthy, ConnectError> {
 /// it takes links.
 const UPDATED_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(10);
 
-/// A core of another build that its starter runs here, the core a move
-/// placed on this machine (PRD core-host-node-move Q13), is never stopped
+/// A core of another build that its starter runs here (a paired machine's,
+/// or one a move before 1.2.0 placed on this machine) is never stopped
 /// for this app's own: its login item would start that build again at the
 /// next login beside this one. This app, when newer, updates it through
 /// the updater a node runs (B10): this build goes into a version folder

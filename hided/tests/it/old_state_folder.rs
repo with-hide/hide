@@ -126,7 +126,7 @@ async fn logged(state: &Path, kind: &str) -> Value {
     }
 }
 
-/// A machine that was a device before its core moved there has the state
+/// A machine that was a device before an earlier build moved its core there has the state
 /// folder its helper's bridge folder made, with the umask's 0755. The
 /// daemon closes it as it starts, so the ledger in it loads; before, every
 /// letter read as unavailable.

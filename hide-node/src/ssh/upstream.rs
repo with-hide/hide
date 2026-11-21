@@ -1,8 +1,8 @@
 //! The connection a node keeps to its core on another machine (PRD
-//! core-host-node-remote-core D-04, D-07), and a core move's to the machine
-//! on its other side, through the system `ssh` (PRD system-ssh-device-link
-//! B33): one owned `ssh` signed in once, whose start script installs a
-//! build, runs the move's steps and copies its files, and then runs the
+//! core-host-node-remote-core D-04, D-07), through the system `ssh` (PRD
+//! system-ssh-device-link B33): one owned `ssh` signed in once, whose start
+//! script installs a build, runs a command there and copies its files, and
+//! then runs the
 //! core machine's attach role in its own place, whose input and output
 //! carry the node's link and its screens' streams (`hide_peer::mux`).
 //!
@@ -76,10 +76,9 @@ where
     })
 }
 
-/// The node's connection to its core's machine, and a core move's to the
-/// machine on its other side: one signed-in [`Session`] at a time, kept for
-/// the next step, so a core update and the attach that follows it, or a
-/// move's steps and copies, sign in once (PRD system-ssh-device-link B33).
+/// The node's connection to its core's machine: one signed-in [`Session`]
+/// at a time, kept for the next step, so a core update and the attach that
+/// follows it sign in once (PRD system-ssh-device-link B33).
 pub struct Upstream {
     target: SshTarget,
     /// The session the last step left, waiting for the next one.

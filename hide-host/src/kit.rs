@@ -382,9 +382,26 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
 /// its own executable): the one the panes it starts name, and the one its
 /// answers to a pane's `hide` confirm.
 pub fn running_install() -> Option<PaneInstall> {
+    if let Some(named) = ANSWERS_AS.get() {
+        return named.clone();
+    }
     std::env::current_exe()
         .ok()
         .and_then(|program| pane_install(&program))
+}
+
+/// The installation this process answers as in place of its executable's
+/// own ([`answer_as`]).
+static ANSWERS_AS: std::sync::OnceLock<Option<PaneInstall>> = std::sync::OnceLock::new();
+
+/// Makes [`running_install`] answer `install` for the rest of this process.
+/// A node that took over a folder whose panes another installation started
+/// (`hide_kit::layout::HelperGuest::panes`) says so once, before it starts
+/// a pane or binds its bridge, so the panes it holds and the ones it starts
+/// name one installation, and their `hide` and hooks reach it. `false`
+/// when it was said before.
+pub fn answer_as(install: Option<PaneInstall>) -> bool {
+    ANSWERS_AS.set(install).is_ok()
 }
 
 pub(crate) fn build_layout(executable: &Path) -> Option<(PathBuf, String)> {

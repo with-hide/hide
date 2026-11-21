@@ -2,12 +2,11 @@
 //! its token, its instance lock and one HTTP server (PRD core-host-node-move
 //! Q12).
 //!
-//! A process starts in one role, and a core move changes it in place: the
-//! core stops, a move screen answers while the brain state crosses, and the
-//! node role (or, on a rollback, the core again) takes over. Each role mounts
-//! its router here instead of binding its own, so the window's address and
-//! token never change, `/health` never stops answering, and the desktop host
-//! never reads the daemon as lost. A request is served by the role mounted
+//! A process starts in one role, and a node that splits from its core is
+//! followed by the core role in the same process (`supervisor`). Each role
+//! mounts its router here instead of binding its own, so the window's address
+//! and token never change, `/health` never stops answering, and the desktop
+//! host never reads the daemon as lost. A request is served by the role mounted
 //! when it arrives; a connection open across a change (a screen's
 //! WebSocket) stays with the role that accepted it until that role ends it.
 //!
@@ -49,8 +48,6 @@ enum Mounts {
 pub struct Seat {
     pub port: u16,
     pub token: String,
-    /// A move of the core, which outlives the role that took its request.
-    pub moves: Arc<crate::core_move::control::MoveControl>,
     /// The process's stop request, which outlives its roles as the seat
     /// does; never announced on a seat a caller other than the process's
     /// supervisor holds.
@@ -106,7 +103,6 @@ impl Mounted {
 pub struct SeatParts {
     pub port: u16,
     pub token: String,
-    pub moves: Arc<crate::core_move::control::MoveControl>,
     mounted: Arc<Mounted>,
 }
 
@@ -198,7 +194,6 @@ impl Seat {
         Ok(Self {
             port,
             token,
-            moves: Arc::default(),
             stop,
             mounted,
             stopping,
@@ -224,7 +219,6 @@ impl Seat {
         SeatParts {
             port: self.port,
             token: self.token.clone(),
-            moves: Arc::clone(&self.moves),
             mounted: Arc::clone(&self.mounted),
         }
     }

@@ -1,6 +1,6 @@
-//! The flags of the commands a move or an update runs on the other machine
-//! (`hided core-move <step>`, `hided core-update`): one parser, so the two
-//! read a flag the same way, and a state folder left out is the folder the
+//! The flags of the commands run on another machine for its core (`hided
+//! core-update`): one parser, so each reads a flag the same way, and a
+//! state folder left out is the folder the
 //! process would use on any other start, which a placement written for the
 //! default folder leaves out.
 

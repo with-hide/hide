@@ -43,27 +43,27 @@ const HOST: &str = "guest-work-host";
 
 /// The programs a build is, which a guest's node, its panes' `hide`, its
 /// hooks and its pane holders run from.
-const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
+pub(super) const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "hide-holder"];
 
 /// How long one step may take: a daemon's start, a node's start from a
 /// program the system checks first, a pane's shell, a dial after a restart.
-const WITHIN: Duration = Duration::from_secs(90);
+pub(super) const WITHIN: Duration = Duration::from_secs(90);
 
 /// One of the two machines: its account, its state folder and the shipped
 /// `hide` at its terminal, which starts and stops its daemon.
-struct Machine {
-    terminal: Terminal,
-    hide: PathBuf,
+pub(super) struct Machine {
+    pub(super) terminal: Terminal,
+    pub(super) hide: PathBuf,
     /// Where its endpoint for other Hides binds.
-    direct: String,
+    pub(super) direct: String,
     /// The folder its terminal is in: a project of its own, since a pane is
     /// listed and typed into for a caller in a project Hide has
     /// (`hided::pane_auth`).
-    project: PathBuf,
+    pub(super) project: PathBuf,
 }
 
 impl Machine {
-    fn command(&self, args: &[&str]) -> Command {
+    pub(super) fn command(&self, args: &[&str]) -> Command {
         let mut command = self.terminal.command_of(&self.hide, args);
         command
             .env("HIDE_PEER_DIRECT", &self.direct)
@@ -73,19 +73,19 @@ impl Machine {
         command
     }
 
-    fn run(&self, args: &[&str]) -> Ran {
+    pub(super) fn run(&self, args: &[&str]) -> Ran {
         Ran::of(self.command(args).output().unwrap())
     }
 
     /// Runs `hide args` and has it succeed.
-    fn ran(&self, args: &[&str]) -> Ran {
+    pub(super) fn ran(&self, args: &[&str]) -> Ran {
         let ran = self.run(args);
         assert!(ran.ok, "hide {args:?}: {}", ran.text());
         ran
     }
 
     /// The daemon's screen connection.
-    fn screen(&self) -> Daemon {
+    pub(super) fn screen(&self) -> Daemon {
         let state: Value =
             serde_json::from_slice(&read(&self.terminal.state.join("hided.json")).unwrap())
                 .unwrap();
@@ -96,7 +96,7 @@ impl Machine {
     }
 
     /// Has this machine's Hide open the project its terminal is in.
-    fn opens_its_project(&self) {
+    pub(super) fn opens_its_project(&self) {
         let (screen, path) = (self.screen(), self.project.to_string_lossy().into_owned());
         screen
             .event(
@@ -112,7 +112,7 @@ impl Machine {
     }
 
     /// The pane of this machine's own project, as `hide ps` lists it.
-    fn own_pane(&self) -> String {
+    pub(super) fn own_pane(&self) -> String {
         let project = self.project.to_string_lossy().into_owned();
         let mut last = Value::Null;
         wait_within("the pane of the machine's own project", WITHIN, || {
@@ -130,12 +130,12 @@ impl Machine {
     }
 
     /// What `hide device list` says at this machine's terminal.
-    fn listed(&self) -> Value {
+    pub(super) fn listed(&self) -> Value {
         self.ran(&["device", "list", "--json"]).json()["value"].clone()
     }
 
     /// Waits until `hide device list` here is as `wanted` reads it.
-    fn lists<T>(&self, what: &str, wanted: impl Fn(&Value) -> Option<T>) -> T {
+    pub(super) fn lists<T>(&self, what: &str, wanted: impl Fn(&Value) -> Option<T>) -> T {
         let mut last = Value::Null;
         wait_within(what, WITHIN, || {
             last = self.listed();
@@ -186,7 +186,7 @@ impl Drop for Machine {
 
 /// A port of loopback no one holds now, for an endpoint that is found again
 /// at the same address after its daemon starts anew.
-fn free_port() -> u16 {
+pub(super) fn free_port() -> u16 {
     UdpSocket::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -196,7 +196,11 @@ fn free_port() -> u16 {
 
 /// Puts the shipped build in `programs` where a host of `state` keeps the
 /// builds of the guest `key`; answers the build's name.
-fn place_build(programs: &Path, state: &Path, key: &hide_peer::protocol::PeerKey) -> String {
+pub(super) fn place_build(
+    programs: &Path,
+    state: &Path,
+    key: &hide_peer::protocol::PeerKey,
+) -> String {
     shipped::place_guest_build(programs, &hide_kit::layout::guest_install_root(state, key))
 }
 
@@ -258,7 +262,7 @@ fn guest_panes(listed: &Value) -> Vec<String> {
 }
 
 /// Waits for the file a command typed into a pane leaves, and reads it.
-fn left(file: &Path) -> String {
+pub(super) fn left(file: &Path) -> String {
     wait_within(&format!("{} from the pane", file.display()), WITHIN, || {
         Ok(std::fs::read_to_string(file)
             .ok()
@@ -272,7 +276,7 @@ const GRID: (u16, u16) = (31, 97);
 
 /// Types `line` and Enter into `pane` as a screen of `machine`'s Hide does:
 /// it shows the pane at its grid, has it drawn whole, and sends the keys.
-async fn types(machine: &Machine, pane: &str, line: &str) {
+pub(super) async fn types(machine: &Machine, pane: &str, line: &str) {
     let screen = machine.screen();
     let mut window = Window::open_at(screen.port, &screen.token, "web").await;
     // A pane on another machine is drawn while that machine is the one in
@@ -306,7 +310,7 @@ async fn types(machine: &Machine, pane: &str, line: &str) {
 }
 
 /// The process whose command line names `words`, each of them.
-fn process_naming(words: &[&str]) -> Option<u32> {
+pub(super) fn process_naming(words: &[&str]) -> Option<u32> {
     let listing = Command::new("ps")
         .args(["-Ao", "pid=,command="])
         .output()

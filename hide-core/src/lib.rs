@@ -30,7 +30,6 @@ pub mod diagnostics;
 mod disk;
 mod display_text;
 pub mod domain;
-mod effects;
 pub mod engine;
 mod environment;
 mod fetch;
@@ -126,8 +125,8 @@ pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
     SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
+pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;
-pub use runtime::core_move::{MoveProject, MoveSource, MoveSourceRefusal, ReleaseSource};
 pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS};
 pub use runtime::serialize_snapshot_delta;
 pub use view_layout::DisplayKind;

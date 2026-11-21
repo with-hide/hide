@@ -1,5 +1,4 @@
 import type { TFunction } from "i18next";
-import type { MoveMachines, MoveView } from "./coreMove";
 import { hostBridge } from "./host";
 import { localDeviceId, type Device, type SnapshotRest } from "./snapshot";
 
@@ -138,26 +137,4 @@ export function windowFirst(devices: readonly Device[] | undefined): Device[] {
  */
 export function coreShared(devices: readonly Device[] | undefined): boolean {
   return windowDeviceId(devices) !== coreRowId(devices) || (devices ?? []).some((device) => device.dials_in === true);
-}
-
-/**
- * The machines a move names, as this window calls them: toward a device,
- * from this machine to that device; back, from the core's machine to this
- * one.
- * The move's frame names the other machine by the registration id this
- * machine's core gave it, which only a core that dials it lists: while the
- * core runs there, before a move back or after a forward move, it is the
- * core's machine.
- * A window the move holds before it drew the core, a reload during a long
- * wait, has no device rows, so it names the other machine by the alias the
- * move reaches it by.
- */
-export function moveMachines(devices: readonly Device[] | undefined, view: Pick<MoveView, "direction" | "device" | "alias">, t: TFunction<"translation">): MoveMachines {
-  const here = t(thisMachineKey(null));
-  const rows = devices ?? [];
-  const listed = rows.find((device) => device.id === view.device);
-  const other = rows.length === 0 && view.alias ? view.alias : listed ? machineName(rows, listed.id, t) : coreMachineName(rows, t);
-  if (view.direction === "back") return { from: other, to: here };
-  if (!view.device) return { from: here, to: here };
-  return { from: here, to: other };
 }

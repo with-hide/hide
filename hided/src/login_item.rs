@@ -1,7 +1,7 @@
 //! The account's login item that runs the core on a state folder: a paired
-//! machine's (PRD device-connect-iroh D-41, B30; `always_on` decides when)
-//! or one a move placed here (PRD core-host-node-move B9, D-25, amendment
-//! 8). The item runs `hided core-login --state-dir <dir>` from a build's
+//! machine's (PRD device-connect-iroh D-41, B30; `always_on` decides when),
+//! or one a core move before 1.2.0 placed here, which its updates keep. The
+//! item runs `hided core-login --state-dir <dir>` from a build's
 //! version folder in its install root, at the account's login and again
 //! after any exit while the folder's keep-alive marker exists; the start
 //! ends at once without the marker (`at_login`), so `hide stop`, which
@@ -46,8 +46,15 @@ pub fn adopt(
     home: &Path,
     state_dir: &Path,
     program: &Path,
+    device_connect: bool,
 ) -> Result<(), String> {
-    put_in(agents, home, state_dir, program, Put::Adopt)
+    put_in(
+        agents,
+        home,
+        state_dir,
+        program,
+        Put::Adopt { device_connect },
+    )
 }
 
 /// Whether putting an item in stops the core running on the folder.
@@ -55,8 +62,10 @@ pub fn adopt(
 enum Put {
     /// A starter replaces the core: its run ends with the old item's.
     Replace,
-    /// The core itself asks: nothing that runs is stopped.
-    Adopt,
+    /// The core itself asks: nothing that runs is stopped. `device_connect`
+    /// is whether that core offers connections between two Hides
+    /// (`env::Env::device_connect`), which the item's core then offers too.
+    Adopt { device_connect: bool },
 }
 
 fn put_in(
@@ -79,18 +88,18 @@ fn put_in(
     }
     let label = hide_kit::layout::core_login_item(home, state_dir);
     let mut environment = item_environment(home)?;
-    // A core a move placed here stays up with no window: its nodes and
-    // phones are its clients. A paired machine's core keeps itself up while
-    // it is paired (`always_on`).
-    if crate::core_move::handover::read(state_dir)?.is_some() {
-        environment.push(("HIDE_KEEP_ALIVE".to_owned(), "1".to_owned()));
-    }
-    // A core adopts an item only for a pairing, which only a build that
-    // offers connections between two Hides keeps (`always_on`): the item's
-    // core has to offer them too, or its start would take the item out. A
-    // Task Scheduler task carries no environment; there the switch is the
+    // The item's core offers connections between two Hides when the core
+    // that adopts it does (`always_on`): an item kept for a pairing would be
+    // taken out by a core that does not offer them, and one kept for a core
+    // moved here, which every build keeps, must not turn them on. A Task
+    // Scheduler task carries no environment; there the switch is the
     // account's own (`env::Env::device_connect`).
-    if put == Put::Adopt && !cfg!(windows) {
+    if put
+        == (Put::Adopt {
+            device_connect: true,
+        })
+        && !cfg!(windows)
+    {
         environment.push((crate::env::HIDE_DEVICE_CONNECT.to_owned(), "1".to_owned()));
     }
     let environment: Vec<(&str, &str)> = environment
@@ -119,7 +128,7 @@ fn put_in(
         .filter(crate::state_file::DaemonState::is_proven_running);
     match put {
         Put::Replace => agents.install(&agent, &marker(state_dir), home, &stop),
-        Put::Adopt => agents.adopt(&agent, &marker(state_dir), home, &stop),
+        Put::Adopt { .. } => agents.adopt(&agent, &marker(state_dir), home, &stop),
     }
     .map_err(|error| format!("the login item {label}: {error}"))?;
     if let Some(previous) = previous
@@ -230,20 +239,6 @@ pub fn exited_at_start(
             .flatten()?;
         Some(format!("the core exited at its start: exit code {code}"))
     }
-}
-
-/// What the core's login item runs it with: the account's home and the
-/// state folder. A move's checks of the account's logins run with it too
-/// (`core_install::checks`).
-pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
-    let environment = vec![
-        ("HOME".to_owned(), home.to_string_lossy().into_owned()),
-        (
-            "HIDE_STATE_DIR".to_owned(),
-            state_dir.to_string_lossy().into_owned(),
-        ),
-    ];
-    Ok(environment)
 }
 
 /// Removes the login item of the core on `state_dir` and its marker, which

@@ -25,16 +25,17 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
-use hide_peer::protocol::{Candidate, StreamKind};
+use hide_peer::protocol::hello::GrantState;
+use hide_peer::protocol::{Candidate, PeerAddr, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
-use hide_peer::{Clock, MachineKey, PeerTransport};
+use hide_peer::{Clock, MachineKey, PeerEvent, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::{OnceCell, broadcast, mpsc};
 
 use crate::ending::Ending;
 
@@ -51,6 +52,7 @@ type Handler = Arc<dyn Fn(Incoming) -> Handling + Send + Sync>;
 
 /// What this machine says of itself to a peer, and how its endpoint is set
 /// up.
+#[derive(Clone, Debug)]
 pub struct Settings {
     pub state_dir: PathBuf,
     /// This build's version, as an update notice names it.
@@ -68,6 +70,90 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// This daemon's, for the machine whose node id is `device`: the one
+    /// set-up of its endpoint, whichever role opens it.
+    pub fn of(env: &crate::env::Env, device: &str) -> Self {
+        let release = crate::build_order::Release::of_this_build();
+        Self {
+            state_dir: env.state_dir.clone(),
+            release: release.is_official(),
+            build: release.version,
+            device: device.to_owned(),
+            direct: env.peer_direct,
+            device_connect: env.device_connect,
+        }
+    }
+
+    /// Opens this machine's endpoint: its key and the state folder's port,
+    /// and its peer records. Answers how the key was come by, for the log.
+    /// A build that does not offer connections between two Hides
+    /// (`device_connect` off) opens none and makes no key.
+    async fn open(&self) -> io::Result<(HostPeers, mpsc::Receiver<Incoming>, String)> {
+        if !self.device_connect {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this build does not offer connections between two Hides",
+            ));
+        }
+        let key_file = layout::machine_key(&self.state_dir);
+        let state_dir = self.state_dir.clone();
+        // The machine id is asked of the system, on macOS through a
+        // program, and the key and the port are files: none on a runtime
+        // thread.
+        let ((key, loaded), port) = tokio::task::spawn_blocking(move || {
+            let machine = hide_platform::host::machine_id()?;
+            let key = MachineKey::load_or_create(&key_file, &machine)?;
+            io::Result::Ok((key, hide_peer::port::of(&state_dir)))
+        })
+        .await
+        .map_err(io::Error::other)??;
+        // The folder's port is what the Windows firewall rule lets in; a
+        // machine whose port cannot be had still connects, through the
+        // relay and the addresses it learns, and the log says why.
+        let port = port
+            .inspect_err(|error| {
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_unavailable",
+                    "message": error.to_string(),
+                }));
+            })
+            .ok();
+        let transport = match IrohTransport::open(&key.secret(), self.endpoint(port)).await {
+            // Another process holds the folder's port: a new one is chosen
+            // and saved as the folder's, so the firewall rule, which names
+            // the old one, reads as missing and Settings > Devices offers to
+            // allow the new one (O3, D-38).
+            Err(error) if port.is_some() => {
+                let state_dir = self.state_dir.clone();
+                let replaced =
+                    tokio::task::spawn_blocking(move || hide_peer::port::replace(&state_dir))
+                        .await
+                        .map_err(io::Error::other)?;
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_replaced",
+                    "port": port,
+                    "replaced_by": replaced.as_ref().ok(),
+                    "message": error.to_string(),
+                }));
+                IrohTransport::open(&key.secret(), self.endpoint(replaced.ok())).await?
+            }
+            opened => opened?,
+        };
+        let (peers, incoming) = Peers::start(
+            transport,
+            Config {
+                state_dir: &self.state_dir,
+                build: &self.build,
+                device: &self.device,
+                release: self.release,
+                clock: Clock::system(),
+            },
+        )?;
+        Ok((peers, incoming, format!("{loaded:?}")))
+    }
+
     /// The endpoint's set-up; the product's binds `port` on every
     /// interface, the state folder's (`hide_peer::port`).
     fn endpoint(&self, port: Option<u16>) -> Options {
@@ -167,6 +253,82 @@ pub fn pairing_confirmed(state_dir: &Path, device_connect: bool) -> io::Result<b
         .any(|host| matches!(host.state, KnownState::Active | KnownState::PausedByMe)))
 }
 
+/// Meets the machine at `to` once on the connection two Hides use, within
+/// `within`: this machine's own endpoint (`Settings::open`, the one its
+/// core role opens) dials it, and that machine names a grant for this one
+/// on the link, pending or in force. The endpoint is opened for this alone
+/// and closed, with every task it started, before this returns, however it
+/// ends. Why they did not meet, otherwise.
+///
+/// For a machine that is not a core yet and so runs no endpoint: the node
+/// of a core moved before 1.2.0, which sets nothing aside until it has met
+/// that core's machine this way (`moved_core::split`). It proves the path
+/// and the two machines' keys and nothing more, and it settles nothing: it
+/// answers no stream the other machine opens, that machine's confirm of a
+/// pairing among them, so that machine's records and what it takes from
+/// this one over SSH are as they were until this machine runs a core.
+/// Blocks; it runs on a thread no runtime drives, with a runtime of its
+/// own that ends with it.
+pub fn meets(settings: &Settings, to: &PeerAddr, within: Duration) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(|error| format!("runtime: {error}"))?;
+    runtime.block_on(async {
+        let (peers, mut incoming, _) = settings
+            .open()
+            .await
+            .map_err(|error| format!("endpoint: {error}"))?;
+        let unanswered = tokio::spawn(async move { while incoming.recv().await.is_some() {} });
+        // Heard from before the dial: the machine says what it grants this
+        // one in the first frame after its hello, which may come before the
+        // dial answers.
+        let mut events = peers.events();
+        let over = tokio::time::Instant::now() + within;
+        let met = async {
+            let link = match tokio::time::timeout_at(over, peers.dial(to)).await {
+                Ok(Ok(link)) => link,
+                Ok(Err(error)) => return Err(format!("dial: {error}")),
+                Err(_) => return Err(format!("dial: no answer within {within:?}")),
+            };
+            let said = async {
+                loop {
+                    match events.recv().await {
+                        Ok(PeerEvent::Granted { key, state }) if key == link.key() => {
+                            return Ok(state);
+                        }
+                        Ok(PeerEvent::Disconnected { key, code }) if key == link.key() => {
+                            return Err(format!("it ended the connection: {code:?}"));
+                        }
+                        Ok(_) => {}
+                        // What was skipped is read from the connection,
+                        // which says `None` until it heard.
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            if link.granted() != GrantState::None {
+                                return Ok(link.granted());
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            return Err("the endpoint closed".to_owned());
+                        }
+                    }
+                }
+            };
+            match tokio::time::timeout_at(over, said).await {
+                Ok(Ok(GrantState::Pending | GrantState::Active)) => Ok(()),
+                Ok(Ok(state)) => Err(format!("its grant for this machine is {state:?}")),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(format!("it named no grant within {within:?}")),
+            }
+        }
+        .await;
+        peers.close().await;
+        unanswered.abort();
+        met
+    })
+}
+
 impl PeerHost {
     /// Nothing is opened yet. `shutdown` is the daemon's end, which closes
     /// the endpoint and every connection.
@@ -252,80 +414,18 @@ impl PeerHost {
     }
 
     async fn open_endpoint(self: &Arc<Self>) -> io::Result<HostPeers> {
-        if !self.settings.device_connect {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "this build does not offer connections between two Hides",
-            ));
-        }
         if self.shutdown.has_ended() {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "the daemon is ending",
             ));
         }
-        let key_file = layout::machine_key(&self.settings.state_dir);
-        let state_dir = self.settings.state_dir.clone();
-        // The machine id is asked of the system, on macOS through a
-        // program, and the key and the port are files: none on a runtime
-        // thread.
-        let ((key, loaded), port) = tokio::task::spawn_blocking(move || {
-            let machine = hide_platform::host::machine_id()?;
-            let key = MachineKey::load_or_create(&key_file, &machine)?;
-            io::Result::Ok((key, hide_peer::port::of(&state_dir)))
-        })
-        .await
-        .map_err(io::Error::other)??;
-        // The folder's port is what the Windows firewall rule lets in; a
-        // machine whose port cannot be had still connects, through the
-        // relay and the addresses it learns, and the log says why.
-        let port = port
-            .inspect_err(|error| {
-                hide_core::diagnostic!(json!({
-                    "component": "peer_host",
-                    "kind": "peer_host.port_unavailable",
-                    "message": error.to_string(),
-                }));
-            })
-            .ok();
-        let transport = match IrohTransport::open(&key.secret(), self.settings.endpoint(port)).await
-        {
-            // Another process holds the folder's port: a new one is chosen
-            // and saved as the folder's, so the firewall rule, which names
-            // the old one, reads as missing and Settings > Devices offers to
-            // allow the new one (O3, D-38).
-            Err(error) if port.is_some() => {
-                let state_dir = self.settings.state_dir.clone();
-                let replaced =
-                    tokio::task::spawn_blocking(move || hide_peer::port::replace(&state_dir))
-                        .await
-                        .map_err(io::Error::other)?;
-                hide_core::diagnostic!(json!({
-                    "component": "peer_host",
-                    "kind": "peer_host.port_replaced",
-                    "port": port,
-                    "replaced_by": replaced.as_ref().ok(),
-                    "message": error.to_string(),
-                }));
-                IrohTransport::open(&key.secret(), self.settings.endpoint(replaced.ok())).await?
-            }
-            opened => opened?,
-        };
-        let (peers, incoming) = Peers::start(
-            transport,
-            Config {
-                state_dir: &self.settings.state_dir,
-                build: &self.settings.build,
-                device: &self.settings.device,
-                release: self.settings.release,
-                clock: Clock::system(),
-            },
-        )?;
+        let (peers, incoming, loaded) = self.settings.open().await?;
         hide_core::diagnostic!(json!({
             "component": "peer_host",
             "kind": "peer_host.opened",
             "key": peers.key().short(),
-            "machine_key": format!("{loaded:?}"),
+            "machine_key": loaded,
             "direct": self.settings.direct.is_some(),
         }));
         tokio::spawn(Arc::clone(self).serve(peers.clone(), incoming));
@@ -577,6 +677,119 @@ mod tests {
                 "{state_now:?}"
             );
         }
+    }
+
+    /// The machine a split meets its core's from: a state folder with its
+    /// key in it and no endpoint.
+    fn node(dir: &Path) -> (Settings, PeerKey) {
+        let settings = Settings {
+            state_dir: dir.to_path_buf(),
+            build: "1.3.0-test".to_owned(),
+            device: "macbook".to_owned(),
+            release: false,
+            direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
+            device_connect: true,
+        };
+        let machine = hide_platform::host::machine_id().unwrap();
+        let (key, _) = MachineKey::load_or_create(&layout::machine_key(dir), &machine).unwrap();
+        (settings, key.public())
+    }
+
+    /// A build that does not offer connections between two Hides meets no
+    /// machine: it opens no endpoint and makes no key.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_build_without_connections_between_hides_meets_no_machine() {
+        let state = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            state_dir: state.path().to_path_buf(),
+            build: "1.3.0-test".to_owned(),
+            device: "macbook".to_owned(),
+            release: false,
+            direct: Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0))),
+            device_connect: false,
+        };
+        let core = PeerAddr::new(
+            guest(),
+            vec![Candidate::Ip(SocketAddr::from((
+                std::net::Ipv4Addr::LOCALHOST,
+                9,
+            )))],
+        );
+        let refused = meeting(&settings, &core, WITHIN).await.unwrap_err();
+        assert!(refused.starts_with("endpoint: "), "{refused}");
+        assert!(!layout::machine_key(state.path()).exists());
+    }
+
+    /// `meets` as the node role calls it: on a thread no runtime drives.
+    async fn meeting(settings: &Settings, to: &PeerAddr, bound: Duration) -> Result<(), String> {
+        let (settings, to) = (settings.clone(), to.clone());
+        let met = std::thread::spawn(move || meets(&settings, &to, bound));
+        tokio::task::spawn_blocking(move || met.join().unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// A node meets its core's machine from an endpoint that is its own
+    /// for the meeting alone: the machine that named a grant for it is met,
+    /// its grant is as pending after as before, the connection ends with
+    /// the meeting, and the folder's endpoint opens again right after, as
+    /// the core role's does (PRD device-connect-iroh B45).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_meeting_reaches_the_machine_that_named_a_grant_and_settles_nothing() {
+        let core = Machine::new("studio");
+        let state = tempfile::tempdir().unwrap();
+        let (settings, key) = node(state.path());
+        Grants::open(layout::peer_grants(core.dir.path()))
+            .unwrap()
+            .grant_pending(key, "macbook", "MacBook", Via::Ssh, now_unix_ms())
+            .unwrap();
+        let peers = core.host.start().await.unwrap().expect("a grant opens it");
+        let mut events = peers.events();
+
+        assert_eq!(meeting(&settings, &core.addr(), WITHIN).await, Ok(()));
+        within("the meeting's connection to end", async {
+            loop {
+                if let hide_peer::PeerEvent::Disconnected { key: gone, .. } =
+                    events.recv().await.unwrap()
+                    && gone == key
+                {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(peers.link(&key).is_none());
+        assert!(
+            !pairing_confirmed(core.dir.path(), true).unwrap(),
+            "the grant is still pending"
+        );
+        assert_eq!(meeting(&settings, &core.addr(), WITHIN).await, Ok(()));
+    }
+
+    /// A machine that names no grant for this one is not met, and neither
+    /// is an address nothing answers at, which ends at the bound.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_meeting_fails_with_a_stranger_and_at_an_address_nothing_answers() {
+        let core = Machine::new("studio");
+        grant(&core, guest());
+        core.host.start().await.unwrap().expect("a grant opens it");
+        let state = tempfile::tempdir().unwrap();
+        let (settings, _) = node(state.path());
+
+        // Whether its hello says so or it ends the connection first.
+        meeting(&settings, &core.addr(), WITHIN).await.unwrap_err();
+
+        // A port that was free a moment ago, with nothing bound to it.
+        let free = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let nowhere = PeerAddr::new(
+            core.addr().key,
+            vec![Candidate::Ip(free.local_addr().unwrap())],
+        );
+        drop(free);
+        let apart = meeting(&settings, &nowhere, Duration::from_millis(500))
+            .await
+            .unwrap_err();
+        assert!(apart.starts_with("dial:"), "{apart}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

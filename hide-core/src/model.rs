@@ -51,11 +51,6 @@ pub struct CoreOptions {
     /// Absent keeps them in memory for the session only, as a test core does.
     #[serde(default)]
     pub local_issues_path: Option<String>,
-    /// The core starts on a move's copy whose link has not committed it:
-    /// it acts on nothing outside the machine until the embedder calls
-    /// `Core::release_effects` (`effects.rs`).
-    #[serde(default)]
-    pub effects_held: bool,
     /// What the machine this core runs on calls itself, which a window on
     /// another machine shows for the core's row (PRD core-host-node-move
     /// B2); absent where the system names none.
@@ -5167,9 +5162,9 @@ pub struct UiStateSnapshot {
     pub overview_graph: OverviewGraphChoices,
     pub selected_path: Option<String>,
     pub selected_pane_id: Option<String>,
-    /// Set by a core move's rekey (`node_migration::reown`): the machine the
-    /// core now runs on kept its selection only in its own engine while the
-    /// other core ran, so the first local session opens on the engine's focus
+    /// Set by a core move before 1.2.0: the machine the core now runs on
+    /// kept its selection only in its own engine while the other core ran,
+    /// so the first local session opens on the engine's focus
     /// (`consume_restore_hint`). Core only, and kept in the store until that
     /// session takes it.
     #[serde(skip)]
@@ -5194,10 +5189,10 @@ pub struct UiStateSnapshot {
     #[serde(default)]
     pub device_registrations: Vec<DeviceRegistration>,
     /// The name the operator registered this machine under while a core on
-    /// another machine dialed it, kept when that core moved here, since a
-    /// core does not register its own machine (`node_migration::reown`); the
-    /// core's own device row carries it as its label, so the machine keeps
-    /// its name across the move. None on a machine never registered so.
+    /// another machine dialed it, kept when that core moved here before
+    /// 1.2.0, since a core does not register its own machine; the core's own
+    /// device row carries it as its label, so the machine keeps its name.
+    /// None on a machine never registered so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_label: Option<String>,
     #[serde(default = "default_accent_hex")]
@@ -5357,8 +5352,7 @@ pub struct UiStateSnapshot {
     #[serde(default)]
     pub agent_permissions: crate::agent_permission::AgentPermissions,
     /// The same for each registered device's agents, by device id; this
-    /// machine's are `agent_permissions`, swapped as `expanded_paths` is when
-    /// the core moves (`node_migration::reown::OWN_PATHS`).
+    /// machine's are `agent_permissions`.
     #[serde(default)]
     pub device_agent_permissions: BTreeMap<String, crate::agent_permission::AgentPermissions>,
     /// The agent kind and each kind's model the operator last started with,
@@ -6371,6 +6365,14 @@ impl LinkOrigin {
     /// a device is switched from (D-49).
     pub fn dials_helper(&self) -> bool {
         matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+    }
+
+    /// Whether the registration becomes its machine's own Hide's device in
+    /// place, keeping its id and name: a helper device that is switched,
+    /// and a node that dialed in, which only a core moved before 1.2.0
+    /// has, once that machine runs a core of its own (D-46).
+    pub fn becomes_peer(&self) -> bool {
+        self.dials_helper() || matches!(self, Self::Inbound)
     }
 
     /// Whether the device can be switched to its machine's own connection
@@ -12072,7 +12074,6 @@ mod release_1_2_1_wire_tests {
             workspace_views_path: None,
             shortcut_import_path: None,
             local_issues_path: None,
-            effects_held: false,
             machine_name: None,
             windows_drives: None,
             account_state_folder: false,

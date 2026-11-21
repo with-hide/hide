@@ -1,8 +1,7 @@
 //! Another machine, reached through one owned `ssh`: signed in once and
 //! kept for the commands run there and the files copied to and from it.
 //! The connection ends when this is dropped. What a caller runs there and
-//! how it reads the answer are the caller's: a move's steps
-//! (`core_move::driver`), or an install's.
+//! how it reads the answer are the caller's.
 
 use std::path::Path;
 use std::sync::Arc;

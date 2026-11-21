@@ -803,6 +803,27 @@ fn own_install() -> Option<&'static str> {
         .as_deref()
 }
 
+/// Whether `peer` runs in a pane another machine's node holds on this
+/// account: the device folder was this machine's own node's until the two
+/// were split, and the paired machine's node took it over with its panes
+/// (`hide_kit::layout::HelperGuest::panes`, PRD device-connect-iroh D-46).
+/// One small read for a caller this core does not place, and the folder's
+/// records only on a machine that was split.
+fn guests_pane(peer: i32) -> bool {
+    hide_platform::host::home_dir().is_ok_and(|home| guests_pane_in(&home, peer))
+}
+
+fn guests_pane_in(home: &Path, peer: i32) -> bool {
+    let folder = hide_kit::layout::device_node_state(home);
+    if hide_kit::layout::HelperGuest::read(&folder).is_none_or(|taken| taken.panes.is_none()) {
+        return false;
+    }
+    hide_kit::panes::live_holders(&folder)
+        .into_iter()
+        .filter_map(|holder| i32::try_from(holder).ok())
+        .any(|holder| peer == holder || hide_host::pane_peer::descends_from(peer, holder))
+}
+
 #[derive(Clone, Debug)]
 pub struct Attestation {
     pane_id: String,
@@ -842,6 +863,7 @@ fn attest_bootstrap(
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
     own: Option<&str>,
+    guests_pane: &dyn Fn(i32) -> bool,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
     // The encoded checkout and tool callers are hided's own keys for the
     // core; a request never names one, whatever the engine's pane namespace
@@ -877,6 +899,16 @@ fn attest_bootstrap(
             "pane_id": request.pane_id,
         }));
         return Err("pane_not_moved");
+    }
+    // A caller in a pane another machine's node holds here is that node's
+    // to answer, though the pane names this installation: the node took
+    // over the folder this machine's own node ran in before the two were
+    // split (PRD device-connect-iroh D-46). Bound by its folder here, its
+    // hook reports and its `hide` would reach this core, which does not
+    // run its session; refused as another installation's, the caller asks
+    // the node's bridge next (`hook_request::install`).
+    if pane.is_err() && guests_pane(peer) {
+        return Err(install::OTHER_INSTALL);
     }
     match pane {
         Ok(attestation) => Ok((attestation, None)),
@@ -1348,7 +1380,8 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())?;
+            let (attestation, _) =
+                attest_bootstrap(peer, request, engine, core, own_install(), &guests_pane)?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1428,7 +1461,7 @@ fn answer_bootstrap(
         .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
             let (attestation, pane_reason) =
-                attest_bootstrap(peer, &request, engine, core, own_install())?;
+                attest_bootstrap(peer, &request, engine, core, own_install(), &guests_pane)?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -2230,22 +2263,28 @@ mod tests {
         // before the fallback ran; the fallback's own answer is the proof it ran
         // (this test's cwd is inside no registered checkout).
         assert_eq!(
-            attest_bootstrap(peer, &request("w9J:p17"), None, &core, None).unwrap_err(),
+            attest_bootstrap(peer, &request("w9J:p17"), None, &core, None, &|_| false).unwrap_err(),
             "checkout_not_registered"
         );
         assert_eq!(
-            attest_bootstrap(peer, &request(""), None, &core, None).unwrap_err(),
+            attest_bootstrap(peer, &request(""), None, &core, None, &|_| false).unwrap_err(),
             "checkout_not_registered"
         );
         // A request cannot name the core's encoded checkout caller, or a
         // tool's, itself (C4).
         for named in ["checkout:abcd:/tmp", "access:0123456789abcdef"] {
             assert_eq!(
-                attest_bootstrap(peer, &request(named), None, &core, None).unwrap_err(),
+                attest_bootstrap(peer, &request(named), None, &core, None, &|_| false).unwrap_err(),
                 "invalid_request",
                 "{named}"
             );
         }
+        // A caller in a pane another machine's node holds here is that
+        // node's: it is never bound by its folder (D-46).
+        assert_eq!(
+            attest_bootstrap(peer, &request("w9J:p17"), None, &core, None, &|_| true).unwrap_err(),
+            install::OTHER_INSTALL
+        );
         // An unreadable caller fails closed before any lookup.
         assert_eq!(
             attest_checkout(i32::MAX, &format!("{:032x}", 8), &core).unwrap_err(),

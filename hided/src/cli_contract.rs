@@ -1377,7 +1377,10 @@ pub const COMMANDS: &[Spec] = &[
     // the request it made: the target saves a grant that opens nothing
     // until that machine confirms it over the connection, and answers its
     // own ids and addresses. Run again with the same request, it answers
-    // the same.
+    // the same. With --grant, the grant the asking machine gives this one,
+    // both are settled at once and this machine becomes that one's guest:
+    // taken only from a machine this core already runs work for, the node
+    // of a core moved here before 1.2.0 (PRD device-connect-iroh D-46).
     Spec {
         words: &["device", "accept-ssh"],
         arguments: &[],
@@ -1390,6 +1393,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--name", Text),
             switch("--wsl"),
             optional("--helper", Text),
+            optional("--grant", Key),
         ],
         rest: None,
         answers: &["device_accepted"],
@@ -1398,6 +1402,8 @@ pub const COMMANDS: &[Spec] = &[
             "invalid_request",
             "device_already_connected",
             "device_limit",
+            "device_unknown",
+            "hide_unavailable",
         ],
     },
     // What a machine that switched its device here runs once this machine

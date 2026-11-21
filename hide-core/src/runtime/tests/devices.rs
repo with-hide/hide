@@ -316,7 +316,6 @@ fn runtime_reading(
         workspace_views_path: None,
         shortcut_import_path: None,
         local_issues_path: None,
-        effects_held: false,
         machine_name: None,
         windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
@@ -373,30 +372,6 @@ fn remote_runtime_with_unreadable_config() -> SharedRuntime {
     });
     drop(runtime);
     shared
-}
-
-/// PRD core-host-node-move amendment 3: a core waiting for its move's link
-/// keeps the registration it is given but dials nobody; releasing the hold
-/// dials every registration.
-#[test]
-fn a_pending_core_dials_no_device_until_its_link_commits() {
-    let shared = remote_runtime_with_unreadable_config();
-    let mut runtime = shared.lock().unwrap();
-    runtime.hold_effects();
-    assert!(register_allowed_device(&mut runtime, "studio"));
-    assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
-    assert!(
-        runtime.snapshot().status.remote.is_empty(),
-        "no connection is attempted"
-    );
-    assert!(runtime.release_effects());
-    drop(runtime);
-    wait(&shared, "released device connection attempt", |runtime| {
-        device(runtime, "studio").problem.is_some()
-    });
-    let runtime = shared.lock().unwrap();
-    let attempt = device(&runtime, "studio").message.clone().expect("reason");
-    assert!(attempt.contains("bad configuration option"), "{attempt}");
 }
 
 /// Retry resolves configuration again instead of replaying the cached
@@ -1179,7 +1154,6 @@ fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_
                     workspace_views_path: None,
                     shortcut_import_path: None,
                     local_issues_path: None,
-                    effects_held: false,
                     machine_name: None,
                     windows_drives: None,
                     account_state_folder: false,
@@ -2007,4 +1981,186 @@ fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
         "{:?}",
         terminals.devices()
     );
+}
+
+/// The machine a core was moved off before 1.2.0 dialed this core as its
+/// node. Once that machine runs a core of its own and is paired with this
+/// one, the same registration is its device (PRD device-connect-iroh D-46,
+/// B45): the id and the name stay and nothing is registered beside it, and
+/// until the grant is active the node's registration is untouched. The
+/// pairing is the consent this core's node runs there under, without which
+/// the core would never dial the machine and its work there would stay
+/// unreachable.
+#[test]
+fn a_node_that_dialed_in_becomes_its_machines_device_once_paired() {
+    use crate::model::{DeviceRegistration, LinkOrigin};
+    let mut runtime = runtime();
+    let key = "cd".repeat(32);
+    let dispatch = |runtime: &mut Runtime, opens: &str| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": "cd".repeat(32), "device_id": "macbook-id", "name": "its-own-name",
+                "opens": opens, "opened_by": "active", "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]},
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let node = DeviceRegistration {
+        id: "macbook-id".to_owned(),
+        label: "MacBook".to_owned(),
+        origin: LinkOrigin::Inbound,
+        host_consent: None,
+    };
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(node.clone());
+    runtime.rebuild_device_rows();
+
+    dispatch(&mut runtime, "confirming");
+    assert_eq!(runtime.device_registration("macbook-id"), Some(&node));
+
+    dispatch(&mut runtime, "active");
+    let device = runtime.device_registration("macbook-id").unwrap().clone();
+    assert_eq!(
+        device.origin,
+        LinkOrigin::Peer {
+            key,
+            switched: true
+        }
+    );
+    assert_eq!(
+        device.label, "MacBook",
+        "the name it was registered under stays"
+    );
+    assert!(
+        device.host_consent.is_some(),
+        "the pairing is the consent this core's node runs there under"
+    );
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+}
+
+/// The moved core's side of every released state folder (PRD
+/// device-connect-iroh D-46, B45). No release since 1.2.0 can move a core,
+/// so no released folder holds a machine that dials in; the step reads each
+/// folder's device as the machine a core was moved off, which a move before
+/// 1.2.0 left registered under the same id and name, dialing in. A start
+/// then finds it as the node that keeps the core on (`dialing_nodes`), and
+/// once that machine is paired its registration becomes the paired
+/// machine's in place: the same id and name, and nothing else of the
+/// folder's state changed.
+#[test]
+fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing_else_changed() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::CORE_STATE;
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
+    let key = "cd".repeat(32);
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let path = state.path().join(CORE_STATE);
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let device = stored["device_registrations"]
+            .as_array_mut()
+            .and_then(|devices| devices.iter_mut().find(|row| row["ssh_alias"].is_string()))
+            .unwrap_or_else(|| panic!("{tag}: the folder registers no dialed device"));
+        let id = device["id"].as_str().unwrap().to_owned();
+        let row = device.as_object_mut().unwrap();
+        for dialed in ["ssh_alias", "naming", "host_consent"] {
+            row.remove(dialed);
+        }
+        row.insert("inbound".to_owned(), true.into());
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        assert_eq!(
+            crate::dialing_nodes(&path).unwrap(),
+            std::slice::from_ref(&id),
+            "{tag}"
+        );
+
+        // The store is read by the start itself, so what is in front and
+        // every other record is the folder's own.
+        let mut runtime = runtime_reading(
+            &path,
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        let node = runtime
+            .device_registration(&id)
+            .unwrap_or_else(|| panic!("{tag}: the start dropped the node that dials in"))
+            .clone();
+        assert_eq!(node.origin, LinkOrigin::Inbound, "{tag}");
+        let others: Vec<_> = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| registration.id != id)
+            .cloned()
+            .collect();
+        let before = rest(&runtime);
+        let paired = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": key, "device_id": id, "name": "its-own-name",
+                "opens": "active", "opened_by": "active", "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]},
+        }))
+        .expect("event");
+        runtime.dispatch_json(&paired);
+
+        // The same registration, by its machine's key now, with the
+        // pairing's consent and nothing else.
+        let mut expected = node;
+        expected.origin = LinkOrigin::Peer {
+            key: key.clone(),
+            switched: true,
+        };
+        let switched = runtime.device_registration(&id).cloned().unwrap();
+        assert!(switched.host_consent.is_some(), "{tag}");
+        expected.host_consent = switched.host_consent.clone();
+        assert_eq!(switched, expected, "{tag}");
+        let left: Vec<_> = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| registration.id != id)
+            .cloned()
+            .collect();
+        assert_eq!(left, others, "{tag}: another device changed");
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
+        assert!(
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: becoming the paired machine's device changed another record: {changed:#?}"
+        );
+    }
 }

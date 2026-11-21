@@ -651,10 +651,11 @@ pub(crate) fn start(
     }
 }
 
-/// Puts this build in its version folder under `root` on a machine that
-/// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged, packed as
-/// [`install`] packs them. Answers where the build's `hided` is.
+/// Puts this build, whole, in its version folder under `root` on a machine
+/// that already runs a build of Hide's (a core update, PRD
+/// core-host-node-move B10), sending only the files it lacks or holds
+/// damaged, packed as [`install`] packs them. Answers where the build's
+/// `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,

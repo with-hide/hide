@@ -107,9 +107,6 @@ pub struct AppState {
     /// reconnects to the role mounted next on the same seat rather than wait
     /// on a core that has stopped (PRD core-host-node-move B4).
     pub role_ended: tokio::sync::watch::Receiver<bool>,
-    /// Closed while this core runs on a move's copy that has not committed:
-    /// it takes no move of its own then, and dials nothing to check one.
-    pub move_gate: Arc<crate::core_move::gate::MoveGate>,
     pub ui_dir: Option<PathBuf>,
     pub version: &'static str,
     /// The seat this role is mounted on; `/health` names its instance, so a
@@ -900,8 +897,6 @@ async fn screen_loop(
     if previous == 0 {
         state.roots.resume();
     }
-    // This screen's hold on a move it asks for, which its end lets go of.
-    let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
     let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let desktop = handshake.client_kind.as_deref() == Some("desktop");
     if renderer {
@@ -951,16 +946,7 @@ async fn screen_loop(
         client_gone(&state, connection, renderer, desktop);
         return;
     }
-    // A move of the core is the process's, beside the core's state.
-    let mut move_frames = state.seat.moves.subscribe();
     let mut window_calls = state.window_calls.subscribe();
-    if renderer && relay.is_none() {
-        let frame = mover.frame(&move_frames.borrow_and_update());
-        if socket.send(Message::Text(frame.into())).await.is_err() {
-            client_gone(&state, connection, renderer, desktop);
-            return;
-        }
-    }
     // A desktop window shows the agent notifications (`agent_notice`); a
     // browser tab never does (PRD first-run-onboarding D-14), so it keeps no
     // receiver that would hold frames it never reads.
@@ -1125,15 +1111,6 @@ async fn screen_loop(
                     break;
                 }
             }
-            changed = move_frames.changed(), if renderer && relay.is_none() => {
-                if changed.is_err() {
-                    break;
-                }
-                let frame = mover.frame(&move_frames.borrow_and_update());
-                if socket.send(Message::Text(frame.into())).await.is_err() {
-                    break;
-                }
-            }
             notice = async {
                 match agent_notices.as_mut() {
                     Some(notices) => notices.recv().await,
@@ -1241,23 +1218,6 @@ async fn screen_loop(
                                     let answer = pairing.window_event(&event, own).await;
                                     let _ = answers.send(answer.to_string()).await;
                                 });
-                            }
-                            Ok(ClientAction::CoreMove(event)) => {
-                                // A node's window moves the core from its own
-                                // machine's hided, never through this one.
-                                let answer = if relay.is_some() {
-                                    Err("move_not_here")
-                                } else if !state.move_gate.is_open() {
-                                    Err("core_pending")
-                                } else {
-                                    mover.request_event(&event)
-                                };
-                                if let Err(reason) = answer {
-                                    let frame = crate::core_move::control::refusal_frame(reason);
-                                    if socket.send(Message::Text(frame.into())).await.is_err() {
-                                        break;
-                                    }
-                                }
                             }
                             Ok(ClientAction::BrowserComment(event)) => {
                                 // A linked node's screen shows pages its own
@@ -2613,8 +2573,6 @@ pub(crate) fn token_matches(offered: &str, expected: &str) -> bool {
 /// binary frames of a `file_bytes` read.
 enum ClientAction {
     FileBytes(Value),
-    /// A move of the core, which this process's supervisor takes.
-    CoreMove(Value),
     /// Something the operator does about pairing (`pairing_*`), which the
     /// daemon's pairing answers for this client alone.
     Pairing(Value),
@@ -2681,9 +2639,6 @@ fn handle_client_text(
     };
     if event.get("kind").and_then(Value::as_str) == Some("file_bytes") {
         return Ok(ClientAction::FileBytes(event));
-    }
-    if event.get("kind").and_then(Value::as_str) == Some("core_move") {
-        return Ok(ClientAction::CoreMove(event));
     }
     if event.get("kind").and_then(Value::as_str) == Some("file_index") {
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));

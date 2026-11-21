@@ -115,6 +115,15 @@ pub struct NodeState {
     /// machine's window (B16), recorded in the placement first, or retries
     /// it from the window whose connection is given.
     pub link_control: Arc<dyn Fn(LinkAction, u64) -> Result<(), String> + Send + Sync>,
+    /// Why this machine was not split from its core on this connection,
+    /// as a code, which a screen the core draws is told (`core_link`
+    /// frame, phase `live`) for its device tile (PRD device-connect-iroh
+    /// B45).
+    pub split_failed: Arc<dyn Fn() -> Option<&'static str> + Send + Sync>,
+    /// Whether this machine becomes a Hide of its own once it reaches its
+    /// core (`NodeRole::splits`), which a held screen is told so it says
+    /// what the wait is for.
+    pub splits: bool,
     /// What the dial a held window's Retry started asks, and that window,
     /// which alone is told (PRD system-ssh-device-link B33).
     pub sign_ins: watch::Receiver<Option<Shown>>,
@@ -253,6 +262,12 @@ impl NodeDaemon {
                 Ok(())
             }) as Arc<dyn Fn(LinkAction, u64) -> Result<(), String> + Send + Sync>
         };
+        let splits = role.splits();
+        let split_failed = {
+            let role = Arc::downgrade(&role);
+            Arc::new(move || role.upgrade().and_then(|role| role.split_failed()))
+                as Arc<dyn Fn() -> Option<&'static str> + Send + Sync>
+        };
         let phases = role.phases();
         let sign_ins = role.sign_ins();
         let answer_sign_in = {
@@ -298,6 +313,8 @@ impl NodeDaemon {
                 core_alias,
                 connect_again,
                 link_control,
+                split_failed,
+                splits,
                 sign_ins,
                 answer_sign_in,
                 release_sign_in,
@@ -317,6 +334,12 @@ impl NodeDaemon {
             reaper,
             browser: follow,
         })
+    }
+
+    /// Turns true once this machine was split from its core
+    /// (`NodeRole::became_core`).
+    pub fn became_core(&self) -> watch::Receiver<bool> {
+        self.role.became_core()
     }
 
     /// The link's phase, for a caller that waits on it.

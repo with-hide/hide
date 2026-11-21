@@ -655,16 +655,16 @@ fn a_disconnect_with_the_store_full_a_leave_or_a_restore_ends_what_the_tool_kept
             // holds it, so its queue fills and stays full.
             let mut guard = fixture.runtime.lock().unwrap();
             let client = guard.delivery_client.clone().unwrap();
-            while client
-                .post(crate::delivery::worker::Effect::Tick(Vec::new()))
-                .is_ok()
-            {}
-            assert_eq!(
-                client
-                    .post(crate::delivery::worker::Effect::Tick(Vec::new()))
-                    .unwrap_err(),
-                "capacity"
-            );
+            // The refusal read is the one that ended the filling: the store's
+            // worker can take one more item before it reaches that read, so
+            // a second post is not sure to be refused.
+            let refused = loop {
+                if let Err(refused) = client.post(crate::delivery::worker::Effect::Tick(Vec::new()))
+                {
+                    break refused;
+                }
+            };
+            assert_eq!(refused, "capacity");
             match end {
                 "revoke" => assert!(guard.access_event(AccessEvent::Revoke {
                     id: connection.clone(),

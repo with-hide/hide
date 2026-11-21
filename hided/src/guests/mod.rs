@@ -308,6 +308,7 @@ impl Guests {
         let taken = layout::HelperGuest {
             key: guest.to_hex(),
             root,
+            panes: None,
         };
         match serde_json::to_vec(&taken)
             .map_err(io::Error::other)

@@ -40,8 +40,8 @@ impl DaemonState {
 /// private: it holds the daemon's token, and the delivery ledger refuses a
 /// folder others can read. One this account owns that an earlier build left
 /// open (a device helper's bridge folder made `~/.hide/state` with the
-/// umask's mode) is restricted here, where `hide connect`, every daemon role
-/// and the core a move starts open it, before any store reads it; a link or
+/// umask's mode) is restricted here, where `hide connect` and every daemon
+/// role open it, before any store reads it; a link or
 /// another account's folder is refused, and no daemon starts on it.
 fn create_private_dir(dir: &Path) -> io::Result<()> {
     let error = match private::own_dir(dir) {

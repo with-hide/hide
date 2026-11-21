@@ -15,10 +15,7 @@
 //! starts, so a retry starts it again (B40). All three ends leave `current`
 //! at the build that runs or is to run and keep the other build of
 //! the update, so a later connection reuses its files and no more than two
-//! builds are kept. A move holds this machine's handover record while it
-//! runs, and the update holds that record's lock for its whole length, so
-//! the two never overlap: an update finds a move's record and is refused as
-//! `move_running`.
+//! builds are kept.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -27,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::core_install::starter::CoreStarter;
-use crate::core_move::handover;
 
 const USAGE: &str = "usage: hided core-update [--state-dir <dir>] --previous <hided> --intent <id>";
 
@@ -168,15 +164,6 @@ fn update_with<S: Starter>(
             program.display(),
             args.previous.display()
         ));
-    }
-    let held = handover::hold(&args.state_dir)?;
-    if let Some(record) = held.read()? {
-        log(
-            &args.intent,
-            "update.refused",
-            json!({"move": record.intent}),
-        );
-        return Err("move_running".to_owned());
     }
     let starter = starter()?;
     log(

@@ -1,6 +1,6 @@
 //! An end that stays announced: a role's end, and the process's stop
 //! request. Each is level-triggered, so a task that looks only after it was
-//! announced, such as a supervisor busy in a move's step when `hide stop`
+//! announced, such as a supervisor busy starting a role when `hide stop`
 //! arrives, still sees it; a `Notify` would have dropped it.
 
 use std::sync::Arc;

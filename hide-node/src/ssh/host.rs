@@ -3070,14 +3070,14 @@ mod tests {
         let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
-        let bare = packages.payload(os, arch).unwrap();
+        let bare = packages.local(os, arch).unwrap();
         assert_eq!(bare.files[0].relative, HELPER_NAME);
         assert_eq!(bare.files.len(), 1);
         assert_eq!(bare.missing.len(), 2, "{:?}", bare.missing);
 
         write(&directory.path().join(CLI_NAME), b"cli", 0o755);
         write(&directory.path().join(HOOKS_NAME), b"hooks", 0o755);
-        let full = packages.payload(os, arch).unwrap();
+        let full = packages.local(os, arch).unwrap();
         assert!(full.missing.is_empty(), "{:?}", full.missing);
         assert_eq!(
             relative(&full),
@@ -3103,7 +3103,7 @@ mod tests {
             b"other",
             0o755,
         );
-        let other = packages.payload(os, other_arch).unwrap();
+        let other = packages.local(os, other_arch).unwrap();
         assert_eq!(relative(&other), vec![("hided".to_owned(), true),]);
         assert_eq!(other.missing.len(), 2, "{:?}", other.missing);
     }
@@ -3192,12 +3192,12 @@ mod tests {
         write(&directory.path().join(HELPER_NAME), b"helper", 0o755);
         write(&directory.path().join(HOOKS_NAME), b"one", 0o644);
         let packages = HelperPackages::new(Some(directory.path().to_path_buf()), UNPUBLISHED);
-        let first = packages.payload(os, arch).unwrap().version();
-        assert_eq!(packages.payload(os, arch).unwrap().version(), first);
+        let first = packages.local(os, arch).unwrap().version();
+        assert_eq!(packages.local(os, arch).unwrap().version(), first);
         write(&directory.path().join(HOOKS_NAME), b"two", 0o644);
-        let second = packages.payload(os, arch).unwrap().version();
+        let second = packages.local(os, arch).unwrap().version();
         assert_ne!(second, first);
         write(&directory.path().join(HOOKS_NAME), b"two", 0o755);
-        assert_ne!(packages.payload(os, arch).unwrap().version(), second);
+        assert_ne!(packages.local(os, arch).unwrap().version(), second);
     }
 }

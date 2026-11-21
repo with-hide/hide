@@ -27,6 +27,8 @@ type Socket =
 
 #[cfg(unix)]
 mod guest_work;
+#[cfg(unix)]
+mod moved_core;
 
 /// The machine id the guest daemon runs under, so one host is two machines.
 const GUEST: &str = "pairing-guest";
@@ -611,6 +613,94 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     assert_eq!(pairing_frames, 0);
 }
 
+/// What a move before 1.2.0 left in the state of the core that was moved
+/// to this machine: the machine it was moved off, `node`, registered as a
+/// node that dials in.
+fn moved_off_dials_in(state: &Path, node: &str) {
+    std::fs::write(
+        state.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "device_registrations": [{"id": node, "label": "MacBook", "inbound": true}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// The moved core's side of a split (PRD device-connect-iroh D-46, B45): a
+/// core that a machine dials as its node takes that machine's grant in the
+/// ask that gives its own, both settled at once with no question and no
+/// confirm over a connection, and answers the same when asked again. The
+/// same ask from a machine it runs nothing for is refused and saves
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machine() {
+    let root = crate::fixtures::fixture_root("hs");
+    let env = host_env(root.path());
+    moved_off_dials_in(&env.state_dir, "moved-off");
+    let _running = hided::start_daemon(env).await.unwrap();
+    let core = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let key = hide_peer::MachineKey::generate().unwrap().public().to_hex();
+    let ask = |device: &str| {
+        core.run(&[
+            "device",
+            "accept-ssh",
+            "--request",
+            "split-1",
+            "--key",
+            &key,
+            "--device",
+            device,
+            "--name",
+            "MacBook",
+            "--grant",
+            "0123456789abcdef0123456789abcdef",
+        ])
+    };
+
+    ask("stranger").refused("device_unknown");
+    assert!(!hided::peer_host::endpoint_wanted(&core.state, true).unwrap());
+
+    let taken = ask("moved-off");
+    assert!(taken.ok, "{}", taken.text());
+    let value = taken.json()["value"].clone();
+    assert_eq!(value["adopted"], true, "{value}");
+    // The answer as the machine that asked reads it (`moved_core::split`):
+    // the core itself, by the key its peer records keep.
+    let accepted: hide_peer::pairing::Accepted =
+        serde_json::from_value(value["accepted"].clone()).expect("the core's answer reads");
+    let own = hide_peer::MachineKey::load_or_create(
+        &hide_kit::layout::machine_key(&core.state),
+        &hide_platform::host::machine_id().unwrap(),
+    )
+    .unwrap()
+    .0
+    .public();
+    assert_eq!(accepted.key, own, "{value}");
+    let grant = value["accepted"]["grant"].clone();
+    assert_eq!(grant, accepted.grant.as_str(), "{value}");
+    let peer = core
+        .peer_becomes("the node's machine is paired both ways", |peer| {
+            peer["opened_by"] == "active" && !peer["opens"].is_null()
+        })
+        .await;
+    assert_eq!(peer["id"], "moved-off", "{peer}");
+    assert!(hided::peer_host::pairing_confirmed(&core.state, true).unwrap());
+
+    let again = ask("moved-off");
+    assert!(again.ok, "{}", again.text());
+    assert_eq!(again.json()["value"]["accepted"]["grant"], grant);
+    assert_eq!(core.peers().len(), 1);
+}
+
 /// B7 for a machine that already runs its own Hide, reached over SSH: the
 /// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
 /// the target's `hide device accept-ssh` with no words to compare, and
@@ -715,6 +805,186 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     ]);
     assert!(removed.ok, "{}", removed.text());
     ssh.stop().unwrap();
+}
+
+/// A node is split from its core only once the two have met on the
+/// connection two Hides use, and until the split commits its core goes on
+/// taking it as the node it was (PRD device-connect-iroh B45). The core's
+/// Hide answers both asks, as over an SSH login that works. While the new
+/// connection cannot be made, and again when the two met and this machine
+/// then could not set its record aside, the record is where it was, the
+/// core has confirmed nothing with the machine and still lists it as one
+/// that dials in, so its link over SSH is taken as before; the same split
+/// asked again then commits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_split_that_stops_before_its_commit_leaves_the_node_its_core_takes() {
+    use hide_peer::pairing::{Accepted, Me};
+    use hide_peer::protocol::{Candidate, PeerAddr, PeerKey};
+    use hided::moved_core::{Splitting, split};
+
+    let root = crate::fixtures::fixture_root("hs");
+    let env = host_env(root.path());
+    moved_off_dials_in(&env.state_dir, "moved-off");
+    let running = hided::start_daemon(env).await.unwrap();
+    let core = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let core_node = hide_core::node::NodeId::of_this_machine()
+        .unwrap()
+        .to_string();
+
+    // The machine the core was moved off: its state folder with the record
+    // that names its core, and no daemon, since the split is what is asked.
+    let state = root.path().join("node-state");
+    hide_platform::fs::private::create_dir_all(&state).unwrap();
+    let home = root.path().join("node-home");
+    crate::fixtures::fixture_home(&home);
+    hided::placement::write(
+        &state,
+        &hided::placement::Placement {
+            alias: "studio".to_owned(),
+            node: core_node.clone(),
+            program: "/opt/hide/hided".to_owned(),
+            state_dir: None,
+            disconnected: false,
+        },
+    )
+    .unwrap();
+    let machine = hide_platform::host::machine_id().unwrap();
+    let me = Me {
+        device: "moved-off".to_owned(),
+        name: "MacBook".to_owned(),
+    };
+    let splitting = || Splitting {
+        home: &home,
+        state_dir: &state,
+        machine: &machine,
+        me: &me,
+        core: &core_node,
+        panes: hide_kit::layout::PanesInstall {
+            id: None,
+            cli: None,
+        },
+    };
+    // The core's own `hide`, as the node runs it over the SSH login.
+    let ask = |request: &str, key: &PeerKey, grant: Option<&str>| -> Result<Value, &'static str> {
+        let key = key.to_hex();
+        let mut words = vec![
+            "device",
+            "accept-ssh",
+            "--request",
+            request,
+            "--key",
+            &key,
+            "--device",
+            "moved-off",
+            "--name",
+            "MacBook",
+        ];
+        words.extend(grant.into_iter().flat_map(|grant| ["--grant", grant]));
+        let ran = core.run(&words);
+        match ran.ok {
+            true => Ok(ran.json()["value"].clone()),
+            false => panic!("the core refused: {}", ran.text()),
+        }
+    };
+    let endpoint = hided::peer_host::Settings {
+        state_dir: state.clone(),
+        build: "1.3.0-test".to_owned(),
+        device: "moved-off".to_owned(),
+        release: false,
+        direct: Some("127.0.0.1:0".parse().unwrap()),
+        device_connect: true,
+    };
+    // The split runs where the node role runs it: on a thread no runtime
+    // drives.
+    let splits = |meet: &(dyn Fn(&Accepted) -> Result<(), String> + Sync)| {
+        tokio::task::block_in_place(|| {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| split(&splitting(), &ask, meet))
+                    .join()
+                    .unwrap()
+            })
+        })
+    };
+    // What the core's own screen and terminal say of the machine: nothing
+    // confirmed with it, and still a node that dials in.
+    async fn still_its_node(
+        running: &hided::RunningDaemon,
+        core: &Terminal,
+        state: &Path,
+        when: &str,
+    ) {
+        assert!(
+            hided::placement::read(state, "moved-off")
+                .unwrap()
+                .is_some(),
+            "{when}: the record was set aside"
+        );
+        let peers = core.peers();
+        let [peer] = peers.as_slice() else {
+            panic!("{when}: {peers:?}");
+        };
+        assert_eq!(peer["opens"], "confirming", "{when}: {peer}");
+        assert_eq!(peer["opened_by"], "active", "{when}: {peer}");
+        let mut window = Window::open(running, "web").await;
+        let shown = window
+            .frame("the core's snapshot", |frame| frame["type"] == "snapshot")
+            .await;
+        let devices = &shown["payload"]["rest"]["navigator"]["devices"];
+        let node = devices
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|device| device["id"] == "moved-off")
+            .unwrap_or_else(|| panic!("{when}: {devices}"));
+        assert_eq!(node["dials_in"], true, "{when}: {devices}");
+    }
+
+    // The SSH login works and the new connection cannot be made: a port
+    // that was free a moment ago, with nothing bound to it.
+    let free = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let nowhere = free.local_addr().unwrap();
+    drop(free);
+    let apart = |host: &Accepted| {
+        hided::peer_host::meets(
+            &endpoint,
+            &PeerAddr::new(host.key, vec![Candidate::Ip(nowhere)]),
+            Duration::from_millis(500),
+        )
+    };
+    let failure = splits(&apart).unwrap_err();
+    assert_eq!(failure.code, "split_not_connected", "{failure:?}");
+    still_its_node(&running, &core, &state, "the connection could not be made").await;
+
+    // The two meet, and this machine then cannot set its record aside.
+    let meets = |host: &Accepted| {
+        hided::peer_host::meets(
+            &endpoint,
+            &PeerAddr::new(host.key, host.candidates.clone()),
+            WITHIN,
+        )
+    };
+    let kept = hide_kit::layout::moved_out(&state);
+    std::fs::write(&kept, b"").unwrap();
+    let failure = splits(&meets).unwrap_err();
+    assert_eq!(failure.code, "split_not_saved", "{failure:?}");
+    still_its_node(&running, &core, &state, "the record could not be set aside").await;
+
+    // Asked again, the same split commits; the core confirms with the
+    // machine only once that machine runs a core, which none does here.
+    std::fs::remove_file(&kept).unwrap();
+    splits(&meets).unwrap();
+    assert!(
+        hided::placement::read(&state, "moved-off")
+            .unwrap()
+            .is_none()
+    );
+    assert!(kept.join("core-placement.json").is_file());
+    assert_eq!(core.peers().len(), 1);
 }
 
 /// A build that does not offer connections between two Hides (no

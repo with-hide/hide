@@ -452,7 +452,7 @@ impl Runtime {
         let Some(registration) = self.device_registration(device_id).cloned() else {
             return false;
         };
-        if !registration.origin.core_redials() || self.effects_held() {
+        if !registration.origin.core_redials() {
             return false;
         }
         match self.device_hosts.get(device_id) {

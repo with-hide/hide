@@ -232,6 +232,58 @@ fn the_core_the_item_runs_forgets_its_item_and_keeps_running() {
     assert!(machine.loaded(), "the asking core's job was unloaded");
 }
 
+/// A core moved here before 1.2.0 is kept on while the machine it was moved
+/// off still dials it as a node, though it is paired with nothing (PRD
+/// device-connect-iroh D-46): that machine can only split from it by
+/// reaching it. Every build keeps it, one that offers no connection between
+/// two Hides too, and the item such a build puts in turns none on. Once no
+/// node dials it, the item goes as any unpaired machine's does.
+#[cfg(unix)]
+#[test]
+fn a_moved_core_keeps_its_item_while_its_node_still_dials_it() {
+    let machine = Machine::new();
+    let installs = std::cell::Cell::new(0);
+    let state = machine.state.join(hide_core::node_migration::CORE_STATE);
+    let registers = |devices: serde_json::Value| {
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "schema_version": 1,
+                "expanded_paths": [],
+                "selected_path": null,
+                "selected_pane_id": null,
+                "device_registrations": devices,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    registers(serde_json::json!([{"id": "macbook", "label": "MacBook", "inbound": true}]));
+    assert!(paired(&machine.state, false).unwrap());
+    assert!(matches!(
+        machine.reconcile_in(false, false, &installs),
+        Outcome::Installed { .. }
+    ));
+    let list = std::fs::read_to_string(machine.home.path().join("Library/LaunchAgents").join(
+        format!(
+            "{}.plist",
+            hide_kit::layout::core_login_item(machine.home.path(), &machine.state)
+        ),
+    ))
+    .unwrap();
+    assert!(!list.contains("HIDE_DEVICE_CONNECT"), "{list}");
+    assert_eq!(machine.reconcile_in(false, true, &installs), Outcome::Kept);
+    assert_eq!(machine.reconcile_in(true, true, &installs), Outcome::Kept);
+    assert!(machine.installed() && machine.kept());
+
+    registers(serde_json::json!([]));
+    assert_eq!(
+        machine.reconcile_in(false, true, &installs),
+        Outcome::Removed
+    );
+    assert!(!machine.installed() && !machine.kept());
+}
+
 /// The first pairing's item is put in by the core running on the folder,
 /// which nothing stops: the item's core only waits on the folder's lock
 /// (S1). On Windows the item's start once ended the running core by its
@@ -292,22 +344,6 @@ fn an_item_the_system_dropped_is_loaded_again() {
     std::fs::remove_file(machine.home.path().join("loaded")).unwrap();
     assert_eq!(machine.reconcile(false, &installs), Outcome::Kept);
     assert!(machine.loaded());
-}
-
-/// A core a move placed here keeps the move's own item, paired or not.
-#[cfg(unix)]
-#[test]
-fn a_moved_core_s_item_is_the_move_s() {
-    use crate::core_move::handover::{Handover, HandoverState, hold};
-    let machine = Machine::new();
-    hold(&machine.state)
-        .unwrap()
-        .write(&Handover::new("i1", "m", "c", HandoverState::Active))
-        .unwrap();
-    let installs = std::cell::Cell::new(0);
-    machine.pair();
-    assert_eq!(machine.reconcile(false, &installs), Outcome::Moved);
-    assert_eq!(installs.get(), 0);
 }
 
 /// A system with no login items puts nothing in; a paired machine there is

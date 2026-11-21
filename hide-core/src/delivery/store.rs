@@ -308,8 +308,7 @@ pub fn legacy_path(path: &Path) -> PathBuf {
 
 /// The ledger `connection` holds, under the rules the core starts with: this
 /// build's tables, records within the size the core keeps, and a valid
-/// ledger. A core move asks it of the copy it is about to place
-/// (`node_migration::copy::check_loadable`).
+/// ledger.
 pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -358,8 +357,7 @@ fn read_records(connection: &Connection) -> Result<Ledger, String> {
 }
 
 /// What each agent saw, from the `seen` table: one row per registration;
-/// none in a file whose writer did not know the table (a copy a core move
-/// checks before the store that makes it opens it).
+/// none in a file whose writer did not know the table.
 fn seen_rows(connection: &Connection) -> Result<BTreeMap<String, BTreeMap<String, u64>>, String> {
     let unavailable = |_| "ledger_unavailable".to_owned();
     let present: bool = connection
@@ -413,12 +411,11 @@ fn rows<T: Row>(connection: &Connection) -> Result<Vec<T>, String> {
 }
 
 /// The ledger the store at `path` holds, in the shape its JSON file had,
-/// which a core move and a device's renaming rewrite through the paths
+/// which a device's renaming rewrites through the paths
 /// `node_migration::KEYS` names; `None` when the folder holds no ledger at
 /// all. A folder an older build wrote is imported first, as a start would.
 /// Each record is read as its row holds it, not as the core would load it:
-/// a rewrite changes keys and keeps everything else, and a core move checks
-/// that the core loads its copy before placing it (`copy::check_loadable`).
+/// a rewrite changes keys and keeps everything else.
 pub fn read_value(path: &Path) -> Result<Option<Value>, String> {
     if !path.exists() && !legacy_path(path).exists() {
         return Ok(None);

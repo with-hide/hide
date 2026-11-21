@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::copy::digest;
 use super::{
     CORE_STATE, DELIVERY_LEDGER, MARKER_FILE, MISSIONS, PROJECT_MEMORY, WORKSPACE_VIEWS, convert,
     name_devices,
@@ -309,7 +308,7 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         }
     }
 
-    let migrated = digest(state).unwrap();
+    let migrated = digest(state);
     match (convert(state, &node), name_devices(state, &node)) {
         (Ok(converted), Ok(named)) => {
             if !converted.files.is_empty() || !named.renamed.is_empty() || !named.held.is_empty() {
@@ -322,7 +321,13 @@ fn upgrade(fixture: &Path) -> Vec<String> {
             failures.push(format!("a second start refused: {converted:?} {named:?}"))
         }
     }
-    let changed = migrated.differs(&digest(state).unwrap());
+    let written = digest(state);
+    let changed: Vec<&String> = migrated
+        .iter()
+        .filter(|(path, bytes)| written.get(*path) != Some(*bytes))
+        .map(|(path, _)| path)
+        .chain(written.keys().filter(|path| !migrated.contains_key(*path)))
+        .collect();
     if !changed.is_empty() {
         failures.push(format!("a second start wrote {changed:?}"));
     }
@@ -746,4 +751,26 @@ fn every_released_state_folder_upgrades_with_its_devices_named_and_nothing_lost(
         })
         .collect();
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Every file under `root` with a digest of its bytes, by its path there.
+fn digest(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    use sha2::Digest;
+    let mut files = std::collections::BTreeMap::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(root).unwrap().display().to_string();
+            files.insert(
+                name,
+                sha2::Sha256::digest(std::fs::read(&path).unwrap()).to_vec(),
+            );
+        }
+    }
+    files
 }

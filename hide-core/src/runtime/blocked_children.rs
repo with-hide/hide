@@ -146,7 +146,7 @@ impl Runtime {
         for pane in std::mem::take(&mut self.blocked_children.ended) {
             self.retract_status(&super::status_cells::child_subject(&pane));
         }
-        if self.blocked_children.owed.is_empty() || self.effects_held() {
+        if self.blocked_children.owed.is_empty() {
             return;
         }
         let owed = std::mem::take(&mut self.blocked_children.owed);

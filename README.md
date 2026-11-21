@@ -312,7 +312,7 @@ The method, the distributions and every limit are kept in `docs/performance-resu
 
 | Guide | What it covers |
 | --- | --- |
-| [Install](docs/INSTALL.md) | Releases, source builds, devices, moving the core, updates and troubleshooting |
+| [Install](docs/INSTALL.md) | Releases, source builds, devices, updates and troubleshooting |
 | [UI behavior](docs/UI_BEHAVIOR.md) | What every screen does |
 | [Status model](docs/status-model.md) | How an agent's group and read state are decided |
 | [Agent hooks](docs/agent-hooks.md) | What hide writes for each agent, and where |

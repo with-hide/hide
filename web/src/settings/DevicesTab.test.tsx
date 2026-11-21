@@ -8,7 +8,6 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { NOTHING_UNDER_WAY } from "../pairing";
 import type { Device, DeviceHost, Kit, KitComponent } from "../snapshot";
 import { useShellStore } from "../store";
-import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
 import { DevicesTab } from "./DevicesTab";
 
@@ -273,114 +272,22 @@ async function openMenu(q: (selector: string) => HTMLElement | null, id: string)
   });
 }
 
-const frame = (over: Record<string, unknown>) => ({ state: "idle", direction: "forward", device: "mini", intent: "i", sent: 0, total: 0, failed: [], step: null, cause: null, node: null, ...over });
-
-it("crowns the core's machine and offers the core to a connected device it dials, dimmed with why otherwise (PRD core-host-node-move B2)", async () => {
-  const next = state([remote("mini"), remote("studio")]);
-  next.rest.status.remote[1]!.state = "stale";
-  const { q, events, unmount } = await mount(next);
+it("crowns the core's machine and offers no device the core (PRD device-connect-iroh D-35)", async () => {
+  const { q, unmount } = await mount(state([remote("mini")]));
   expect(q('[data-device-core="local"]')?.textContent).toBe("core");
   expect(q('[data-device-core="mini"]')).toBeNull();
-  await openMenu(q, "studio");
-  const dimmed = document.querySelector('[data-device-move="studio"]') as HTMLElement;
-  expect(dimmed.hasAttribute("data-disabled")).toBe(true);
-  expect(dimmed.textContent).toBe("Move the core to this device…Not connected");
-  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   await openMenu(q, "mini");
-  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
-  expect(sent(events, "core_move").map((event) => event.payload)).toEqual([{ action: "check", device: "mini" }]);
-  expect(document.querySelector("[data-core-move-dialog]")?.getAttribute("data-core-move-dialog")).toBe("checking");
+  expect(document.querySelector('[data-device-menu-content="mini"]')).not.toBeNull();
+  expect(document.querySelector('[data-device-move="mini"]')).toBeNull();
   await unmount();
 });
 
-it("tells a window whose core is still taking a move that another move is under way (core_pending)", async () => {
-  const { q, unmount } = await mount(state([remote("mini")]));
-  await openMenu(q, "mini");
-  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
-  await act(async () => { useShellStore.setState({ coreMoveRefusal: "core_pending" }); });
-  expect(document.querySelector('[data-core-move-refused="core_pending"]')?.textContent).toBe("Another move is under way");
-  await unmount();
-});
-
-it("walks the move dialog through the supervisor's frames: failing checks with their fixes, confirm, steps, the result (B3 to B5)", async () => {
-  const { q, events, unmount } = await mount(state([remote("mini")]));
-  await openMenu(q, "mini");
-  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
-  const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement;
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "checking" }) as never }); });
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "checks_failed", checked: 6, failed: [{ check: "gh", detail: "not logged in" }, { check: "gui_session", detail: "no session" }] }) as never }); });
-  expect(dialog().getAttribute("data-core-move-dialog")).toBe("checks_failed");
-  expect(dialog().querySelector("[data-core-move-count]")?.textContent).toBe("2 to fix · 4 passed");
-  expect(dialog().querySelector('[data-core-move-command="gh"]')?.textContent).toBe("gh auth login");
-  expect(dialog().querySelector('[data-core-move-check="gui_session"]')?.textContent).toBe("× Desktop loginLog in on Mac mini");
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "ready" }) as never }); });
-  expect(dialog().getAttribute("data-core-move-dialog")).toBe("confirm");
-  await act(async () => { (dialog().querySelector("[data-core-move-start]") as HTMLElement).click(); });
-  expect(sent(events, "core_move").at(-1)?.payload).toEqual({ action: "start", device: "mini" });
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "copying", step: "copy" }) as never }); });
-  expect(dialog().getAttribute("data-core-move-dialog")).toBe("moving");
-  expect([...dialog().querySelectorAll("[data-core-move-mark]")].map((row) => row.getAttribute("data-core-move-mark"))).toEqual(["done", "done", "run", "todo", "todo"]);
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "rolled_back", step: "start_target" }) as never }); });
-  expect(dialog().querySelector("[data-core-move-failed]")?.textContent).toBe("× The core did not start on Mac mini");
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "done", step: "reattach", node: "local" }) as never }); });
-  expect(dialog().getAttribute("data-core-move-dialog")).toBe("done");
-  await act(async () => { (dialog().querySelector("[data-core-move-undo]") as HTMLElement).click(); });
-  expect(sent(events, "core_move").at(-1)?.payload).toEqual({ action: "check_back" });
-  expect(dialog().getAttribute("data-core-move-direction")).toBe("back");
-  await unmount();
-});
-
-it("names the moving core's own machine when its Hide AI is not set up, and the machine taking it for that machine's sign-ins", async () => {
-  const { q, unmount } = await mount(state([remote("mini")]));
-  await openMenu(q, "mini");
-  await act(async () => { (document.querySelector('[data-device-move="mini"]') as HTMLElement).click(); });
-  const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement;
-  const failed = [{ check: "ai_setup", detail: "Hide AI is not set up: no agent is chosen" }, { check: "ai", detail: "codex: logged_out" }];
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "checks_failed", checked: 12, failed }) as never }); });
-  expect(dialog().querySelector('[data-core-move-check="ai_setup"]')?.textContent).toBe("× Hide AI on This computerTurn it on and choose an agent in Settings › Hide AI");
-  expect(dialog().querySelector('[data-core-move-check="ai"]')?.textContent).toBe("× Hide AI sign-inSign in to Hide AI's agents on Mac mini");
-  await unmount();
-});
-
-it("gives up a move's wait only from its confirm, which the strip's action opens, and shows what is left (amendment 4)", async () => {
-  const { events, unmount } = await mount(state([remote("mini")]));
-  const dialog = () => document.querySelector("[data-core-move-dialog]") as HTMLElement | null;
-  const waiting = frame({ state: "waiting", step: "reattach", cause: { kind: "unreachable" }, abandon: true });
-  await act(async () => { useShellStore.setState({ coreMove: waiting as never }); });
-  await act(async () => { useUiStore.getState().openMoveGiveUp(); });
-  expect(dialog()?.getAttribute("data-core-move-dialog")).toBe("give_up");
-  expect(dialog()?.querySelector("h2")?.textContent).toBe("Stop waiting for Mac mini?");
-  expect(dialog()?.querySelector("[data-core-move-give-up-risk]")?.textContent).toBe("If Mac mini is only cut off, not gone, its core keeps running until this Mac reaches it.");
-  expect(sent(events, "core_move")).toEqual([]);
-  // Cancel goes back to the steps, whose footer offers it again.
-  await act(async () => { ([...dialog()!.querySelectorAll("button")].find((button) => button.textContent === "Cancel") as HTMLElement).click(); });
-  expect(dialog()?.getAttribute("data-core-move-dialog")).toBe("moving");
-  await act(async () => { (dialog()!.querySelector("[data-core-move-give-up]") as HTMLElement).click(); });
-  await act(async () => { (dialog()!.querySelector("[data-core-move-give-up-go]") as HTMLElement).click(); });
-  expect(sent(events, "core_move").map((event) => event.payload)).toEqual([{ action: "abandon" }]);
-  await act(async () => { useShellStore.setState({ coreMoveRefusal: "move_not_waiting" }); });
-  expect(dialog()?.querySelector('[data-core-move-refused="move_not_waiting"]')?.textContent).toBe("The move is no longer waiting");
-  // A wait that ended leaves no confirm, and the result names what is left.
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "rolling_back", step: "reattach" }) as never }); });
-  expect(dialog()?.querySelector("[data-core-move-give-up]")).toBeNull();
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "abandoned" }) as never }); });
-  expect(dialog()?.getAttribute("data-core-move-dialog")).toBe("abandoned");
-  // A move back's wait takes the core here, with no risk line.
-  await act(async () => { useShellStore.setState({ coreMove: frame({ state: "waiting", direction: "back", device: null, step: "start_target", abandon: true }) as never }); });
-  await act(async () => { useUiStore.getState().openMoveGiveUp(); });
-  expect(dialog()?.getAttribute("data-core-move-direction")).toBe("back");
-  expect(dialog()?.querySelector("h2")?.textContent).toBe("Take the core here?");
-  expect(dialog()?.querySelector("[data-core-move-give-up-risk]")).toBeNull();
-  expect(dialog()?.querySelector("[data-core-move-give-up-go]")?.textContent).toBe("Take it here");
-  await unmount();
-});
-
-it("puts a node's own machine first as This Mac, with the core back and the end of its link in its menu and no SSH test (B2, B16)", async () => {
+it("puts a node's own machine first as This Mac, with the end of its link in its menu and no SSH test (B16)", async () => {
   window.location.hash = "#token=t&node=mbp";
   const node = remote("mbp", { label: "MacBook Pro", dials_in: true, ssh_alias: null });
   const next = state([remote("mini"), node]);
   (next.rest.navigator.devices[0] as Record<string, unknown>).machine_name = "Mac Studio";
-  const { q, events, unmount } = await mount(next);
+  const { q, unmount } = await mount(next);
   const names = [...document.querySelectorAll("[data-device-name]")].map((row) => row.textContent);
   expect(names).toEqual(["This Mac", "Mac Studio", "Mac mini"]);
   expect(q('[data-device-core="local"]')).not.toBeNull();
@@ -388,11 +295,26 @@ it("puts a node's own machine first as This Mac, with the core back and the end 
   await openMenu(q, "mbp");
   expect(document.querySelector('[data-device-remove="mbp"]')).toBeNull();
   expect(document.querySelector('[data-device-core-disconnect="mbp"]')?.textContent).toBe("Disconnect from the Mac Studio core…");
-  await act(async () => { (document.querySelector('[data-device-move-back="mbp"]') as HTMLElement).click(); });
-  expect(sent(events, "core_move").map((event) => event.payload)).toEqual([{ action: "check_back" }]);
-  await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-  await openMenu(q, "mini");
-  expect(document.querySelector('[data-device-move="mini"]')).toBeNull();
+  expect(document.querySelector('[data-device-move-back="mbp"]')).toBeNull();
+  window.location.hash = "";
+  await unmount();
+});
+
+it("says on a node's own row why its machine was not made a Hide of its own, with a Retry that asks the node again (PRD device-connect-iroh B45)", async () => {
+  window.location.hash = "#token=t&node=mbp";
+  const next = state([remote("mini"), remote("mbp", { label: "MacBook Pro", dials_in: true, ssh_alias: null })]);
+  (next.rest.navigator.devices[0] as Record<string, unknown>).machine_name = "Mac Studio";
+  const { events, q, unmount } = await mount(next);
+  expect(q("[data-device-split]")).toBeNull();
+  await act(async () => useShellStore.setState({ coreSplit: "split_refused" }));
+  expect(q('[data-device-row="mbp"] [data-device-split="split_refused"]')?.textContent).toContain("Hide on Mac Studio refused");
+  // An SSH login that worked while the new connection did not is its own cause.
+  await act(async () => useShellStore.setState({ coreSplit: "split_not_connected" }));
+  expect(q('[data-device-row="mbp"] [data-device-split="split_not_connected"]')?.textContent).toContain("the new connection to Mac Studio could not be made");
+  // Only the window's own machine says it: the other rows are the core's to draw.
+  expect(document.querySelectorAll("[data-device-split]")).toHaveLength(1);
+  await act(async () => q('[data-device-split-retry="mbp"]')!.click());
+  expect(sent(events, "core_link")).toEqual([{ schema_version: 2, kind: "core_link", payload: { action: "retry" } }]);
   window.location.hash = "";
   await unmount();
 });

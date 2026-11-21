@@ -121,7 +121,7 @@ impl Runtime {
 
     /// Connects every device the persisted registrations name. Called once,
     /// after the worker context exists, because a coordinator reports back
-    /// through it, and again when a pending core's hold is released.
+    /// through it.
     pub fn connect_registered_devices(&mut self) -> bool {
         let registrations = self.snapshot.ui_state.device_registrations.clone();
         let mut changed = false;
@@ -151,13 +151,6 @@ impl Runtime {
                 Some(arrived) => Source::Arrived(Box::new(arrived)),
                 None => return false,
             },
-            // A core waiting for its move's link dials nothing; releasing
-            // the hold connects every registration again.
-            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } | LinkOrigin::Peer { .. }
-                if self.effects_held() =>
-            {
-                return false;
-            }
             // A paired machine whose grant is paused, or not confirmed yet,
             // is opened when the grant is active (`peer_devices`).
             LinkOrigin::Peer { key, .. } if !self.peer_opens(key) => return false,

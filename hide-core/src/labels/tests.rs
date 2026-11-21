@@ -3376,7 +3376,6 @@ fn a_core_given_its_own_home_imports_labels_from_that_home_only() {
         workspace_views_path: None,
         shortcut_import_path: None,
         local_issues_path: None,
-        effects_held: false,
         machine_name: None,
         windows_drives: None,
         account_state_folder: false,

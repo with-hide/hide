@@ -2496,13 +2496,6 @@ impl Runtime {
             && !self.usage_pause_announced
     }
 
-    /// Whether the label worker asks a provider now: agent summaries are on
-    /// and the core does not wait for its move's link (`effects.rs`), which
-    /// reads as the switch off until then.
-    pub(crate) fn labels_asked(&self) -> bool {
-        self.agent_summary() && !self.effects_held()
-    }
-
     /// Whether Hide makes any model call: Use Hide AI is on and an agent is
     /// chosen (B33, B47). Worktree names, Memory analysis and agent labels
     /// each fall back to their own non-AI behavior while this is false.

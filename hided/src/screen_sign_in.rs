@@ -1,7 +1,6 @@
 //! What ssh asks while a connection to another machine signs in, on the
 //! screen whose press started it (PRD system-ssh-device-link B33): the node
-//! window's strip for the link to its core, the move dialog for a core
-//! move's checks. The rules are the device row's (D-05 to D-08): the
+//! window's strip for the link to its core. The rules are the device row's (D-05 to D-08): the
 //! question is ssh's own, it waits at most five minutes, and the operator's
 //! answer travels from the screen's event to the waiting question over a
 //! channel of that one question, never through a frame, a file or a log
@@ -31,8 +30,7 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(5 * 60);
 
 /// A screen's answer to the question it shows: the question's number and
 /// the reply (`text`, `accept` or `cancel`), as a held node window's
-/// `core_link` event and the move dialog's `core_move` event carry them,
-/// each with `action: sign_in`. A `cancel` with no question ends the
+/// `core_link` event carries them, with `action: sign_in`. A `cancel` with no question ends the
 /// screen's attempt whatever it shows, before its first question too.
 #[derive(serde::Deserialize)]
 pub struct SignInAnswer {
@@ -511,8 +509,8 @@ mod tests {
         assert_eq!(sign_in.shown(), None);
     }
 
-    /// The window's Cancel with no question, as closing the move dialog
-    /// sends it, ends the press whatever it shows.
+    /// The window's Cancel with no question ends the press whatever it
+    /// shows.
     #[test]
     fn a_cancel_naming_no_question_ends_the_press() {
         let (sign_in, _) = screen();

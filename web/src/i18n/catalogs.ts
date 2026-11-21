@@ -55,7 +55,7 @@ import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup
 import { externalToolsCatalogs, externalToolsEnglish } from "./resources/externalTools";
 import { storeCatalogs, storeEnglish } from "./resources/store";
 import { pairingCatalogs, pairingEnglish } from "./resources/pairing";
-import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
+import { coreLinkCatalogs, coreLinkEnglish } from "./resources/coreLink";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
@@ -135,7 +135,7 @@ export const english = {
   ...externalToolsEnglish,
   ...storeEnglish,
   ...pairingEnglish,
-  ...coreMoveEnglish,
+  ...coreLinkEnglish,
   ...workspaceEnglish,
   ...checkoutGitEnglish,
   ...issueSettingsEnglish,
@@ -221,7 +221,7 @@ export const catalogs = {
     ...externalToolsCatalogs.ko,
     ...storeCatalogs.ko,
     ...pairingCatalogs.ko,
-    ...coreMoveCatalogs.ko,
+    ...coreLinkCatalogs.ko,
     ...workspaceCatalogs.ko,
     ...checkoutGitCatalogs.ko,
     ...issueSettingsCatalogs.ko,
@@ -302,7 +302,7 @@ export const catalogs = {
     ...externalToolsCatalogs["zh-CN"],
     ...storeCatalogs["zh-CN"],
     ...pairingCatalogs["zh-CN"],
-    ...coreMoveCatalogs["zh-CN"],
+    ...coreLinkCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
     ...checkoutGitCatalogs["zh-CN"],
     ...issueSettingsCatalogs["zh-CN"],
@@ -383,7 +383,7 @@ export const catalogs = {
     ...externalToolsCatalogs.ja,
     ...storeCatalogs.ja,
     ...pairingCatalogs.ja,
-    ...coreMoveCatalogs.ja,
+    ...coreLinkCatalogs.ja,
     ...workspaceCatalogs.ja,
     ...checkoutGitCatalogs.ja,
     ...issueSettingsCatalogs.ja,

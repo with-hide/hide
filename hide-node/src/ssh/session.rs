@@ -542,13 +542,12 @@ impl SshTarget {
 
 /// A connection to another machine through the system `ssh`, its start
 /// script waiting for steps: the connection a node keeps to its core's
-/// machine, and a core move's to the machine on the other side (PRD
-/// system-ssh-device-link B33). One sign-in, then steps one at a time, until
+/// machine (PRD system-ssh-device-link B33). One sign-in, then steps one at a time, until
 /// the session is dropped, which ends its `ssh`, or [`Self::attach`] hands
 /// its pipes to the attach role.
 ///
-/// Its questions go to the screen that started it (the node window's strip,
-/// the core move dialog) when the operator's own press started it
+/// Its questions go to the screen that started it (the node window's
+/// strip) when the operator's own press started it
 /// (`Wake::Allowed`); otherwise a question, an unknown server key or a
 /// check in the browser ends the sign-in as `sign_in_needed`, as an attempt
 /// Hide made by itself does (D-06), and keys, the agent and Tailscale SSH
@@ -645,10 +644,13 @@ impl Session {
         result.map_err(SessionError::from)
     }
 
-    /// Puts this build's programs in their version folder under `root` on
-    /// the machine, sending only what it lacks (a core update, PRD
-    /// core-host-node-move B10). Answers the path of the build's `hided`
-    /// there.
+    /// Puts this build in its version folder under `root` on the machine,
+    /// sending only what it lacks (a core update, PRD core-host-node-move
+    /// B10). The build is whole, the pane holder and its runtime with the
+    /// programs: the core that starts from that folder runs its own panes
+    /// from the holder beside it (`terminal::holder::Holders::local_source`)
+    /// and is another Hide's guest only as a whole build (`guest_build`).
+    /// Answers the path of the build's `hided` there.
     pub fn install_build(
         &mut self,
         packages: &HelperPackages,
@@ -656,7 +658,7 @@ impl Session {
     ) -> Result<String, SessionError> {
         self.usable()?;
         let payload = packages
-            .payload(&self.facts.os, &self.facts.arch)
+            .payload_for(&self.facts.os, &self.facts.arch)
             .map_err(|error| SessionError::Refused(error.to_string()))?;
         let installed = bootstrap::install_build(
             &mut self.pipe,

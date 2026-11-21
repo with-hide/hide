@@ -509,12 +509,7 @@ impl Runtime {
     /// coordinator's tick; everything the pass reads or writes happens on its
     /// worker.
     pub(super) fn tick_project_memory(&mut self, now_unix_ms: u64) -> bool {
-        // A core whose move has not committed asks no provider (PRD
-        // core-host-node-move amendment 3); the pass waits for the release.
-        if self.memory_work.pass_in_flight
-            || now_unix_ms < self.memory_work.next_pass_unix_ms
-            || self.effects_held()
-        {
+        if self.memory_work.pass_in_flight || now_unix_ms < self.memory_work.next_pass_unix_ms {
             return false;
         }
         let Some(context) = self.worker_context.clone() else {

@@ -316,7 +316,7 @@ impl Runtime {
     /// tick; a tick with nothing moved is one flag test.
     pub(crate) fn drive_letter_wakes(&mut self) -> bool {
         let now = crate::runtime::unix_milliseconds();
-        if !(self.letter_wakes.dirty || self.letter_wakes.retry_due(now)) || self.effects_held() {
+        if !(self.letter_wakes.dirty || self.letter_wakes.retry_due(now)) {
             return false;
         }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {

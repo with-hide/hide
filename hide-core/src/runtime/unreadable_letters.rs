@@ -54,7 +54,7 @@ impl Runtime {
     /// letter is no longer held so. Run by the coordinator's tick; a tick
     /// with nothing moved is one flag test.
     pub(crate) fn drive_unreadable_letters(&mut self) {
-        if !self.unreadable_letters.dirty || self.effects_held() {
+        if !self.unreadable_letters.dirty {
             return;
         }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {

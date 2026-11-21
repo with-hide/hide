@@ -1453,9 +1453,6 @@ impl Runtime {
         recipient: &Actor,
         now: u64,
     ) -> Option<(u64, Result<crate::delivery::composer::Read, &'static str>)> {
-        if self.effects_held() {
-            return None;
-        }
         let observation = self
             .delivery_observations
             .get(&recipient.pane_id)
@@ -1524,9 +1521,6 @@ impl Runtime {
         attempted: &std::collections::HashMap<String, u64>,
         now: u64,
     ) -> Option<crate::delivery::composer::Read> {
-        if self.effects_held() {
-            return None;
-        }
         self.delivery_observations.values().find_map(|observation| {
             let hook = observation.hook_submit_at_unix_ms;
             let known_empty = hook > 0
@@ -2236,11 +2230,6 @@ impl Runtime {
     }
 
     pub(crate) fn prepare_delivery_human(&mut self) -> Result<PreparedHuman, String> {
-        // A notice claimed by a core that may still be rolled back would be
-        // lost with its copy; the core that keeps the ledger claims it.
-        if self.effects_held() {
-            return Err("core_pending".into());
-        }
         self.delivery_state()?;
         let client = self.delivery_client.clone().ok_or("delivery_unavailable")?;
         let missions = self.claim_mission_notices();
@@ -2317,9 +2306,7 @@ impl Runtime {
     }
 
     pub(crate) fn naming_client(&self) -> Option<Client> {
-        (!self.effects_held())
-            .then(|| self.delivery_client.clone())
-            .flatten()
+        self.delivery_client.clone()
     }
 
     pub(crate) fn invalidate_delivery(&mut self) {
@@ -2702,9 +2689,6 @@ impl Runtime {
         now: u64,
     ) -> Result<Observation, crate::delivery::doorbell::Hold> {
         use crate::delivery::doorbell::Hold;
-        if self.effects_held() {
-            return Err(Hold::CorePending);
-        }
         let current = self
             .delivery_observations
             .get(&recipient.pane_id)
@@ -2725,9 +2709,6 @@ impl Runtime {
         &self,
         recipient: &Actor,
     ) -> Option<(Observation, Arc<dyn crate::node_access::NodeLink>)> {
-        if self.effects_held() {
-            return None;
-        }
         let observation =
             self.delivery_observations
                 .get(&recipient.pane_id)
@@ -2802,10 +2783,6 @@ impl Runtime {
     }
 
     pub(crate) fn delivery_watch_work(&mut self) -> Vec<crate::delivery::worker::WatchWork> {
-        // No reading, so no warning, until the move's link commits this core.
-        if self.effects_held() {
-            return Vec::new();
-        }
         let Ok(ledger) = self.delivery_state() else {
             return Vec::new();
         };

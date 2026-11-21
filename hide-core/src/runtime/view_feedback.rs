@@ -12,7 +12,7 @@
 //! code-owned identity (D-17). The comments leave their View once the letter
 //! is stored (D-13), and the ledger's word on the letter decides what
 //! becomes of them: delivered drops them, expired brings them back marked
-//! (B29). The worker waits on a moving core's effect hold (B41).
+//! (B29).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -1689,10 +1689,9 @@ impl Runtime {
             .workers
             .retain(|worker| !worker.is_finished());
         let stop = Arc::clone(&self.view_feedback.stop);
-        let effects = Arc::clone(&self.effects);
         match thread::Builder::new()
             .name("hide-core-view-feedback".into())
-            .spawn(move || feedback_worker(context, effects, stop))
+            .spawn(move || feedback_worker(context, stop))
         {
             Ok(worker) => {
                 self.view_feedback.running = true;
@@ -1872,11 +1871,7 @@ impl Runtime {
     }
 }
 
-fn feedback_worker(
-    context: RuntimeWorkerContext,
-    effects: Arc<crate::effects::EffectHold>,
-    stop: Arc<AtomicBool>,
-) {
+fn feedback_worker(context: RuntimeWorkerContext, stop: Arc<AtomicBool>) {
     loop {
         let Some(runtime) = context.runtime.upgrade() else {
             return;
@@ -1892,18 +1887,6 @@ fn feedback_worker(
             }
         };
         drop(runtime);
-        // Nothing leaves this machine while a moving core may still be
-        // rolled back (B41).
-        if !effects.wait_released(&stop) {
-            if let Some(runtime) = context.runtime.upgrade() {
-                runtime
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .view_feedback
-                    .running = false;
-            }
-            return;
-        }
         match job {
             Job::Remove { link, device, call } => {
                 if let Err(error) = call_as::<serde_json::Value>(

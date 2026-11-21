@@ -420,7 +420,7 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
     let install_once = || {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         install(
             &mut pipe,
             "~/.hide/helper",
@@ -482,7 +482,7 @@ fn a_packed_install_crosses_the_link_smaller_and_lands_whole() {
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
     assert!(facts.unpacks, "every Windows device unpacks gzip");
-    let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+    let payload = packages.local(&facts.os, &facts.arch).unwrap();
     let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload, true).unwrap();
     assert_eq!((installed.upload.sent, installed.upload.reused), (3, 0));
     let landed = hide_platform::path::from_wire(&installed.helper_path).unwrap();
@@ -602,7 +602,7 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
     ] {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         let Err(EstablishError::Install { reason, .. }) =
             install(&mut pipe, root, &facts.home, &payload, facts.unpacks)
         else {
@@ -626,7 +626,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
     let install_once = || {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         install(
             &mut pipe,
             "~/.hide/helper",
