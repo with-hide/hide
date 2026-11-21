@@ -592,9 +592,7 @@ test("the rail's desk button folds and stands focus mode's desk, counting the pa
     // stand, so ⌘E and the rail button ask for nothing, and the sidebar back to the agent leaves the keys in its terminal.
     await page.keyboard.press(chord("pair_view"));
     await expect(band(page)).toHaveCount(0);
-    await page.keyboard.press(chord("toggle_lane"));
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await paneView(page, shell!).locator("[data-terminal-host]").click();
+    await withControl(daemon, (control) => focusPane(control, shell!));
     await expect(paneView(page, shell!)).toHaveAttribute("data-focused", "true");
     await page.keyboard.press(chord("pair_view"));
     await expect(page.locator(`[data-pair-layer="${shell}"]`)).toHaveAttribute("data-pair-alone", "true");
@@ -603,6 +601,48 @@ test("the rail's desk button folds and stands focus mode's desk, counting the pa
     await page.locator(`nav[data-sidebar] [data-agent-open="${left}"]`).first().click();
     await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
     await expect(paneView(page, left!).locator(".xterm-helper-textarea")).toBeFocused();
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("right after ⌘. a desk tab pressed, the one in front or another, takes the keyboard from the pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const fixture = path.join(engine.root, "fixture");
+    daemon = await startHided(engine, "pair-view-tab-keys");
+    const [left] = engine.panes;
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    fs.writeFileSync(path.join(fixture, "b.md"), "# b.md\n");
+    for (const args of [["file", "open", "a.md"], ["file", "open", "b.md"]]) {
+      const opened = await leftAgent(args);
+      expect(opened.status, opened.out).toBe(0);
+    }
+    const terminal = paneView(page, left!).locator(".xterm-helper-textarea");
+    const keysOnDesk = () => page.evaluate(() => document.activeElement?.closest("[data-view-tab-bar], [data-view-area]") != null);
+    // b.md, opened last, is in front; a.md is behind it. A page's tab is the desktop host's and is checked there.
+    for (const pressed of ['[aria-selected="true"]', '[aria-selected="false"]']) {
+      for (const first of [true, false]) {
+        // The desk is already open beside the agents, as the operator has it, so its tabs can be pressed at once.
+        if (first) await showDocuments(page);
+        await paneView(page, left!).locator("[data-terminal-host]").click({ position: { x: 12, y: 12 } });
+        await expect(terminal).toBeFocused();
+        // Right after ⌘. the tab is pressed as soon as it can be, before the core's answer to ⌘. has landed.
+        if (first) await page.keyboard.press(chord("pair_view"));
+        await page.locator(`[data-view-tab-bar] [role="tab"]${pressed}`).click();
+        await expect(band(page)).toBeVisible();
+        await quietFor(page, 500, "every late keyboard request has landed");
+        expect(await keysOnDesk(), `${pressed} ${first ? "right after ⌘." : "later"}`).toBe(true);
+        if (!first) await page.keyboard.press(chord("pair_view"));
+        await expect(band(page)).toHaveCount(first ? 1 : 0);
+      }
+    }
   } finally {
     daemon?.stop();
     engine.stop();
