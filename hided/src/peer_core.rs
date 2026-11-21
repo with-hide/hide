@@ -14,13 +14,18 @@
 //! [`RESEND_AFTER`] or on the next connection, and the calls that wait for
 //! theirs. A letter sent twice is the same letter to the core that takes
 //! it, by its sender and intent.
+//!
+//! A call a peer asks is this service's work, not its stream's: it holds
+//! one of that peer's [`CALLS_AT_ONCE`] places until the core's work for
+//! it ended and its answer was handed over, whatever became of the stream
+//! it came on, and it ends with the daemon.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use hide_core::core_calls::{self, Asked, CoreItem, CoreLink, Letter, Outcome, Party};
+use hide_core::core_calls::{self, Agent, Asked, CoreItem, CoreLink, Letter, Outcome, Party};
 use hide_peer::PeerEvent;
 use hide_peer::protocol::core::{Ask, CoreMessage, Item};
 use hide_peer::protocol::hello::GrantState;
@@ -28,7 +33,8 @@ use hide_peer::protocol::stream::Status;
 use hide_peer::protocol::{PeerKey, StreamKind, frame};
 use hide_peer::wire::{MessageReader, write_message};
 use serde_json::{Value, json};
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::task::JoinSet;
 
 use crate::core::CoreHandle;
 use crate::ending::Ending;
@@ -88,12 +94,6 @@ fn party_in(party: hide_peer::protocol::core::Party) -> Party {
     }
 }
 
-fn letter_out(letter: Letter) -> CoreMessage {
-    CoreMessage::Letter {
-        id: letter.id,
-        from: agent_out(letter.from),
-        to: letter.to,
-        reply_to: letter.reply_to,
 fn agent_out(agent: Agent) -> hide_peer::protocol::core::Agent {
     hide_peer::protocol::core::Agent {
         id: agent.id,
@@ -108,6 +108,12 @@ fn agent_in(agent: hide_peer::protocol::core::Agent) -> Agent {
     }
 }
 
+fn letter_out(letter: Letter) -> CoreMessage {
+    CoreMessage::Letter {
+        id: letter.id,
+        from: agent_out(letter.from),
+        to: letter.to,
+        reply_to: letter.reply_to,
         kind: letter.kind,
         intent: letter.intent,
         body: letter.body,
@@ -163,6 +169,20 @@ struct Open {
     mine: bool,
 }
 
+/// One place among a peer's calls at work, held until the call ended.
+struct Place {
+    service: Arc<PeerCore>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        // The place is free before the rooms are read again.
+        self.permit = None;
+        self.service.forget_idle_rooms();
+    }
+}
+
 /// A call of this machine's agent that waits for the other core's answer.
 struct Waiting {
     key: PeerKey,
@@ -181,6 +201,13 @@ pub struct PeerCore {
     /// The letters sent that wait for their answer, with when.
     sent: Mutex<HashMap<(PeerKey, String), Instant>>,
     calls: Mutex<HashMap<u64, Waiting>>,
+    /// The places each peer's calls work in, kept past its streams: a peer
+    /// that closes a stream and opens another has no more room than it had.
+    /// Only a peer with a stream open or a call at work has an entry.
+    rooms: Mutex<HashMap<PeerKey, Arc<Semaphore>>>,
+    /// The calls at work for the peers, at most [`CALLS_AT_ONCE`] of each,
+    /// ended with the daemon.
+    working: Mutex<JoinSet<()>>,
     next: AtomicU64,
     /// The letters that wait to go changed, or a stream opened.
     moved: Notify,
@@ -215,6 +242,8 @@ impl PeerCore {
             opening: Mutex::new(Vec::new()),
             sent: Mutex::new(HashMap::new()),
             calls: Mutex::new(HashMap::new()),
+            rooms: Mutex::new(HashMap::new()),
+            working: Mutex::new(JoinSet::new()),
             next: AtomicU64::new(1),
             moved: Notify::new(),
         });
@@ -317,14 +346,13 @@ impl PeerCore {
         record("peer_core.opened", &key, json!({"mine": mine}));
         // What waited for this machine goes now.
         self.moved.notify_one();
-        let calls = Arc::new(Semaphore::new(CALLS_AT_ONCE));
         let ended = loop {
             tokio::select! {
                 () = self.shutdown.ended() => break None,
                 message = reader.next() => match message {
                     Ok(Some(body)) => match CoreMessage::parse(&body) {
                         Ok(Some(message)) => {
-                            let Some(answer) = self.take(key, message, &out, &calls).await else {
+                            let Some(answer) = self.take(key, message, &out).await else {
                                 continue;
                             };
                             if let Err(error) = write_message(&mut send, &answer).await {
@@ -369,7 +397,31 @@ impl PeerCore {
             lock(&self.sent).retain(|(peer, _), _| peer != key);
             // Dropping the answer's sender ends the caller's wait.
             lock(&self.calls).retain(|_, waiting| waiting.key != *key);
+            // The calls it asked keep their places until they end.
+            self.forget_idle_rooms();
         }
+    }
+
+    /// A place among the calls of `key` at work, or none while
+    /// [`CALLS_AT_ONCE`] of them still are, on whichever streams they came.
+    fn place(self: &Arc<Self>, key: &PeerKey) -> Option<Place> {
+        let room = Arc::clone(
+            lock(&self.rooms)
+                .entry(*key)
+                .or_insert_with(|| Arc::new(Semaphore::new(CALLS_AT_ONCE))),
+        );
+        room.try_acquire_owned().ok().map(|permit| Place {
+            service: Arc::clone(self),
+            permit: Some(permit),
+        })
+    }
+
+    /// Drops the room of every peer that has no stream open and no call at
+    /// work.
+    fn forget_idle_rooms(&self) {
+        let open: Vec<PeerKey> = lock(&self.open).keys().copied().collect();
+        lock(&self.rooms)
+            .retain(|peer, room| open.contains(peer) || room.available_permits() < CALLS_AT_ONCE);
     }
 
     /// Where a message to `key` is written: the stream this side opened,
@@ -391,7 +443,6 @@ impl PeerCore {
         key: PeerKey,
         message: CoreMessage,
         out: &mpsc::Sender<CoreMessage>,
-        calls: &Arc<Semaphore>,
     ) -> Option<CoreMessage> {
         let hex = key.to_hex();
         match message {
@@ -466,7 +517,8 @@ impl PeerCore {
                 ask,
                 command,
             } => {
-                let Ok(permit) = Arc::clone(calls).try_acquire_owned() else {
+                let Some(place) = self.place(&key) else {
+                    record("peer_core.call_refused", &key, json!({"code": "capacity"}));
                     return Some(CoreMessage::CallAnswer {
                         call,
                         answer: None,
@@ -476,7 +528,14 @@ impl PeerCore {
                 let core = Arc::clone(&self.core);
                 let out = out.clone();
                 let from = party_in(from);
-                tokio::spawn(async move {
+                let mut working = lock(&self.working);
+                // Those that ended are let go; the rest are at most the
+                // places their peers hold.
+                while working.try_join_next().is_some() {}
+                working.spawn(async move {
+                    // Held until the core's work ended and its answer was
+                    // handed over, or found no stream to go on.
+                    let _place = place;
                     let result = tokio::task::spawn_blocking(move || {
                         // A command this build cannot read is one of a
                         // later build's.
@@ -513,7 +572,6 @@ impl PeerCore {
                         },
                     };
                     let _ = out.send(answer).await;
-                    drop(permit);
                 });
                 None
             }
@@ -571,7 +629,11 @@ impl PeerCore {
         loop {
             let again = !lock(&self.sent).is_empty();
             tokio::select! {
-                () = self.shutdown.ended() => return,
+                () = self.shutdown.ended() => {
+                    // The calls at work end with the daemon.
+                    lock(&self.working).abort_all();
+                    return;
+                }
                 () = self.moved.notified() => {}
                 () = tokio::time::sleep(self.resend_after), if again => {}
             }
@@ -703,7 +765,7 @@ mod tests {
         answers: Mutex<Vec<(String, Outcome)>>,
         asked: Mutex<Vec<(Party, Value)>>,
         /// The answers to the next calls; a call past them waits for the
-        /// test to let it go.
+        /// test to let it go, by dropping the other end of `held`.
         calls: Mutex<VecDeque<Result<Value, String>>>,
         held: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         seen: watch::Sender<u64>,
@@ -758,8 +820,9 @@ mod tests {
             self.moved();
             let answer = lock(&self.calls).pop_front();
             answer.unwrap_or_else(|| {
-                let held = lock(&self.held).take().expect("one held call");
-                let _ = held.recv();
+                // Every held call waits here, one behind the other.
+                let held = lock(&self.held);
+                let _ = held.as_ref().expect("a held call").recv();
                 Err("held".into())
             })
         }
@@ -768,6 +831,13 @@ mod tests {
     fn party(id: &str, name: &str) -> Party {
         Party {
             item: CoreItem::Agent,
+            id: id.to_owned(),
+            name: name.to_owned(),
+        }
+    }
+
+    fn agent(id: &str, name: &str) -> Agent {
+        Agent {
             id: id.to_owned(),
             name: name.to_owned(),
         }
@@ -836,13 +906,6 @@ mod tests {
         pair.mac_service.outbox_moved();
         pair.mac_core
             .until("the answer to the Mac's letter", |core| {
-    fn agent(id: &str, name: &str) -> Agent {
-        Agent {
-            id: id.to_owned(),
-            name: name.to_owned(),
-        }
-    }
-
                 !lock(&core.answers).is_empty()
             })
             .await;
@@ -913,6 +976,82 @@ mod tests {
             )
         );
         assert_eq!(lock(&pair.pc_core.taken).len(), 3);
+    }
+
+    /// A peer's calls are counted over its streams, not by each: the work
+    /// of a stream that closed keeps its places until it ends, so opening
+    /// another stream gets the peer no more of this daemon's work.
+    #[tokio::test]
+    async fn a_peers_calls_keep_their_places_past_the_stream_they_came_on_until_their_work_ends() {
+        let pair = Pair::new(RESEND_AFTER).await;
+        let mac = PeerKey::from_hex(&pair.mac_key).unwrap();
+        let (release, held) = std::sync::mpsc::channel();
+        *lock(&pair.pc_core.held) = Some(held);
+        let call = |call: u64| CoreMessage::Call {
+            call,
+            from: party_out(&party("agent-1", "worker")),
+            ask: Ask::Delivery,
+            command: json!({"op": "agents", "command": {"action": "list", "live": true}}),
+        };
+        let refused = |call: u64| {
+            Some(CoreMessage::CallAnswer {
+                call,
+                answer: None,
+                refused: Some("capacity".to_owned()),
+            })
+        };
+        let at_once = CALLS_AT_ONCE as u64;
+
+        // One stream asks as many calls as the peer has places, then one
+        // more.
+        let (first, answers) = mpsc::channel(OUTBOUND);
+        for n in 0..at_once {
+            assert_eq!(pair.pc_service.take(mac, call(n), &first).await, None);
+        }
+        assert_eq!(
+            pair.pc_service.take(mac, call(at_once), &first).await,
+            refused(at_once)
+        );
+        pair.pc_core
+            .until("the calls the PC works on", |core| {
+                lock(&core.asked).len() == CALLS_AT_ONCE
+            })
+            .await;
+
+        // The stream closes while that work goes on, and the peer opens
+        // one after another: none of them is given a call's place.
+        drop((first, answers));
+        for stream in 1..=3 {
+            let (again, _answers) = mpsc::channel(OUTBOUND);
+            let n = at_once + stream;
+            assert_eq!(pair.pc_service.take(mac, call(n), &again).await, refused(n));
+        }
+        assert_eq!(lock(&pair.pc_core.asked).len(), CALLS_AT_ONCE);
+        let room = Arc::clone(&lock(&pair.pc_service.rooms)[&mac]);
+        assert_eq!(room.available_permits(), 0);
+
+        // The work ends: every place is free again, and the next call is
+        // taken.
+        drop(release);
+        let free = within(
+            "the places of the calls that ended",
+            Arc::clone(&room).acquire_many_owned(CALLS_AT_ONCE as u32),
+        )
+        .await
+        .unwrap();
+        drop(free);
+        lock(&pair.pc_core.calls).push_back(Ok(json!({"agents": []})));
+        let (last, mut answers) = mpsc::channel(OUTBOUND);
+        assert_eq!(pair.pc_service.take(mac, call(99), &last).await, None);
+        assert_eq!(
+            within("the answer to the call taken", answers.recv()).await,
+            Some(CoreMessage::CallAnswer {
+                call: 99,
+                answer: Some(json!({"agents": []})),
+                refused: None,
+            })
+        );
+        assert!(lock(&pair.pc_service.working).len() <= CALLS_AT_ONCE + 1);
     }
 
     #[tokio::test]
