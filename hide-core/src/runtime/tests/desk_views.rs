@@ -2576,7 +2576,19 @@ fn split_and_move_apply_to_a_desk_view_and_refuse_one_on_no_desk() {
             )
             .unwrap_err();
         assert_eq!(refused.reason, "view_not_in_lane", "{suffix}");
-        assert_eq!(runtime.workspace_views.as_ref().unwrap().views, before);
+        // The agent's request is a use of its checkout (`used_unix_ms`);
+        // nothing else moves.
+        let unstamped = |views: &crate::workspace_views::WorkspaceViews| {
+            let mut views = views.clone();
+            for view in &mut views.workspaces {
+                view.used_unix_ms = 0;
+            }
+            views
+        };
+        assert_eq!(
+            unstamped(&runtime.workspace_views.as_ref().unwrap().views),
+            unstamped(&before)
+        );
     }
 
     let b = display_id(&runtime, &directory, "b.md");
