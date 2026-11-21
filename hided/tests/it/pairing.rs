@@ -251,7 +251,7 @@ async fn pair_by_link(
     guest: &Terminal,
 ) -> (Window, String, String) {
     // B1: the host's window shares a link that names the words' language.
-    let mut window = Window::open(&running, "web").await;
+    let mut window = Window::open(running, "web").await;
     let idle = window
         .frame("pairing frame", |frame| frame["type"] == "pairing")
         .await;
