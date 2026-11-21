@@ -3385,7 +3385,7 @@ The view's socket asks for no token: the stream already proved the machine, and 
 It is a `remote` connection ([Which connection may send what](#which-connection-may-send-what)), drawn as a window but never sent what only this machine's own windows get: no `pairing` frame, no `window_call`, no core move, and a `mobile` frame without the phone's QR code and pairing code.
 Its terminals follow the hub's remote limits (`terminal_hub::Limits::REMOTE`, D-84): 64 KiB of unsent output per pane where a window has 1 MiB, frames of at most 32 KiB, a longer chunk cut on a base64 boundary, the pane that last took a key sent first, and a pane past its limit drawn again whole; a view that comes back is always drawn again rather than resumed, since what it missed may be past those limits.
 A file read the view asks for is answered on its own `screen_bulk` socket, at most four at once (`VIEW_READS`), and a view whose bulk stream is not open is answered `bulk_missing`.
-Assets are kept by the host's build, at most 32 MiB each and 48 MiB in all, the oldest dropped first.
+Assets are kept by the host's key, its build and the path, never by the build alone, since a paired machine could name another's build and have its file run as the other's page; at most 32 MiB each and 48 MiB in all, the oldest dropped first.
 
 **The guest's side.**
 The guest's daemon answers its own desktop at `/peer-screen/<device>/` and `/peer-screen/<device>/assets/*` with its own token, and `/peer-screen/<device>/ws` merges the host's screen and bulk sockets into one for the desktop; it opens them only when the host is a machine it opens with an active pairing and an active grant, and answers 503 with `not_paired`, `not_connected`, `paused`, `paused_there` or `no_grant` otherwise.
