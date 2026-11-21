@@ -232,7 +232,7 @@ async fn relay_screen(mut socket: WebSocket, state: AppState, relay: RelayScreen
         return;
     };
     let connection = state.connections.fetch_add(1, Ordering::SeqCst);
-    screen_loop(socket, state, connection, handshake, Some(relay)).await;
+    screen_loop(socket, state, connection, handshake, Some(relay), None).await;
 }
 
 /// What a screen relay takes before the core: its screen's notice that it

@@ -508,6 +508,13 @@
         "priority": 0,
         "since": 1,
         "tag": 10
+      },
+      {
+        "name": "screen_bulk",
+        "needs_grant": true,
+        "priority": -100,
+        "since": 1,
+        "tag": 12
       }
     ],
     "message": {

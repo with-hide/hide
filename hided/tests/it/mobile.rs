@@ -1318,8 +1318,9 @@ async fn only_a_desktop_window_turns_agent_notifications_on() {
     event(&mut tab, "desktop_notices", json!({"wanted": true})).await;
     loop {
         let frame = next_frame(&mut tab).await.expect("socket open");
-        if frame["type"] == "error" {
-            assert_eq!(frame["message"], "desktop_notices is a desktop window's");
+        if frame["type"] == "refused" {
+            assert_eq!(frame["payload"]["kind"], "desktop_notices");
+            assert_eq!(frame["payload"]["reason"], "not_here");
             break;
         }
     }
