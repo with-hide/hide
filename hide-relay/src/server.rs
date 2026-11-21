@@ -389,8 +389,10 @@ async fn session(mut socket: Socket, mut admission: Admission) {
                     // Either receiver may wake first; retain the published reason.
                     break (*admission.end.borrow_and_update()).expect("closed peer queue carries its end");
                 };
-                // Hold the class-specific slot through the write as well.
+                // Hold the class-specific slot and the frame's share of the
+                // relay's queued bytes through the write as well.
                 let _capacity = outbound.capacity;
+                let _bytes = outbound.bytes;
                 if !matches!(timeout(WRITE_TIMEOUT, socket.send(outbound.message)).await, Ok(Ok(()))) {
                     break End::Refused(Rejection::new(Refusal::Timeout, "write_timeout"));
                 }

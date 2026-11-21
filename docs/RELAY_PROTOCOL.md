@@ -50,14 +50,15 @@ Knowing a room hash grants no phone credential: the endpoint must still complete
 
 | Budget | Production cap | `refused.reason` | Log `cap` |
 | --- | --- | --- | --- |
-| Concurrent admitted WebSockets, pending device proof included | 512 | `connection_limit` | `connections` |
+| Concurrent admitted WebSockets, pending device proof included | 1,536 | `connection_limit` | `connections` |
 | Phones in one room | 4 | `room_limit` | `phones_per_room` |
-| New WebSockets per source IP in a fixed 60-second window | 60 | `rate_limit` | `connections_per_ip` |
+| New WebSockets per source IP in a fixed 60-second window | 180 | `rate_limit` | `connections_per_ip` |
 | Complete binary envelope | Protocol `MAX_FRAME`, 65,536 bytes | `frame_limit` | `frame_size` |
 | Control message | Protocol `MAX_CONTROL`, 2,048 bytes | `frame_limit` | `control_size` |
 | Forwarded bytes per room, both directions including binary headers and handshakes | 1 GiB in a 24-hour window | `daily_limit` | `bytes_per_room_per_day` |
 | Unexpired IP / room accounting entries | 4,096 each | `rate_limit` / `connection_limit` | `ip_records` / `room_records` |
 | Data output per socket, including an in-progress write | 8 frames | `connection_limit` | `outbound_queue` |
+| Data output of every socket together, including in-progress writes | 256 MiB | `connection_limit` | `queued_bytes` |
 | Control output per socket, including reserved phone departures | 16 messages | `connection_limit` | `control_queue` |
 
 A window starts at that IP's first attempt or the room's first admission, using monotonic uptime, and resets on the first operation at or after its end.
@@ -79,8 +80,10 @@ A retired ID may therefore produce `peer_left` again; clients must treat repeate
 Closing that retired peer again is idempotent; zero and never-issued connection IDs remain routing violations.
 
 These caps bound the service's memory and initial free-service budget, not a measured production throughput promise.
-Eight maximum-size data frames across 512 sockets occupy at most 256 MiB of payload; sixteen protocol-bounded control messages per socket add at most 16 MiB.
-Receive buffers and task metadata add to that budget.
+A phone attaches to every computer it is paired with while its gathered view is on screen (PRD device-connect-iroh D-69), and every computer with Mobile on holds its own device socket, so a user of three computers holds up to six sockets where one computer held two; the connection and per-address caps are three times what one computer needed, and a phone of sixteen computers can return to the view twelve times a minute.
+Queued data is capped for the whole relay at 256 MiB, what eight maximum-size frames across 512 sockets held before, so more sockets add no queued payload: a frame that finds the relay's bytes spent is refused as one that finds its socket's eight frames full is, and a single non-reading socket can hold at most its eight frames of it.
+Sixteen protocol-bounded control messages per socket add at most 48 MiB across 1,536 sockets, and each socket's one message being read, up to 64 KiB with its 8 KiB read buffer, at most 108 MiB; with task metadata the service stays near 420 MiB of its 640 MiB `MemoryMax` (`deploy/relay/hide-relay.service`), against about 310 MiB at 512 sockets.
+The device relay runs beside it on the same e2-small (2 GiB): Caddy proxies both, holding two descriptors and two copy buffers per WebSocket, so its `LimitNOFILE` is 6,144 (2 × 1,024 device and 2 × 1,536 phone connections, with 1,024 left for listeners and pools) and its `MemoryMax` 320 MiB at about 100 KiB per proxied connection, an estimate from its copy buffers that no load run has measured; the services' `MemoryMax` values add up to 1,472 MiB, leaving the rest of the machine's 2 GiB to the system.
 Every binary forward parses one bounded envelope, charges one room counter, and queues it for one recipient; there is no room broadcast or background sweep.
 Admission alone prunes the bounded accounting tables; there is no per-frame full-table scan.
 

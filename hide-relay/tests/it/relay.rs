@@ -658,7 +658,24 @@ async fn production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513() 
 
 #[tokio::test]
 async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone() {
-    let mut fixture = Fixture::start(Limits::default()).await;
+    a_nonreading_phone_is_retired(Limits::default(), "outbound_queue").await;
+}
+
+/// The relay-wide queued bytes retire the phone that holds them the way its
+/// own eight frames do: with four full frames' worth for the whole relay,
+/// the slow phone's thirty-two-kilobyte frames spend it before its own queue
+/// fills, and the device and the other phone go on.
+#[tokio::test]
+async fn the_relays_queued_bytes_retire_a_nonreading_phone_before_its_own_queue_fills() {
+    let limits = Limits {
+        queued_bytes: 4 * MAX_FRAME,
+        ..Limits::default()
+    };
+    a_nonreading_phone_is_retired(limits, "queued_bytes").await;
+}
+
+async fn a_nonreading_phone_is_retired(limits: Limits, cap: &str) {
+    let mut fixture = Fixture::start(limits).await;
     let mut device = fixture.socket("192.0.2.1").await;
     let hello = register(&mut device, &DeviceKey::from_seed(&[31; 32])).await;
     let mut slow = fixture.socket("192.0.2.2").await;
@@ -702,7 +719,7 @@ async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone
         departed,
         "bounded traffic must retire a non-reading destination"
     );
-    fixture.cap("outbound_queue");
+    fixture.cap(cap);
     // The departure is queued in the device's control FIFO, which a pong does
     // not fence: the socket flushes its pong from the input branch, so more
     // copies of this phone's departure can still be queued behind it. The
