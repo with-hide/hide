@@ -11,10 +11,10 @@
 // (`later`).
 
 import type { ProjectTasksScope } from "../../agentScope";
-import type { AgentRow, ChangesSnapshot, EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, PaneHeader, RecentClosed, ViewDisplaySnapshot } from "../../snapshot";
+import type { AgentRow, ChangesSnapshot, LayoutNode, PaneHeader, RecentClosed } from "../../snapshot";
 import type { DirectoryList } from "../../store";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab } from "./kit";
+import { agent, applyDesk, deskSnapshot, focusedPane, keyText, panesOf, rowRequest, rowState, shellScreen, typed, viewedFileFrames, withViewedFile, type DeskModel, type PracticePane, type PracticePlace, type PracticeTab, type ViewedFile } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const ROOT = `/work/${PLACE.project}`;
@@ -394,8 +394,6 @@ function changes(): ChangesSnapshot {
   };
 }
 
-const EDITOR_TAB = "file1";
-
 const NOTES = [
   "# Review of the checkout fix",
   "",
@@ -404,19 +402,12 @@ const NOTES = [
   "",
 ].join("\n");
 
+const REVIEW: ViewedFile = { path: REVIEW_PATH, label: REVIEW_FILE, contents: NOTES, workspaceId: PLACE.project, checkoutId: CHECKOUT };
+
 /** The lane as the core draws it: the Explorer beside the View, and the reviewer's notes as the View's one display. */
 function viewOf(model: AgentsModel, view: NonNullable<WorldSnapshot["rest"]["workspace_view"]>): NonNullable<WorldSnapshot["rest"]["workspace_view"]> {
   const lane = { ...view, open: model.tool !== null || model.viewed, tool: model.tool, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view" as const };
-  if (!model.viewed) return lane;
-  const display: ViewDisplaySnapshot = { id: "view1", tab_id: EDITOR_TAB, path: REVIEW_PATH, label: REVIEW_FILE, kind: "file", committed: null, preview: true, state: "open", reason: null };
-  return { ...lane, tray: { ...lane.tray, shown: true, count: 1 }, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } } };
-}
-
-function opened(model: AgentsModel): { editor?: { tabs: EditorTabSnapshot[]; active_tab_id: string }; documents?: Record<string, EditorDocumentSnapshot> } {
-  if (!model.viewed) return {};
-  const tab: EditorTabSnapshot = { id: EDITOR_TAB, device_id: "local", workspace_id: PLACE.project, checkout_id: CHECKOUT, path: REVIEW_PATH, label: REVIEW_FILE, kind: "file", diff_committed: null, markdown_live: true, wrap: false, dirty: false, preview: true };
-  const document: EditorDocumentSnapshot = { path: REVIEW_PATH, language: "markdown", document_kind: "markdown", contents_utf8: NOTES, revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
-  return { editor: { tabs: [tab], active_tab_id: EDITOR_TAB }, documents: { [EDITOR_TAB]: document } };
+  return model.viewed ? withViewedFile(lane, REVIEW) : lane;
 }
 
 // --- The snapshot --------------------------------------------------------------------------
@@ -449,7 +440,7 @@ function snapshot(model: AgentsModel, nowMs: number): WorldSnapshot {
       recent_closed: recentClosed(model),
       terminal: { headers },
     },
-    frames: { listings: listings(), changes: changes(), ...opened(model) },
+    frames: { listings: listings(), changes: changes(), ...(model.viewed ? viewedFileFrames(REVIEW) : {}) },
   };
 }
 
