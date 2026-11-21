@@ -48,19 +48,15 @@ function nth<T>(list: readonly T[], value: number): T {
   return item;
 }
 
-/** A workspace as a bot's mode names it: its name, and its machine's after it when that is not this window's. */
-export function workspaceName(workspace: { label: string; device_id: string }, deviceName: (deviceId: string) => string | null): string {
-  const device = deviceName(workspace.device_id);
-  return device === null ? workspace.label : `${workspace.label} (${device})`;
-}
-
 /**
- * The workspace a bot is held inside, named for the screen, or null for a
- * whole-Hide bot. A workspace the core no longer lists was removed, and the
- * bot reaches nothing there, which `gone` words.
+ * A bot's mode as the screen names it: `own`, its own space, where it reaches
+ * only the agents and missions it started, or `all`, where it also reaches the
+ * workspaces the operator works in.
  */
-export function botWorkspaceName(mode: AccessMode, workspaces: readonly { id: string; label: string; device_id: string }[], deviceName: (deviceId: string) => string | null, gone: string): string | null {
-  if (mode.kind === "all") return null;
-  const workspace = workspaces.find((one) => one.id === mode.workspace_id);
-  return workspace ? workspaceName(workspace, deviceName) : gone;
+export type BotModeKind = "own" | "all";
+export const BOT_MODES: readonly BotModeKind[] = ["own", "all"];
+
+/** The screen's mode of a connected bot, from the core's. */
+export function botModeKind(mode: AccessMode): BotModeKind {
+  return mode.kind === "all" ? "all" : "own";
 }

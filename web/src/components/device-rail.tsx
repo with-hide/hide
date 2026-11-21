@@ -11,7 +11,8 @@ import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
-import { BotFace, BotWorkspaceBadge, useBotWorkspaceName } from "./bot-mark";
+import { botModeKind, type BotModeKind } from "../bots";
+import { BotFace } from "./bot-mark";
 import { EntryContextMenu } from "./entry-menu";
 import { Button } from "./ui/button";
 import { Keycap } from "./ui/keycap";
@@ -192,22 +193,22 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
 
 /** A bot's tile reading its mode from the access section, where the core publishes it beside the connection. */
 const BotTile = memo(function BotTile(props: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
-  const mode = useShellStore((s) => s.access?.connections.find((one) => one.id === props.connection)?.mode);
-  const workspace = useBotWorkspaceName(mode);
-  return <BotTileView {...props} workspace={workspace} />;
+  const connection = useShellStore((s) => s.access?.connections.find((one) => one.id === props.connection));
+  // A cell whose connection the section does not list yet reads as its own space, the narrower mode.
+  return <BotTileView {...props} mode={connection ? botModeKind(connection.mode) : "own"} />;
 });
 
 /**
  * A bot's tile (PRD hide-external-control D-50, B39, B41): the size of a
  * device's, its owl on the colour its name chooses (`botLook`), so it never
- * reads as a machine. A bot held inside one workspace wears a folder at the
- * bottom-right, a whole-Hide bot none. Its one mark is the grey number of what
+ * reads as a machine. A bot in `all` mode, which also reaches the operator's
+ * workspaces, wears a lime ring; one in its own space none. Its one mark is the grey number of what
  * waits on the bot's answer (`9+` from ten), which no Needs You, badge or
  * notice of the operator's counts; the hint names it a bot and its mode.
  */
-export function BotTileView({ name, turn, connection, workspace, selected, onSelect }: { name: string; turn: number; connection: string; workspace: string | null; selected: boolean; onSelect: () => void }) {
+export function BotTileView({ name, turn, connection, mode, selected, onSelect }: { name: string; turn: number; connection: string; mode: BotModeKind; selected: boolean; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
-  const facts = [name, t("devices.rail.tool"), workspace ?? t("devices.rail.botAll"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
+  const facts = [name, t("devices.rail.tool"), t(`devices.rail.botMode.${mode}`), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
   return (
     <Hint label={facts.join(" · ")} side="right">
       <Button
@@ -216,12 +217,11 @@ export function BotTileView({ name, turn, connection, workspace, selected, onSel
         aria-label={facts.join(", ")}
         aria-pressed={selected}
         data-rail-tool={connection}
-        data-rail-bot-mode={workspace === null ? "all" : "workspace"}
+        data-rail-bot-mode={mode}
         className={cn(TILE, "p-0 hover:bg-transparent focus-visible:ring-0", selected && "ring-2 ring-foreground ring-offset-2 ring-offset-sidebar")}
         onClick={onSelect}
       >
-        <BotFace name={name} size="tile" />
-        {workspace === null ? null : <BotWorkspaceBadge />}
+        <BotFace name={name} size="tile" mode={mode} />
         {turn > 0 ? (
           <span
             aria-hidden="true"

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BotTileView, RailTileView, type Tile } from "./components/device-rail";
-import { botLook } from "./bots";
+import { botLook, type BotModeKind } from "./bots";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { sidebarBody, type TileCounts } from "./devices";
 import type { SnapshotRest } from "./snapshot";
@@ -118,9 +118,9 @@ describe("a rail tile (quick device-rail-slack)", () => {
 });
 
 describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
-  const bot = (turn: number, { selected = false, workspace = null as string | null } = {}) => renderToStaticMarkup(
+  const bot = (turn: number, { selected = false, mode = "own" as BotModeKind } = {}) => renderToStaticMarkup(
     <TooltipProvider>
-      <BotTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" workspace={workspace} selected={selected} onSelect={() => undefined} />
+      <BotTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" mode={mode} selected={selected} onSelect={() => undefined} />
     </TooltipProvider>,
   );
   const button = (html: string) => html.match(/<button[^>]*data-rail-tool[^>]*>/)?.[0] ?? "";
@@ -129,7 +129,7 @@ describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
     const html = bot(3);
     const look = botLook("nightly");
     expect(html).toContain(`data-bot-face="${look.shape}:${look.color}"`);
-    expect(button(html)).toContain('aria-label="nightly, Bot, All, Bot&#x27;s turn 3"');
+    expect(button(html)).toContain('aria-label="nightly, Bot, Own space, Bot&#x27;s turn 3"');
     expect(marks(html)).toEqual([["tool_turn", "3"]]);
     expect(html).toContain("bg-muted-foreground");
     expect(html).not.toContain("bg-warning");
@@ -138,14 +138,14 @@ describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
   it("reads 9+ from ten and draws no number when nothing waits on the bot", () => {
     expect(marks(bot(10))).toEqual([["tool_turn", "9+"]]);
     expect(marks(bot(0))).toEqual([]);
-    expect(button(bot(0))).toContain('aria-label="nightly, Bot, All"');
+    expect(button(bot(0))).toContain('aria-label="nightly, Bot, Own space"');
   });
 
-  it("wears the folder only while held inside one workspace, which its name says", () => {
-    expect(bot(0)).not.toContain("data-bot-workspace-badge");
-    const held = bot(0, { workspace: "herdr-ide" });
-    expect(held).toContain("data-bot-workspace-badge");
-    expect(button(held)).toContain('aria-label="nightly, Bot, herdr-ide"');
+  it("rings the owl in lime only while the bot works in all of Hide, which its name says", () => {
+    expect(bot(0)).not.toContain("ring-primary");
+    const all = bot(0, { mode: "all" });
+    expect(all).toMatch(/data-bot-mode="all"[^>]*ring-primary|ring-primary[^>]*data-bot-mode="all"/);
+    expect(button(all)).toContain('aria-label="nightly, Bot, All"');
   });
 
   it("rings as selected while its cell is in front", () => {
