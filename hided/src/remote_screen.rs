@@ -120,20 +120,30 @@ pub enum SeatRefused {
     Full,
 }
 
+/// One host's asset: the host by its key, then its build and the path. The
+/// build and the path are what that host says, so two hosts never share an
+/// entry: one machine's file is never served as another's page, which would
+/// run in that machine's origin and on its socket.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct AssetKey {
+    host: PeerKey,
+    build: String,
+    path: String,
+}
+
 #[derive(Default)]
 struct AssetCache {
-    /// Keyed by the host's build and the path.
-    entries: HashMap<(String, String), (String, Bytes)>,
-    order: VecDeque<(String, String)>,
+    entries: HashMap<AssetKey, (String, Bytes)>,
+    order: VecDeque<AssetKey>,
     bytes: usize,
 }
 
 impl AssetCache {
-    fn get(&self, key: &(String, String)) -> Option<(String, Bytes)> {
+    fn get(&self, key: &AssetKey) -> Option<(String, Bytes)> {
         self.entries.get(key).cloned()
     }
 
-    fn put(&mut self, key: (String, String), kind: String, body: Bytes) {
+    fn put(&mut self, key: AssetKey, kind: String, body: Bytes) {
         if body.len() > ASSET_CACHE || self.entries.contains_key(&key) {
             return;
         }
@@ -377,7 +387,8 @@ fn unavailable(reason: &str) -> Response {
 
 /// The live connection to the host whose device id is `device`, and its
 /// key, when this machine is that host's guest now.
-fn host_link(state: &AppState, device: &str) -> Result<(Link, String), &'static str> {
+/// The link to `device` while this computer may open it, with its key and the build it says it runs.
+fn host_link(state: &AppState, device: &str) -> Result<(Link, PeerKey, String), &'static str> {
     let peers = state.peers.peers().ok_or("not_connected")?;
     let host = peers
         .hosts()
@@ -397,7 +408,7 @@ fn host_link(state: &AppState, device: &str) -> Result<(Link, String), &'static 
         _ => return Err("no_grant"),
     }
     let build = link.their_hello().build.clone();
-    Ok((link, build))
+    Ok((link, host.key, build))
 }
 
 /// A stream of a host's view: its two halves, which end with the grant.
@@ -445,12 +456,16 @@ async fn guest_file(state: AppState, device: String, path: String, headers: Head
     if path != "/" && path != "/index.html" && !path.starts_with("/assets/") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let (link, build) = match host_link(&state, &device) {
+    let (link, host, build) = match host_link(&state, &device) {
         Ok(found) => found,
         Err(reason) => return unavailable(reason),
     };
     let screens = Arc::clone(&state.remote_screens);
-    let key = (build, path.clone());
+    let key = AssetKey {
+        host,
+        build,
+        path: path.clone(),
+    };
     // Assets carry their content in their names; the page itself is read
     // each time, so a host's new build is drawn from its own page.
     let cached = path.starts_with("/assets/");
@@ -537,7 +552,7 @@ pub async fn guest_socket(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let link = match host_link(&state, &device) {
-        Ok((link, _)) => link,
+        Ok((link, ..)) => link,
         Err(reason) => return unavailable(reason),
     };
     ws.on_upgrade(move |socket| join_view(socket, link, device))
@@ -694,23 +709,61 @@ mod tests {
         assert_eq!(frame["phones"][0]["id"], "p1");
     }
 
+    fn asset(host: u8, build: &str, path: &str) -> AssetKey {
+        AssetKey {
+            host: PeerKey::from_bytes([host; 32]),
+            build: build.into(),
+            path: path.into(),
+        }
+    }
+
     #[test]
     fn the_asset_cache_keeps_a_build_s_assets_within_its_bound() {
         let mut cache = AssetCache::default();
         let big = Bytes::from(vec![0_u8; ASSET_CACHE / 2 + 1]);
         cache.put(
-            ("b1".into(), "/assets/a.js".into()),
+            asset(1, "b1", "/assets/a.js"),
             "text/javascript".into(),
             big.clone(),
         );
         cache.put(
-            ("b1".into(), "/assets/b.js".into()),
+            asset(1, "b1", "/assets/b.js"),
             "text/javascript".into(),
             big,
         );
         assert!(cache.bytes <= ASSET_CACHE);
-        assert!(cache.get(&("b1".into(), "/assets/a.js".into())).is_none());
-        assert!(cache.get(&("b1".into(), "/assets/b.js".into())).is_some());
-        assert!(cache.get(&("b2".into(), "/assets/b.js".into())).is_none());
+        assert!(cache.get(&asset(1, "b1", "/assets/a.js")).is_none());
+        assert!(cache.get(&asset(1, "b1", "/assets/b.js")).is_some());
+        assert!(cache.get(&asset(1, "b2", "/assets/b.js")).is_none());
+    }
+
+    // A paired machine that names another's build and path keeps its own
+    // file: the other machine's page is served the other machine's bytes.
+    #[test]
+    fn two_hosts_saying_the_same_build_and_path_keep_their_own_bytes() {
+        let mut cache = AssetCache::default();
+        cache.put(
+            asset(1, "b1", "/assets/app.js"),
+            "text/javascript".into(),
+            Bytes::from_static(b"one"),
+        );
+        cache.put(
+            asset(2, "b1", "/assets/app.js"),
+            "text/javascript".into(),
+            Bytes::from_static(b"two"),
+        );
+        assert_eq!(
+            cache
+                .get(&asset(1, "b1", "/assets/app.js"))
+                .map(|(_, body)| body),
+            Some(Bytes::from_static(b"one"))
+        );
+        assert_eq!(
+            cache
+                .get(&asset(2, "b1", "/assets/app.js"))
+                .map(|(_, body)| body),
+            Some(Bytes::from_static(b"two"))
+        );
+        assert!(cache.get(&asset(3, "b1", "/assets/app.js")).is_none());
     }
 }
