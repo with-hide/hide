@@ -27,7 +27,12 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn start() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        Self::start_in(tempfile::tempdir().unwrap())
+    }
+
+    /// The fixture over `root`, whose `state` folder may hold what an
+    /// earlier core left there.
+    pub(super) fn start_in(root: tempfile::TempDir) -> Self {
         let (runtime, _, _, path) = fixture(root.path());
         let native = |pane: &str| {
             json!({"pane_id":pane,"workspace_id":"workspace","tab_id":"tab",
@@ -104,6 +109,19 @@ impl Fixture {
                 .insert(pane, registered["id"].as_str().unwrap().to_owned());
         }
         started
+    }
+
+    /// Ends the core and its store's worker; the folder they ran over.
+    pub(super) fn stop(self) -> tempfile::TempDir {
+        let Self {
+            runtime,
+            _worker,
+            _root,
+            ..
+        } = self;
+        drop(_worker);
+        drop(runtime);
+        _root
     }
 
     /// A command of the agent in `pane`.
@@ -600,6 +618,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let registered = client
         .submit(
@@ -609,6 +628,8 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
                     context: crate::access::access_context(crate::node::TEST_NODE, connection),
                     also_reads: Vec::new(),
                     proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
+                    written: None,
                 },
                 actor,
                 mutation: Box::new(crate::coordination::Mutation::Register {

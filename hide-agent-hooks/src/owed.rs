@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::delivery::{BUNDLE_LETTERS, DELIVERY_EXPIRY_MS, valid_letter_ids};
+use crate::delivery::{BUNDLE_LETTERS, OWED_KEPT_MS, valid_letter_ids};
 
 /// The record's version; one of another version is not read.
 const RECORD_VERSION: u32 = 1;
@@ -193,7 +193,7 @@ pub fn take(folder: &Path, pane: &str, now: u64) -> Option<Owed> {
 }
 
 fn expired(record: &Record, now: u64) -> bool {
-    now.saturating_sub(record.owed_at_unix_ms) >= DELIVERY_EXPIRY_MS
+    now.saturating_sub(record.owed_at_unix_ms) >= OWED_KEPT_MS
 }
 
 /// Drops the records whose letters are past their deadline: one this build
@@ -219,7 +219,7 @@ fn written_before_deadline(path: &Path, now: u64) -> bool {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|written| written.duration_since(std::time::UNIX_EPOCH).ok())
-        .is_some_and(|written| now.saturating_sub(written.as_millis() as u64) >= DELIVERY_EXPIRY_MS)
+        .is_some_and(|written| now.saturating_sub(written.as_millis() as u64) >= OWED_KEPT_MS)
 }
 
 fn count(folder: &Path) -> usize {
@@ -310,7 +310,7 @@ mod tests {
     fn a_past_deadline_record_is_dropped_unsent() {
         let home = tempfile::tempdir().unwrap();
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
-        assert_eq!(taken(home.path(), "w1:p1", NOW + DELIVERY_EXPIRY_MS), None);
+        assert_eq!(taken(home.path(), "w1:p1", NOW + OWED_KEPT_MS), None);
         assert_eq!(count(&folder_of_home(home.path())), 0);
     }
 
@@ -349,7 +349,7 @@ mod tests {
             "w1:p3",
             "s1",
             &ids(&["letter-4"]),
-            now + DELIVERY_EXPIRY_MS + 60_000,
+            now + OWED_KEPT_MS + 60_000,
         )
         .unwrap();
         assert!(!record.exists());
@@ -481,10 +481,10 @@ mod tests {
             "w1:p1",
             "s1",
             &ids(&["letter-2"]),
-            NOW + DELIVERY_EXPIRY_MS - 1,
+            NOW + OWED_KEPT_MS - 1,
         )
         .unwrap();
-        assert_eq!(taken(home.path(), "w1:p1", NOW + DELIVERY_EXPIRY_MS), None);
+        assert_eq!(taken(home.path(), "w1:p1", NOW + OWED_KEPT_MS), None);
     }
 
     /// Two misses of one session are confirmed together; one of a new
@@ -538,7 +538,7 @@ mod tests {
             "w9:p9",
             "s1",
             &ids(&["letter-2"]),
-            NOW + DELIVERY_EXPIRY_MS,
+            NOW + OWED_KEPT_MS,
         )
         .unwrap();
         assert_eq!(count(&folder_of_home(home.path())), 1);

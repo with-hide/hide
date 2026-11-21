@@ -258,8 +258,11 @@ fn run_coordinator(
                         // core's, or a node's that dials it.
                         changed
                             | match &context.target {
+                                // Automations run on this core's own machine
+                                // (PRD automations D-21).
                                 SessionSyncTarget::Local { .. } => {
                                     guard.tick_agent_sleep(now_unix_ms)
+                                        | guard.tick_automations(now_unix_ms)
                                 }
                                 SessionSyncTarget::Remote { target_id, .. } => {
                                     guard.tick_node_agent_sleep(target_id, now_unix_ms)
@@ -294,12 +297,13 @@ fn run_coordinator(
         // nothing else (PRD labels-in-hided B29). The usage reader also runs
         // while background Memory analysis needs the weekly figure (PRD
         // project-memory-v2 D-10 b).
-        let window_attached = read_ui_attached(&context);
+        let window_attached = window_reads(&context, worktree_reader.as_mut());
         let connected = pulled.is_some();
         let run_background_reads = connected && !defer_background_reads && window_attached;
         // The worktree catalog is the one reader below that runs with no
         // window: a mission is made in a checkout the catalog lists, on a
-        // machine nobody has a window open on too.
+        // machine nobody has a window open on too (PRD device-connect-iroh
+        // D-72). Its Git watch still rests then (`window_reads`).
         let read_worktrees = connected && !defer_background_reads;
         let probe = provider_probe_reads(connected, window_attached, defer_background_reads);
         let read_usage = connected
@@ -344,7 +348,14 @@ fn run_coordinator(
             // rather than when the next read lands.
             let mut rebuild = request.removals != published_removals;
             published_removals = request.removals;
-            if let Some(answer) = reader.read_if_due(request) {
+            // With no window nothing is asked of the node from this thread
+            // (`WorktreeReader::read_unwatched_if_due`).
+            let answer = if window_attached {
+                reader.read_if_due(request)
+            } else {
+                reader.read_unwatched_if_due(request)
+            };
+            if let Some(answer) = answer {
                 // New worktree facts change which rows exist and what they
                 // say, so the catalog is rebuilt rather than only stored.
                 match publish_worktrees(&context, answer) {
@@ -615,7 +626,7 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
-    let resting = session.published_state().resting_payloads();
+    let healing = &session.published_state().healing;
     let not_resumed = &session.published_state().not_resumed;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
@@ -640,7 +651,9 @@ fn publish_session(
                 }
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
+                guard.take_heal(target_id, context.engine.as_ref(), crate::links::now_ms());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
+                guard.note_healing(target_id, healing, crate::links::now_ms());
                 // The restore after the device's switch said what it closed.
                 if let Some(left) = &session.published_state().not_carried {
                     guard.settle_switch_open(target_id, left);
@@ -870,18 +883,17 @@ fn publish_session(
     };
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
-            // A restore's resting agents become sleeping records first, so
-            // this ingest draws their rows as sleeping.
-            let kept = guard.adopt_resting(resting, overlay.as_ref());
-            // So is an agent a restore did not resume ended, with the engine
+            // An agent a restore did not resume is ended, with the engine
             // still naming it until an agent shows in its pane.
             let device = guard.node().to_string();
+            guard.take_heal(&device, context.engine.as_ref(), crate::links::now_ms());
             guard.end_unresumed(&device, host_scope, &payload, not_resumed);
+            guard.note_healing(&device, healing, crate::links::now_ms());
             // The ingest observes this payload for delivery and lays the
             // turns its observations wait on, with this pass's overlay.
             let (changed, readback) =
                 guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay);
-            (changed || kept, readback)
+            (changed, readback)
         }
         Err(_) => return false,
     };
@@ -1315,6 +1327,23 @@ fn read_memory_reads_usage(context: &SessionSyncContext) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a window draws the snapshot; a gone runtime reads as attached,
+/// and the loop's own check ends the coordinator.
+/// Whether a renderer is attached, so the readers only a window uses run on
+/// this wake. With none, the worktree reader's Git watch is ended too
+/// (`WorktreeReader::rest`): nothing takes its reports while the window is
+/// closed, and the next read after a renderer is back starts it again.
+fn window_reads(
+    context: &SessionSyncContext,
+    worktree_reader: Option<&mut crate::worktrees::WorktreeReader>,
+) -> bool {
+    let attached = read_ui_attached(context);
+    if !attached && let Some(reader) = worktree_reader {
+        reader.rest();
+    }
+    attached
+}
+
 /// What the provider probe is asked on a wake: `None` leaves it as it is,
 /// on a wake that defers the reads; `Some(true)` the runtime's request,
 /// while a window reads for a connected engine; `Some(false)` nothing, which
@@ -1330,9 +1359,6 @@ fn provider_probe_reads(connected: bool, window_attached: bool, deferred: bool) 
     }
 }
 
-/// Whether a window draws the snapshot, so the readers only a window uses
-/// run on this wake; a gone runtime reads as attached, and the loop's own
-/// check ends the coordinator.
 fn read_ui_attached(context: &SessionSyncContext) -> bool {
     context
         .runtime
@@ -2121,6 +2147,64 @@ mod pending_core_tests {
 #[cfg(test)]
 mod window_reads_tests {
     use super::*;
+    use crate::model::CoreOptions;
+    use hide_node_link::cleanup::RepositoryDirs;
+    use hide_node_link::protocol::Call;
+    use hide_node_link::worktrees::GitWatchReport;
+    use std::sync::mpsc::{Sender, channel};
+
+    /// A node whose every project is its own repository and whose Git watch
+    /// says it has started and is watching, then reports a heartbeat each
+    /// time the test ticks until the watch is stopped, and then says it ended.
+    struct WatchingNode {
+        started: Mutex<Sender<()>>,
+        tick: Mutex<std::sync::mpsc::Receiver<()>>,
+        ended: Mutex<Sender<()>>,
+    }
+
+    impl crate::node_access::NodeLink for WatchingNode {
+        fn call(
+            &self,
+            call: Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            self.call_with_progress(call, timeout, &mut |_| true)
+        }
+
+        fn call_with_progress(
+            &self,
+            call: Call,
+            _timeout: Duration,
+            progress: &mut dyn FnMut(Value) -> bool,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                Call::Repository { path } => Ok(json!(RepositoryDirs {
+                    root: path.clone(),
+                    git_dir: format!("{path}/.git"),
+                    common_dir: format!("{path}/.git"),
+                })
+                .into()),
+                Call::GitWatch { .. } => {
+                    let _ = self.started.lock().unwrap().send(());
+                    let mut report = serde_json::to_value(GitWatchReport::Watching {
+                        unwatched: Vec::new(),
+                    })
+                    .unwrap();
+                    while progress(report) {
+                        if self.tick.lock().unwrap().recv().is_err() {
+                            break;
+                        }
+                        report = serde_json::to_value(GitWatchReport::Quiet).unwrap();
+                    }
+                    let _ = self.ended.lock().unwrap().send(());
+                    Ok(Value::Null.into())
+                }
+                _ => Err(crate::node_access::LinkError::Unknown(
+                    "not part of this fixture".to_owned(),
+                )),
+            }
+        }
+    }
 
     /// Engineering 14: the provider probe is asked for nothing once no
     /// window reads, the last renderer gone or the engine link lost, even
@@ -2133,6 +2217,180 @@ mod window_reads_tests {
         assert_eq!(provider_probe_reads(true, false, false), Some(false));
         assert_eq!(provider_probe_reads(true, false, true), Some(false));
         assert_eq!(provider_probe_reads(false, true, false), Some(false));
+    }
+
+    /// The last renderer leaving, dispatched as the daemon sends it, ends the
+    /// node's Git watch on the coordinator's next wake; the first renderer
+    /// back starts it again on the next read.
+    #[test]
+    fn the_git_watch_ends_while_no_renderer_is_attached_and_starts_when_one_is() {
+        let options: CoreOptions = serde_json::from_value(json!({
+            "schema_version": crate::model::SCHEMA_VERSION,
+            "node_id": "test-node",
+            "app_state_path": ""
+        }))
+        .expect("workerless core options");
+        let runtime = Arc::new(Mutex::new(Runtime::new(
+            options,
+            crate::environment::EnvironmentReport {
+                statuses: Vec::new(),
+                home_path: None,
+                codex_home: None,
+            },
+            Arc::new(hide_node::Local::of_process()),
+            crate::node::test_devices(),
+        )));
+        let socket_path = std::env::temp_dir().join("hide-window-reads-unused.sock");
+        let context = SessionSyncContext::local(
+            &LiveContext {
+                socket_path: socket_path.clone(),
+                runtime: Arc::downgrade(&runtime),
+                notifier: ChangeNotifier::noop(),
+                engine: crate::engine::fake::FakeEngine::absent().engine(),
+                node: Arc::new(hide_node::Local::of_process()),
+            },
+            Arc::new(hide_node::Local::of_process()),
+        );
+        let (ended, watch_ended) = channel();
+        let (heartbeat, tick) = channel();
+        let (started, watch_started) = channel();
+        let node = Arc::new(WatchingNode {
+            started: Mutex::new(started),
+            tick: Mutex::new(tick),
+            ended: Mutex::new(ended),
+        });
+        let mut reader = crate::worktrees::WorktreeReader::new(node.clone());
+        // Dropped before the reader, so a watch still running at the end
+        // returns and the reader's end does not wait for it.
+        let heartbeat = heartbeat;
+        let request = crate::worktrees::WorktreeRequest {
+            projects: vec![crate::worktrees::WorktreeProjectRequest {
+                root_path: std::path::PathBuf::from("/a"),
+                bases: Default::default(),
+                base_override: None,
+                remote_default: None,
+                generation: 0,
+            }],
+            generation: 0,
+            removals: 0,
+        };
+        let attached = |attached: bool| {
+            let event = serde_json::to_vec(&json!({
+                "schema_version": 2, "kind": "ui_attached", "payload": {"attached": attached}
+            }))
+            .unwrap();
+            runtime.lock().unwrap().dispatch_json(&event);
+        };
+        assert!(window_reads(&context, Some(&mut reader)));
+        let _ = reader.read_if_due(request.clone());
+        // The watch call runs on a thread of its own.
+        watch_started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the first read starts the watch");
+
+        attached(false);
+        assert!(!window_reads(&context, Some(&mut reader)));
+        heartbeat.send(()).unwrap();
+        watch_ended
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the node's watch ended once no renderer was attached");
+
+        attached(true);
+        assert!(window_reads(&context, Some(&mut reader)));
+        let _ = reader.read_if_due(request);
+        watch_started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the watch starts again on the first read with a renderer back");
+    }
+
+    /// A node that notes which thread asks it for a repository's
+    /// directories and how many Git watches it was asked for.
+    #[derive(Default)]
+    struct NotingNode {
+        repository_askers: Mutex<Vec<std::thread::ThreadId>>,
+        watches: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::node_access::NodeLink for NotingNode {
+        fn call(
+            &self,
+            call: Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            self.call_with_progress(call, timeout, &mut |_| true)
+        }
+
+        fn call_with_progress(
+            &self,
+            call: Call,
+            _timeout: Duration,
+            _progress: &mut dyn FnMut(Value) -> bool,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                Call::Repository { path } => {
+                    self.repository_askers
+                        .lock()
+                        .unwrap()
+                        .push(std::thread::current().id());
+                    Ok(json!(RepositoryDirs {
+                        root: path.clone(),
+                        git_dir: format!("{path}/.git"),
+                        common_dir: format!("{path}/.git"),
+                    })
+                    .into())
+                }
+                Call::GitWatch { .. } => {
+                    self.watches
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(Value::Null.into())
+                }
+                _ => Err(crate::node_access::LinkError::Unknown(
+                    "not part of this fixture".to_owned(),
+                )),
+            }
+        }
+    }
+
+    /// A core with no window still reads the catalog, for the checkouts a
+    /// mission is made in, and the thread that polls the reader, which is
+    /// session-sync's, asks the node for nothing while it does: a node slow
+    /// to name a repository's directories holds no engine event back
+    /// (docs/PERFORMANCE_TESTING.md). The read with a window is the one
+    /// that follows the projects from that thread.
+    #[test]
+    fn a_read_with_no_window_lands_and_asks_the_node_nothing_from_the_thread_that_polls() {
+        let node = Arc::new(NotingNode::default());
+        let mut reader = crate::worktrees::WorktreeReader::new(node.clone());
+        let request = crate::worktrees::WorktreeRequest {
+            projects: vec![crate::worktrees::WorktreeProjectRequest {
+                root_path: std::path::PathBuf::from("/a"),
+                bases: Default::default(),
+                base_override: None,
+                remote_default: None,
+                generation: 0,
+            }],
+            generation: 0,
+            removals: 0,
+        };
+        let here = std::thread::current().id();
+        let asked_here = || node.repository_askers.lock().unwrap().contains(&here);
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while reader.read_unwatched_if_due(request.clone()).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the read with no window never landed"
+            );
+            std::thread::yield_now();
+        }
+        assert!(!asked_here(), "the polling thread asked the node");
+        assert_eq!(
+            node.watches.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no watch runs with no window"
+        );
+
+        let _ = reader.read_if_due(request);
+        assert!(asked_here(), "a window's read follows the projects");
     }
 }
 

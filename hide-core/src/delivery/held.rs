@@ -13,34 +13,34 @@ use super::Actor;
 use super::doorbell::{Hold, WAITING_MARK_REST_MS};
 use super::ledger::{Ledger, State};
 
-/// What the operator does to let held letters through, for the holds that
-/// do not end on their own, in the order one is named when a recipient's
-/// letters wait for several: a pane Hide cannot reach first, since nothing
-/// else can be done there.
+/// What the operator does to let held letters through, for the holds only
+/// the operator ends, in the order one is named when a recipient's letters
+/// wait for both (PRD letters-missions-simplify D-05, B14). A pane Hide
+/// cannot reach, another conversation in it, or bells the agent did not
+/// take are Hide's to settle (the agent's end hands its letters on, a wake
+/// or a later turn takes them), never the operator's.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HeldFor {
-    /// The pane or its device is not there, or holds another session.
-    Unreachable,
     /// The agent waits for the operator's approval on a menu or a plan.
     Approval,
     /// Text that may be the operator's stands unsent in its input.
     Draft,
-    /// Three bells were typed and the agent took none of its letters.
-    Unanswered,
 }
 
 /// The operator's part in `hold`, none for a hold that ends on its own
-/// (work, the quiet period, a launch, a moved state) or that only another
-/// build would end (a kind that takes no bell). Every hold is named, so a
-/// hold the doorbell adds is placed here before it builds.
+/// (work, the quiet period, a launch, a moved state, an agent that left its
+/// pane, bells not taken) or that only another build would end (a kind that
+/// takes no bell). Every hold is named, so a hold the doorbell adds is
+/// placed here before it builds.
 pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
     match hold {
-        Hold::Absent | Hold::Session => Some(HeldFor::Unreachable),
         Hold::Blocked | Hold::AwaitingOperator => Some(HeldFor::Approval),
         Hold::Draft => Some(HeldFor::Draft),
-        Hold::Exhausted => Some(HeldFor::Unanswered),
-        Hold::Kind
+        Hold::Absent
+        | Hold::Session
+        | Hold::Exhausted
+        | Hold::Kind
         | Hold::Working
         | Hold::SessionUnread
         | Hold::Status
@@ -73,12 +73,7 @@ pub struct HeldLetters {
 /// lift and that arrived `WAITING_MARK_REST_MS` or more before `now`, the
 /// two minutes a pane's waiting mark rests, so a hold a pass or two clears
 /// never shows. Also when the next pending one comes of that age, so a
-/// view made before then is made again. A letter that ended undelivered is
-/// none of them: one to a recipient still in its pane is not ended by its
-/// deadline (`Ledger::renew_present`), and the rest went to a recipient that
-/// is gone, which a mission shows as having no Conductor, or whose bells
-/// were all spent, which its sender is told and the recipient's inbox still
-/// lists. Memory only, bounded by the ledger.
+/// view made before then is made again. Memory only, bounded by the ledger.
 pub(crate) fn letters_held(
     ledger: &Ledger,
     holds: &BTreeMap<String, Hold>,

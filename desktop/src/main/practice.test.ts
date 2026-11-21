@@ -17,6 +17,14 @@ describe("practiceUrl", () => {
     expect(practiceUrl("http://127.0.0.1:53111", "en", "win32", 0)).toEqual({ refused: "chapter" });
   });
 
+  it("asks for a chapter's card instead of playing it only when a chapter is named (B12)", () => {
+    const shown = new URL(practiceUrl("http://127.0.0.1:53111", "ko", "darwin", "mission", true) as string);
+    expect(shown.searchParams.get("chapter")).toBe("mission");
+    expect(shown.searchParams.get("show")).toBe("1");
+    expect(new URL(practiceUrl("http://127.0.0.1:53111", "ko", "darwin", "mission") as string).searchParams.has("show")).toBe(false);
+    expect(new URL(practiceUrl("http://127.0.0.1:53111", "ko", "darwin", undefined, true) as string).searchParams.has("show")).toBe(false);
+  });
+
   it("refuses a language the shell does not offer", () => {
     expect(practiceUrl("http://127.0.0.1:53111", "ko&host=browser", "darwin")).toEqual({ refused: "language" });
     expect(practiceUrl("http://127.0.0.1:53111", 7, "darwin")).toEqual({ refused: "language" });

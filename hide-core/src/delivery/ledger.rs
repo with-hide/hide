@@ -7,14 +7,26 @@ use serde::{Deserialize, Serialize};
 
 use super::watch::Watch;
 use super::{
-    ANSWER_WAIT_MS, Actor, BODY_LIMIT, DELIVERY_EXPIRY_MS, FILE_LIMIT, LETTER_LIMIT, OPEN_LIMIT,
-    RETENTION_MS, WATCH_LIMIT,
+    ANSWER_WAIT_MS, Actor, BODY_LIMIT, FILE_LIMIT, LETTER_LIMIT, OPEN_LIMIT, RETENTION_MS,
+    WATCH_LIMIT,
 };
 
 /// The bells one letter has: the doorbell types it at most this many
 /// times (`Letter::reserve_bell`).
 pub(crate) const BELLS: u8 = 3;
+/// How long a live agent that took none of a letter's bells rests before the
+/// letter's next round of three (PRD letters-missions-simplify B6): Hide
+/// wakes it again rather than leaving the letter to wait for it, and a round
+/// per half hour keeps that from typing into it at every pass.
+pub(crate) const BELL_ROUND_MS: u64 = 30 * 60 * 1000;
 
+/// Where a letter stands. Hide ends a pending letter one of four ways
+/// (PRD letters-missions-simplify D-04): `delivered` once its recipient took
+/// it in, `superseded` by its sender's newer letter under the same intent,
+/// `no_recipient` when its recipient ended with no agent after it in its
+/// pane, and `expired` only at the update to this build. `acknowledged` is
+/// a delivered letter with its recipient's receipt, and `cancelled` its
+/// sender's own withdrawal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -22,8 +34,16 @@ pub enum State {
     Delivered,
     Acknowledged,
     Cancelled,
+    /// The same sender sent another body under the same intent while this
+    /// one waited (`mailbox::send`).
+    Superseded,
+    /// Its recipient's registration ended with no successor (B2).
+    NoRecipient,
+    /// Ended at the update to this build (B25): a Hide letter still waiting
+    /// then, or a letter an older build ended at its delivery deadline,
+    /// which it called `undelivered`.
+    #[serde(alias = "undelivered")]
     Expired,
-    Undelivered,
 }
 
 /// Why a letter stopped waiting for an answer nobody gave.
@@ -60,8 +80,30 @@ pub struct Letter {
     pub intent: String,
     pub sender: Actor,
     pub recipient: Actor,
+    /// The registration that sent the letter (PRD letters-missions-simplify
+    /// D-02), whose live successor an answer goes to; null when the sender
+    /// had none, as an older build's letters may.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// The registration the letter is addressed to: the agent, not its pane.
+    /// `recipient` is where that registration runs now, which the store keeps
+    /// with it: a move, a wake or Reopen carries it (`coordination::rebind`),
+    /// and an end hands a pending letter to the agent that took over its pane
+    /// (`coordination::succeed`) or ends it `no_recipient`. A letter an agent,
+    /// a tool or Desk sends always names one, since the send registers an
+    /// agent that had none (`Runtime::prepare_as`); null only when a letter
+    /// Hide writes, or an older build wrote, went to an agent with none.
+    #[serde(default)]
+    pub to: Option<String>,
     pub kind: String,
     pub body: String,
+    /// How many bytes at the start of `body` its sender wrote, when the core
+    /// appended something after them (a report's list of the Views its
+    /// sender opened, `Runtime::list_opened_views`); null when the body is
+    /// all the sender's. A send under the same intent is the same letter
+    /// again only when it says exactly the sender's part (B5).
+    #[serde(default)]
+    pub written: Option<usize>,
     pub state: State,
     #[serde(default)]
     pub hook_confirmed: Option<bool>,
@@ -92,9 +134,9 @@ pub struct Letter {
     /// line's digest and was handed the letter's body to print. No bell is
     /// typed for it again, whether or not the hook's confirmation arrived
     /// (`delivery::doorbell`): the next bell's batch for the same recipient,
-    /// a tool or turn-end hook or `hide inbox` brings it instead, and at its
-    /// deadline it ends delivered without a receipt. An older build drops the
-    /// field at its next save.
+    /// a tool or turn-end hook or `hide inbox` brings it instead, and when its
+    /// recipient ends with no successor it ends delivered without a receipt
+    /// (`Ledger::end_letters_to`).
     #[serde(default)]
     pub handed: bool,
     /// When a hook last handed the letter over, at a prompt (`handed`) or at
@@ -105,11 +147,6 @@ pub struct Letter {
     /// older build handed.
     #[serde(default)]
     pub handed_at_unix_ms: Option<u64>,
-    /// Where the letter's wait for intake began: on its recipient machine's
-    /// clock while the ledger keeps one (`Ledger::node_clocks`), on the wall
-    /// clock otherwise; null is its creation on the wall clock.
-    #[serde(default)]
-    pub intake_from: Option<u64>,
     /// Sent with `hide request send --now`: delivered at the recipient's
     /// next safe gap while it works, without the mid-turn wait (PRD
     /// letters-to-busy-agents D-05). An older build drops the field at its
@@ -176,14 +213,20 @@ pub struct Letter {
 /// there is taken from it by this record alone (`access::core_admit`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreStart {
-    pub origin: Actor,
-    /// The other machine's device id.
-    pub machine: String,
+    /// The registration that asked: the agent, not its pane, so the agent
+    /// that runs in its place later still takes the report.
+    pub origin: String,
+    /// The other machine's connection id, which it proved: a device id is
+    /// only what a machine says of itself, and two connections may say the
+    /// same one.
+    pub key: String,
     pub at_unix_ms: u64,
 }
 
-/// The most starts on other cores the ledger remembers; at the cap the
-/// oldest goes, and its machine's report then reaches no one.
+/// The most starts on other cores the ledger remembers. At the cap the
+/// oldest whose asker ended goes, since no report reaches an ended agent;
+/// while every asker still lives a new start is refused before it leaves
+/// (`Ledger::note_core_start`).
 pub const CORE_STARTS: usize = 256;
 
 /// A bell that failed: the doorbell's code for it, and whether the engine
@@ -197,84 +240,6 @@ pub struct BellFailure {
     pub maybe_typed: bool,
     pub at_unix_ms: u64,
 }
-
-/// How long one machine other than this core's own has been reachable, which
-/// the delivery deadline of a letter to an agent there counts instead of wall
-/// time (PRD core-host-node-move B13, D-11).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NodeClock {
-    /// Reachable time in ended stretches.
-    pub connected_ms: u64,
-    /// When the stretch running now began; null while the machine is not
-    /// reachable.
-    #[serde(default)]
-    pub since: Option<u64>,
-}
-
-impl NodeClock {
-    pub(crate) fn reading(&self, now: u64) -> u64 {
-        self.connected_ms
-            .saturating_add(self.since.map_or(0, |since| now.saturating_sub(since)))
-    }
-}
-
-/// The machines other than this core's own that the delivery store hears of,
-/// each with whether a letter can reach it now (PRD core-host-node-move B13).
-pub type Reach = BTreeMap<String, bool>;
-
-/// The recipients asleep now, by pane (PRD mission-worker-sleep D-13): an
-/// agent Hide put to sleep, whose letters wait for its wake, and whose wait
-/// while it sleeps or wakes does not count against the delivery deadline.
-pub type Asleep = BTreeMap<String, Sleeper>;
-
-/// The execution asleep in a pane: the session the letters to it address,
-/// and when it went to sleep on the core's wall clock.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Sleeper {
-    pub device_id: String,
-    pub session: Option<String>,
-    pub since: u64,
-}
-
-/// The letters whose wake of their recipient started, with when: each
-/// wakes it once (PRD mission-worker-sleep D-14).
-pub type Woken = BTreeMap<String, u64>;
-
-impl Sleeper {
-    /// The sleeper `letter` waits on, if its recipient is one.
-    pub(crate) fn of<'a>(asleep: &'a Asleep, letter: &Letter) -> Option<&'a Self> {
-        asleep.get(&letter.recipient.pane_id).filter(|sleeper| {
-            sleeper.device_id == letter.recipient.device_id
-                && sleeper.session == letter.recipient.session
-        })
-    }
-
-    /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
-    /// A letter that wakes (`Letter::wakes_a_sleeper`) that a prompt hook
-    /// took (`handed`), or whose one wake started before this sleep, wakes no
-    /// one now, so its hour runs as it would for an awake agent; any other
-    /// `report` or `progress` wakes no one at all and waits for the next wake
-    /// paused, rung or not (B3). A bell that was only typed is not taken: a
-    /// screen of the agent's own can take what is typed (`delivery::typed`),
-    /// so such a letter still waits for, and starts, the one wake it has.
-    pub(crate) fn pausing<'a>(
-        asleep: &'a Asleep,
-        woken: &Woken,
-        letter: &Letter,
-    ) -> Option<&'a Self> {
-        let wakes = letter.wakes_a_sleeper();
-        Self::of(asleep, letter).filter(|sleeper| {
-            !(wakes && letter.handed)
-                && woken
-                    .get(&letter.id)
-                    .is_none_or(|started| *started >= sleeper.since)
-        })
-    }
-}
-
-/// How often a reachable machine's running stretch is written into its clock,
-/// which bounds what a core that stops without a last save loses of it.
-pub const CLOCK_FOLD_MS: u64 = 60_000;
 
 impl Ledger {
     /// The request and block letters this pane's session sent whose answer
@@ -306,11 +271,7 @@ impl Ledger {
     /// no automatic sleep takes a working agent, and its hook hands the same
     /// bundle. The bell's time is when it was typed, after its line was
     /// worded, so a letter queued in those seconds counts as named though the
-    /// line did not count it; the hook still hands it with the rest. After a
-    /// bell typed and not taken, a later sleep leaves a waking letter its
-    /// wake (`Sleeper::pausing`), unless it already woke its recipient once;
-    /// that one's sender was told the input was not taken (`delivery::typed`)
-    /// and it waits out its hour.
+    /// line did not count it; the hook still hands it with the rest.
     pub(crate) fn unannounced(&self) -> impl Iterator<Item = &Letter> {
         // The recipient as `agent_sleep::LetterWaits` keys it: its pane and
         // the session the letter addresses.
@@ -371,32 +332,16 @@ impl Letter {
             .unwrap_or(self.state == State::Delivered && !self.handed)
     }
 
+    /// The part of the body its sender wrote ([`Letter::written`]).
+    pub(crate) fn written_body(&self) -> &str {
+        self.written
+            .and_then(|written| self.body.get(..written))
+            .unwrap_or(&self.body)
+    }
+
     pub(crate) fn awaiting_intake(&self) -> bool {
         self.state == State::Pending
             || (self.state == State::Acknowledged && self.hook_confirmed == Some(false))
-    }
-
-    /// How long the letter has waited for intake at `now`: the time its
-    /// recipient's machine was reachable since then, while `clocks` keeps one
-    /// for it, and wall time otherwise (this core's own machine).
-    pub(crate) fn intake_waited(&self, clocks: &BTreeMap<String, NodeClock>, now: u64) -> u64 {
-        match clocks.get(self.recipient.reach()) {
-            Some(clock) => clock
-                .reading(now)
-                .saturating_sub(self.intake_from.unwrap_or_default()),
-            None => now.saturating_sub(self.intake_from.unwrap_or(self.created_at_unix_ms)),
-        }
-    }
-
-    /// Whether the letter is still within its delivery deadline at `now`.
-    pub(crate) fn within_deadline(&self, clocks: &BTreeMap<String, NodeClock>, now: u64) -> bool {
-        self.intake_waited(clocks, now) < DELIVERY_EXPIRY_MS
-    }
-
-    /// Whether the delivery deadline passed while the letter still waits for
-    /// intake; `Ledger::expire` ends that wait.
-    pub(crate) fn intake_overdue(&self, clocks: &BTreeMap<String, NodeClock>, now: u64) -> bool {
-        self.awaiting_intake() && !self.within_deadline(clocks, now)
     }
 
     /// Whether the answer is still awaited past its deadline.
@@ -445,28 +390,14 @@ impl Letter {
         self.bell_ended.is_some_and(|ended| ended < self.attempts())
     }
 
-    /// Whether the letter has no bell left and the result of its last one
-    /// is recorded: the one fact the spent-bell judgment
-    /// (`Runtime::drive_spent_bells`) and the unconfirmed-input notice
-    /// (`Runtime::typed_input_work`) read, so neither judges a last bell
-    /// still on its way.
-    pub(crate) fn bells_spent(&self) -> bool {
-        self.bell_ended.is_some_and(|ended| ended >= BELLS)
-    }
-
     /// Spends one of the letter's three bells on `line`, which the doorbell
     /// types once this reservation is saved.
-    pub(crate) fn reserve_bell(
-        &mut self,
-        clocks: &BTreeMap<String, NodeClock>,
-        now: u64,
-        line: String,
-    ) -> Result<u8, String> {
+    pub(crate) fn reserve_bell(&mut self, line: String) -> Result<u8, String> {
         self.recipient.require_native_identity()?;
         if !super::bell::valid_line(&line) {
             return Err("bell_line_invalid".into());
         }
-        if self.state != State::Pending || !self.within_deadline(clocks, now) {
+        if self.state != State::Pending {
             return Err("letter_not_pending".into());
         }
         if self.handed {
@@ -479,6 +410,118 @@ impl Letter {
         self.bell_attempts = Some(attempt);
         self.bell_line = Some(line);
         Ok(attempt)
+    }
+
+    /// When the letter's last bell was typed, failed or was cut short, or when
+    /// the letter was sent if none was.
+    pub(crate) fn last_bell_at(&self) -> u64 {
+        self.bell_typed_at_unix_ms
+            .into_iter()
+            .chain(self.bell_failure.as_ref().map(|failure| failure.at_unix_ms))
+            .max()
+            .unwrap_or(self.created_at_unix_ms)
+    }
+
+    /// Whether the letter waits for its agent with its three bells spent, none
+    /// on its way, and a round since the last (`BELL_ROUND_MS`).
+    pub(crate) fn bell_round_due(&self, now: u64) -> bool {
+        self.state == State::Pending
+            && !self.handed
+            && self.attempts() >= BELLS
+            && !self.bell_in_flight()
+            && now.saturating_sub(self.last_bell_at()) >= BELL_ROUND_MS
+    }
+
+    /// Gives the letter its next round of three bells (`bell_round_due`).
+    /// Its sender was told of the bells not taken once, and is not again.
+    pub(crate) fn renew_bell_round(&mut self) {
+        let noticed = (self.input_noticed, self.input_noticed_at_unix_ms);
+        self.renew_bells();
+        (self.input_noticed, self.input_noticed_at_unix_ms) = noticed;
+    }
+
+    /// Gives a letter whose bells are spent three more, once its agent runs
+    /// anew (woken, moved or reopened, `coordination::rebind`): the bells
+    /// went to a run that did not take it (PRD letters-missions-simplify B6).
+    /// A bell still on its way keeps the count it belongs to.
+    pub(crate) fn renew_bells(&mut self) {
+        if self.attempts() < BELLS || self.bell_in_flight() {
+            return;
+        }
+        self.bell_errors = 0;
+        self.bell_sent = false;
+        self.bell_attempts = Some(0);
+        self.bell_ended = Some(0);
+        self.input_noticed = 0;
+        self.input_noticed_at_unix_ms = 0;
+    }
+
+    /// Hands the pending letter to the registration `to` that took over its
+    /// recipient's pane, running as `recipient` (B2). The new
+    /// agent is another conversation, which no bell rang and no hook handed
+    /// anything to: the letter is rung and handed to it as a new letter is.
+    pub(crate) fn hand_to(&mut self, to: &str, recipient: Actor) {
+        self.to = Some(to.to_owned());
+        self.recipient = recipient;
+        self.bell_errors = 0;
+        self.bell_sent = false;
+        self.bell_attempts = Some(0);
+        self.bell_ended = Some(0);
+        self.bell_line = None;
+        self.bell_turn = None;
+        self.bell_typed_at_unix_ms = None;
+        self.bell_route = Default::default();
+        self.bell_failure = None;
+        self.input_noticed = 0;
+        self.input_noticed_at_unix_ms = 0;
+        self.handed = false;
+        self.handed_at_unix_ms = None;
+        self.tool_handovers = 0;
+    }
+
+    /// Ends the letter, which nothing else ends, `state` at `now`: its
+    /// recipient no longer awaits it, nor its sender an answer.
+    /// Ends the pending letter a newer one from its sender under the same
+    /// intent replaces (`mailbox::send`, B5).
+    pub(crate) fn supersede(&mut self, now: u64) {
+        self.end(State::Superseded, now);
+    }
+
+    /// Ends the letter awaiting intake whose agent ended with no agent after
+    /// it in its pane: a pending one `no_recipient`, unless a hook already
+    /// handed it into that agent's session, which ends it `delivered`
+    /// without a receipt; one an older build acknowledged without a receipt
+    /// stops awaiting intake. A report handed so returns the pair whose
+    /// watch it ends.
+    fn recipient_ended(&mut self, now: u64) -> Option<(Actor, Actor)> {
+        if self.state == State::Pending && self.handed {
+            self.state = State::Delivered;
+            self.hook_confirmed = None;
+            if !self.open() {
+                self.finished_at_unix_ms = Some(now);
+            }
+            return (self.kind == "report").then(|| (self.sender.clone(), self.recipient.clone()));
+        }
+        if self.state == State::Pending {
+            self.end(State::NoRecipient, now);
+            crate::diagnostic!(serde_json::json!({
+                "component": "delivery", "kind": "letter.no_recipient",
+                "letter_id": self.id, "agent_id": self.to,
+                "pane_id": self.recipient.pane_id,
+            }));
+            return None;
+        }
+        self.hook_confirmed = None;
+        if !self.open() {
+            self.finished_at_unix_ms.get_or_insert(now);
+        }
+        None
+    }
+
+    fn end(&mut self, state: State, now: u64) {
+        self.state = state;
+        self.waiting_answer = false;
+        self.finished_at_unix_ms = Some(now);
     }
 }
 
@@ -500,12 +543,6 @@ pub struct Ledger {
     /// Changed only when durable spawn placement moves, never by letters or watches.
     #[serde(default)]
     pub spawn_placement_revision: u64,
-    /// The clock of each machine other than this core's own that a letter
-    /// waits on, by its registration id; a machine without one, this core's
-    /// own among them, is waited on in wall time. One per machine with a
-    /// letter awaiting intake, so the letters bound them.
-    #[serde(default)]
-    pub node_clocks: BTreeMap<String, NodeClock>,
     /// The operator's turn each live registration declared (PRD ask-human),
     /// by registration id: at most one per agent, so the registrations
     /// bound it. Left out of the file while there are none.
@@ -516,6 +553,14 @@ pub struct Ledger {
     /// there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_starts: Vec<CoreStart>,
+    /// What each agent saw of its status cells (`runtime::status_cells`), by
+    /// registration id: the subject of each cell and the revision it saw, so
+    /// a turn after a restart is not told again what it already read. One
+    /// entry per subject a cell stands for now, kept by the core; left out of
+    /// the file while there are none, and an older build drops it at its
+    /// next save, which shows each cell standing then once more.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub status_seen: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 impl Default for Ledger {
@@ -529,11 +574,18 @@ impl Default for Ledger {
             spawns: Vec::new(),
             identity_waits: Vec::new(),
             spawn_placement_revision: 0,
-            node_clocks: BTreeMap::new(),
             human_turns: BTreeMap::new(),
             core_starts: Vec::new(),
+            status_seen: BTreeMap::new(),
         }
     }
+}
+
+/// What [`Ledger::address_letters`] ended.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Addressed {
+    pub(crate) no_recipient: usize,
+    pub(crate) expired: usize,
 }
 
 impl Ledger {
@@ -544,7 +596,6 @@ impl Ledger {
         if self.letters.len() > LETTER_LIMIT
             || self.letters.iter().filter(|letter| letter.open()).count() > OPEN_LIMIT
             || self.watches.len() > WATCH_LIMIT
-            || self.node_clocks.len() > OPEN_LIMIT
         {
             return Err("capacity".into());
         }
@@ -556,19 +607,29 @@ impl Ledger {
                 || !super::valid_key(&letter.intent)
                 || !letter.sender.valid()
                 || !letter.recipient.valid()
+                || letter
+                    .from
+                    .as_deref()
+                    .is_some_and(|id| !super::valid_key(id))
+                || letter.to.as_deref().is_some_and(|id| !super::valid_key(id))
                 || !matches!(
                     letter.kind.as_str(),
                     "request" | "block" | "report" | "progress" | "reply" | "watch"
                 )
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
+                || letter
+                    .written
+                    .is_some_and(|written| !letter.body.is_char_boundary(written))
                 || letter.bell_errors > BELLS
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
                     !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
                         || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
                         || letter.recipient.session.as_ref() != Some(&turn.session)
                 })
-                || letter.bell_attempts.is_some_and(|attempts| attempts > BELLS)
+                || letter
+                    .bell_attempts
+                    .is_some_and(|attempts| attempts > BELLS)
                 || letter
                     .bell_ended
                     .is_some_and(|ended| ended > letter.attempts())
@@ -583,7 +644,7 @@ impl Ledger {
                 || (letter.hook_confirmed == Some(true)
                     && matches!(
                         letter.state,
-                        State::Pending | State::Undelivered | State::Expired
+                        State::Pending | State::NoRecipient | State::Expired
                     ))
                 || (letter.hook_confirmed == Some(false) && letter.state == State::Delivered)
                 || letter
@@ -594,12 +655,8 @@ impl Ledger {
                 || (letter.waiting_answer && letter.answer_wait_ended.is_some())
                 || (matches!(
                     letter.state,
-                    State::Cancelled | State::Undelivered | State::Expired
+                    State::Cancelled | State::Superseded | State::NoRecipient | State::Expired
                 ) && letter.waiting_answer)
-                // A letter waiting on a machine's clock knows where on it.
-                || (letter.awaiting_intake()
-                    && letter.intake_from.is_none()
-                    && self.node_clocks.contains_key(letter.recipient.reach()))
             {
                 return Err("ledger_unavailable".into());
             }
@@ -611,6 +668,16 @@ impl Ledger {
             }
         }
         crate::coordination::validate_records(self)?;
+        if self.core_starts.len() > CORE_STARTS {
+            return Err("capacity".into());
+        }
+        if self
+            .core_starts
+            .iter()
+            .any(|start| !super::valid_key(&start.origin) || !super::valid_key(&start.key))
+        {
+            return Err("ledger_unavailable".into());
+        }
         let mut sequences = HashSet::new();
         for id in ids
             .into_iter()
@@ -635,54 +702,96 @@ impl Ledger {
         self.letters.len() != before
     }
 
-    pub fn expire(&mut self, now: u64) -> bool {
-        self.expire_awake(now, &Asleep::new(), &Woken::new())
+    /// Ends each pending letter to the registration `id`, which ended with no
+    /// agent after it in its pane (B2): `no_recipient`, unless a hook already
+    /// handed it into that agent's session, which ends it `delivered` without
+    /// a receipt. A letter with no registration of its own addressed to the
+    /// same agent (`actor`) ends with it. A letter an older build
+    /// acknowledged without a receipt stops awaiting intake. Returns whether
+    /// any letter ended.
+    pub(crate) fn end_letters_to(&mut self, id: &str, actor: &Actor, now: u64) -> bool {
+        self.end_letters_where(
+            |letter| match &letter.to {
+                Some(to) => to == id,
+                None => letter.recipient.same_identity(actor),
+            },
+            now,
+        )
     }
 
-    /// Ends the wait of each letter past its delivery deadline, except a
-    /// letter waiting for its recipient's wake: its wait is paused until it
-    /// wakes (`Sleeper::pausing`, `Ledger::resume_woken`).
-    pub fn expire_awake(&mut self, now: u64, asleep: &Asleep, woken: &Woken) -> bool {
-        let mut changed = self.cleanup(now);
-        let clocks = &self.node_clocks;
+    /// Ends the letter `id` as [`Ledger::end_letters_to`] ends a letter to an
+    /// agent that ended: one sent to an agent that is closed
+    /// (`Runtime::closed_target`). Returns whether it ended.
+    pub(crate) fn end_letter(&mut self, id: &str, now: u64) -> bool {
+        self.end_letters_where(|letter| letter.id == id, now)
+    }
+
+    fn end_letters_where(&mut self, ends: impl Fn(&Letter) -> bool, now: u64) -> bool {
+        let mut ended = false;
         let mut reports = Vec::new();
         for letter in &mut self.letters {
-            if !letter.intake_overdue(clocks, now)
-                || Sleeper::pausing(asleep, woken, letter).is_some()
-            {
+            if !ends(letter) || !letter.awaiting_intake() {
                 continue;
             }
-            if letter.state == State::Pending && letter.handed {
-                // A hook printed it into its recipient's session: it ends as
-                // a confirmation would, without the receipt.
-                letter.state = State::Delivered;
-                letter.hook_confirmed = None;
-                if !letter.open() {
-                    letter.finished_at_unix_ms = Some(now);
-                }
-                if letter.kind == "report" {
-                    reports.push((letter.sender.clone(), letter.recipient.clone()));
-                }
-            } else if letter.state == State::Pending {
-                letter.state = State::Undelivered;
-                letter.waiting_answer = false;
-                letter.finished_at_unix_ms = Some(now);
-            } else {
-                // Acknowledged without a receipt by a build before the
-                // acknowledgement was the receipt. Its intake is no longer
-                // awaited: the hook stops handing it over and it stops
-                // counting as open, while an awaited reply keeps it open.
-                letter.hook_confirmed = None;
-                if !letter.open() {
-                    letter.finished_at_unix_ms.get_or_insert(now);
-                }
-            }
-            changed = true;
+            reports.extend(letter.recipient_ended(now));
+            ended = true;
         }
         for (sender, recipient) in reports {
             self.end_report_watch(&sender, &recipient);
         }
-        changed
+        ended
+    }
+
+    /// Brings the letters an earlier build kept to the rules letters keep
+    /// now (PRD letters-missions-simplify B25): each names the registrations
+    /// it is between, where the ledger holds them; a pending letter Hide
+    /// wrote as a notice (`notice`), which its agent's status says now
+    /// (D-03), ends `expired`; and a pending letter to an agent no live
+    /// registration holds ends as it would have had its agent ended then
+    /// (`Letter::recipient_ended`). A pending letter to Hide's own role or
+    /// the operator keeps waiting. Run once, by the store that reads a ledger
+    /// an earlier build wrote (`store::upgrade`).
+    pub(crate) fn address_letters(
+        &mut self,
+        notice: impl Fn(&Actor) -> bool,
+        now: u64,
+    ) -> Addressed {
+        let mut addressed = Addressed::default();
+        let agents = &self.agents;
+        // The registration `actor` ran as: its live one, else its last.
+        let registration = |actor: &Actor| {
+            agents
+                .iter()
+                .find(|record| !record.ended && record.actor.same_identity(actor))
+                .or_else(|| {
+                    agents
+                        .iter()
+                        .rev()
+                        .find(|record| record.actor.same_identity(actor))
+                })
+        };
+        for letter in &mut self.letters {
+            if letter.from.is_none() {
+                letter.from = registration(&letter.sender).map(|record| record.id.clone());
+            }
+            let recipient = registration(&letter.recipient);
+            if letter.to.is_none() {
+                letter.to = recipient.map(|record| record.id.clone());
+            }
+            if letter.state != State::Pending {
+                continue;
+            }
+            if notice(&letter.sender) {
+                letter.end(State::Expired, now);
+                addressed.expired += 1;
+            } else if !letter.recipient.code_owned()
+                && !recipient.is_some_and(|record| !record.ended)
+            {
+                letter.recipient_ended(now);
+                addressed.no_recipient += 1;
+            }
+        }
+        addressed
     }
 
     /// Ends the watch `recipient` keeps on `sender`, whose report it took.
@@ -692,103 +801,18 @@ impl Ledger {
         });
     }
 
-    /// Takes the time each recipient in `woke` slept out of the waits of
-    /// the letters it had awaiting intake (PRD mission-worker-sleep D-13), so
-    /// a letter that waited 50 minutes before its recipient slept has 10 left
-    /// when it wakes, and one sent while it slept has the whole hour. On a
-    /// machine with a clock the sleep is taken as reachable time, which can
-    /// only give a letter more of its hour, never less. A letter whose hour
-    /// ran through the sleep (`Sleeper::pausing`) keeps it.
-    pub fn resume_woken(&mut self, woke: &Asleep, woken: &Woken, now: u64) -> bool {
-        let mut changed = false;
-        for index in 0..self.letters.len() {
-            let letter = &self.letters[index];
-            let Some(sleeper) =
-                Sleeper::pausing(woke, woken, letter).filter(|_| letter.awaiting_intake())
-            else {
-                continue;
-            };
-            let waited = letter.intake_waited(&self.node_clocks, now);
-            let slept = now.saturating_sub(sleeper.since.max(letter.created_at_unix_ms));
-            let kept = waited.saturating_sub(slept);
-            let from = match self.node_clocks.get(letter.recipient.reach()) {
-                Some(clock) => clock.reading(now).saturating_sub(kept),
-                None => now.saturating_sub(kept),
-            };
-            if self.letters[index].intake_from != Some(from) {
-                self.letters[index].intake_from = Some(from);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    /// Gives each pending letter in `present` that reached its delivery
-    /// deadline a new one from `now`, instead of ending it undelivered: its
-    /// recipient is still in its pane, held by a state that ends once it
-    /// works, rests or the operator acts (`doorbell::Hold::recipient_present`),
-    /// such as a Conductor waiting an hour on the operator's answer. A letter
-    /// a hook already handed over ends delivered at its deadline as before.
-    /// Each renewal is one change an hour per letter, never one per pass.
-    pub fn renew_present(&mut self, present: &HashSet<String>, now: u64) -> bool {
-        let mut changed = false;
-        for letter in &mut self.letters {
-            if letter.state != State::Pending
-                || letter.handed
-                || !present.contains(&letter.id)
-                || !letter.intake_overdue(&self.node_clocks, now)
-            {
-                continue;
-            }
-            letter.intake_from = Some(match self.node_clocks.get(letter.recipient.reach()) {
-                Some(clock) => clock.reading(now),
-                None => now,
-            });
-            crate::diagnostic!(serde_json::json!({
-                "component": "delivery", "kind": "delivery.deadline_renewed",
-                "letter_id": letter.id, "pane_id": letter.recipient.pane_id,
-            }));
-            changed = true;
-        }
-        changed
-    }
-
-    /// Ends the wait of each pending letter in `failed`, which cannot be
-    /// delivered now: its recipient's wake failed (PRD mission-worker-sleep
-    /// D-16), or its bells are spent and none was taken. It is undelivered
-    /// and its sender waits for no answer. The reason goes to the sender in
-    /// Hide's own letter, not into this one.
-    pub fn fail_undeliverable(&mut self, failed: &BTreeMap<String, String>, now: u64) -> bool {
-        let mut changed = false;
-        for letter in &mut self.letters {
-            if letter.state != State::Pending || !failed.contains_key(&letter.id) {
-                continue;
-            }
-            letter.state = State::Undelivered;
-            letter.waiting_answer = false;
-            letter.finished_at_unix_ms = Some(now);
-            changed = true;
-        }
-        changed
-    }
-
-    /// The core of `machine` took letter `id`, which this core's agent
-    /// wrote to an agent of that core (PRD device-connect-iroh D-72): the
-    /// letter is delivered, and its recipient takes `name`, what that agent
-    /// is called there, in place of what its sender called it. Who the
+    /// The core on connection `key` took letter `id`, which this core's
+    /// agent wrote to an agent of that core (PRD device-connect-iroh D-72):
+    /// the letter is delivered, and its recipient takes `name`, what that
+    /// agent is called there, in place of what its sender called it. Who the
     /// recipient is does not change, so the same send asked again is the
-    /// same letter. Only a letter still waiting to be handed over to
-    /// `machine` moves, so an answer that comes twice, or from another
+    /// same letter. Only a letter still waiting to be handed over on that
+    /// connection moves, so an answer that comes twice, or from another
     /// machine, changes nothing. A refusal ends the letter another way
-    /// ([`Ledger::fail_undeliverable`]). Returns whether it moved.
-    pub fn settle_core(&mut self, id: &str, machine: &str, name: &str, now: u64) -> bool {
+    /// ([`Ledger::refuse_core`]). Returns whether it moved.
+    pub fn settle_core(&mut self, id: &str, key: &str, name: &str, now: u64) -> bool {
         let Some(letter) = self.letters.iter_mut().find(|letter| {
-            letter.id == id
-                && letter.state == State::Pending
-                && letter
-                    .recipient
-                    .core_address()
-                    .is_some_and(|address| address.device == machine)
+            letter.id == id && letter.state == State::Pending && letter.recipient.core_of(key)
         }) else {
             return false;
         };
@@ -801,6 +825,43 @@ impl Ledger {
             letter.finished_at_unix_ms = Some(now);
         }
         true
+    }
+
+    /// The core on connection `key` keeps nothing of letter `id`, which
+    /// this core's agent wrote to an agent of that core, and says why: the
+    /// letter ends `no_recipient`, as one whose agent ended with no agent
+    /// after it does, and keeps the other core's `reason` where a failed
+    /// bell's is kept (`Letter::bell_failure`), so its sender reads it with
+    /// the letter in `hide inbox` and `hide request show`. Only a letter
+    /// still waiting to be handed over on that connection ends. Returns
+    /// whether it ended.
+    pub fn refuse_core(&mut self, id: &str, key: &str, reason: &str, now: u64) -> bool {
+        let Some(letter) = self.letters.iter_mut().find(|letter| {
+            letter.id == id && letter.state == State::Pending && letter.recipient.core_of(key)
+        }) else {
+            return false;
+        };
+        letter.end(State::NoRecipient, now);
+        if super::valid_key(reason) {
+            letter.bell_failure = Some(BellFailure {
+                code: reason.to_owned(),
+                maybe_typed: false,
+                at_unix_ms: now,
+            });
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "delivery", "kind": "letter.no_recipient",
+            "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": reason,
+        }));
+        true
+    }
+
+    /// Ends each letter awaiting intake by an identity `gone` names, as
+    /// [`Ledger::end_letters_to`] ends the letters of a registration that
+    /// ended: the agents of a machine this core is paired with no longer
+    /// (`coordination::end_gone_cores`). Returns whether any ended.
+    pub(crate) fn end_letters_of(&mut self, gone: impl Fn(&Actor) -> bool, now: u64) -> bool {
+        self.end_letters_where(|letter| gone(&letter.recipient), now)
     }
 
     /// Stamps letter `id`, which an agent of another core sent, with the
@@ -816,189 +877,90 @@ impl Ledger {
         }
     }
 
-    /// Forgets the starts asked of machines not among `machines`, which
+    /// Forgets the starts asked of connections not among `keys`, which
     /// this core is paired with no longer. Returns whether any went.
-    pub fn forget_core_starts(&mut self, machines: &[String]) -> bool {
+    pub fn forget_core_starts(&mut self, keys: &[String]) -> bool {
         let before = self.core_starts.len();
-        self.core_starts
-            .retain(|start| machines.contains(&start.machine));
+        self.core_starts.retain(|start| keys.contains(&start.key));
         self.core_starts.len() != before
     }
 
-    /// Remembers that `origin` asked `machine`'s core for a start
-    /// ([`CoreStart`]). One record per asker and machine, the newest ask's
-    /// time; past [`CORE_STARTS`] the oldest goes. Returns whether the
-    /// ledger changed.
-    pub fn note_core_start(&mut self, origin: &Actor, machine: &str, now: u64) -> bool {
-        if self
+    /// Remembers that the registration `origin` asked the core on
+    /// connection `key` for a start ([`CoreStart`]), before the ask leaves.
+    /// One record per asker and connection: asked again, the record takes
+    /// the newest place and time. At [`CORE_STARTS`] the oldest record whose
+    /// asker ended goes; while the asker of every record may still take its
+    /// report, the new start is refused `capacity` and nothing is dropped.
+    pub fn note_core_start(
+        &mut self,
+        origin: &str,
+        key: &str,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if let Some(at) = self
             .core_starts
             .iter()
-            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+            .position(|start| start.key == key && start.origin == origin)
         {
-            return false;
+            let mut start = self.core_starts.remove(at);
+            start.at_unix_ms = now;
+            self.core_starts.push(start);
+            return Ok(());
         }
         if self.core_starts.len() >= CORE_STARTS {
-            let dropped = self.core_starts.remove(0);
+            let finished = self
+                .core_starts
+                .iter()
+                .position(|start| !self.core_start_open(start))
+                .ok_or("capacity")?;
+            let dropped = self.core_starts.remove(finished);
             crate::diagnostic!(serde_json::json!({
                 "component": "delivery", "kind": "core_start.dropped",
-                "machine": dropped.machine, "pane_id": dropped.origin.pane_id,
+                "agent_id": dropped.origin,
             }));
         }
         self.core_starts.push(CoreStart {
-            origin: origin.clone(),
-            machine: machine.to_owned(),
+            origin: origin.to_owned(),
+            key: key.to_owned(),
             at_unix_ms: now,
         });
-        true
+        Ok(())
     }
 
-    /// Whether `origin` asked `machine`'s core for a start this ledger
-    /// still remembers.
-    pub fn core_started(&self, origin: &Actor, machine: &str) -> bool {
-        self.core_starts
+    /// Whether the report of `start` may still reach its asker: its
+    /// registration is live. The agent that takes an asker's place takes
+    /// its starts ([`Self::hand_core_starts`]).
+    fn core_start_open(&self, start: &CoreStart) -> bool {
+        self.agents
             .iter()
-            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+            .any(|record| record.id == start.origin && !record.ended)
     }
 
-    /// Brings the machines' clocks to what `reach` says at `now` (PRD
-    /// core-host-node-move B13): a machine with a letter awaiting intake and
-    /// no clock gets one, a stretch starts when the machine becomes
-    /// reachable and ends when it stops being so, a running stretch is
-    /// written in every [`CLOCK_FOLD_MS`], and a clock goes once no letter
-    /// waits on it or its machine is no longer another machine this core
-    /// hears of (it left, or it is now this core's own). Every letter keeps
-    /// the wait it had through each of these. Returns whether anything
-    /// changed.
-    pub fn observe_reach(&mut self, reach: &Reach, now: u64) -> bool {
-        let mut changed = false;
-        let waited_on: HashSet<String> = self
-            .letters
-            .iter()
-            .filter(|letter| letter.awaiting_intake())
-            .map(|letter| letter.recipient.reach().to_owned())
-            .collect();
-        let ended: Vec<String> = self
-            .node_clocks
-            .keys()
-            .filter(|device| !reach.contains_key(*device) || !waited_on.contains(*device))
-            .cloned()
-            .collect();
-        for device in ended {
-            self.stop_clock(&device, now);
-            changed = true;
-        }
-        for (device, &reachable) in reach {
-            if !waited_on.contains(device) {
+    /// The starts registration `old` asked for are `successor`'s from now
+    /// on, one per connection: where both asked the same machine, the
+    /// successor's own record stands.
+    pub(crate) fn hand_core_starts(&mut self, old: &str, successor: &str) {
+        for at in (0..self.core_starts.len()).rev() {
+            if self.core_starts[at].origin != old {
                 continue;
             }
-            let Some(clock) = self.node_clocks.get_mut(device) else {
-                self.start_clock(device, reachable, now);
-                changed = true;
-                continue;
-            };
-            match (clock.since, reachable) {
-                (None, true) => clock.since = Some(now),
-                (Some(since), false) => {
-                    clock.connected_ms =
-                        clock.connected_ms.saturating_add(now.saturating_sub(since));
-                    clock.since = None;
-                }
-                (Some(since), true) if now.saturating_sub(since) >= CLOCK_FOLD_MS => {
-                    clock.connected_ms =
-                        clock.connected_ms.saturating_add(now.saturating_sub(since));
-                    clock.since = Some(now);
-                }
-                _ => continue,
-            }
-            changed = true;
-        }
-        changed
-    }
-
-    /// Whether [`Ledger::observe_reach`] would change anything at `now`, asked
-    /// without a copy of the ledger.
-    pub fn reach_moves(&self, reach: &Reach, now: u64) -> bool {
-        let waited_on = |device: &str| {
-            self.letters
+            let asked = self
+                .core_starts
                 .iter()
-                .any(|letter| letter.awaiting_intake() && letter.recipient.reach() == device)
-        };
-        self.node_clocks
-            .iter()
-            .any(|(device, clock)| match reach.get(device) {
-                None => true,
-                Some(&reachable) => {
-                    !waited_on(device)
-                        || match (clock.since, reachable) {
-                            (None, true) | (Some(_), false) => true,
-                            (Some(since), true) => now.saturating_sub(since) >= CLOCK_FOLD_MS,
-                            (None, false) => false,
-                        }
-                }
-            })
-            || reach
-                .keys()
-                .any(|device| !self.node_clocks.contains_key(device) && waited_on(device))
-    }
-
-    /// Puts the letters awaiting intake by an agent on `device` on a new
-    /// clock for it, each with the wall time it waited so far: the clock
-    /// starts at the longest of those waits.
-    fn start_clock(&mut self, device: &str, reachable: bool, now: u64) {
-        let waits: Vec<(usize, u64)> = self
-            .letters
-            .iter()
-            .enumerate()
-            .filter(|(_, letter)| letter.awaiting_intake() && letter.recipient.reach() == device)
-            .map(|(index, letter)| (index, letter.intake_waited(&self.node_clocks, now)))
-            .collect();
-        let start = waits
-            .iter()
-            .map(|(_, waited)| *waited)
-            .max()
-            .unwrap_or_default();
-        for (index, waited) in waits {
-            self.letters[index].intake_from = Some(start - waited);
-        }
-        self.node_clocks.insert(
-            device.to_owned(),
-            NodeClock {
-                connected_ms: start,
-                since: reachable.then_some(now),
-            },
-        );
-    }
-
-    /// Ends the clock of `device`; the letters still awaiting intake by an
-    /// agent there wait on in wall time, each with the wait it had.
-    fn stop_clock(&mut self, device: &str, now: u64) {
-        let waits: Vec<(usize, u64)> = self
-            .letters
-            .iter()
-            .enumerate()
-            .filter(|(_, letter)| letter.recipient.reach() == device)
-            .map(|(index, letter)| (index, letter.intake_waited(&self.node_clocks, now)))
-            .collect();
-        self.node_clocks.remove(device);
-        for (index, waited) in waits {
-            let letter = &mut self.letters[index];
-            letter.intake_from = letter.awaiting_intake().then(|| now.saturating_sub(waited));
-        }
-    }
-
-    /// What a ledger read at a core's start knows of a stretch that was
-    /// running when the last core stopped is only up to its last write, so
-    /// every running stretch ends there, with what was written of it.
-    fn end_stretches_at_start(&mut self) {
-        for clock in self.node_clocks.values_mut() {
-            clock.since = None;
+                .any(|start| start.origin == successor && start.key == self.core_starts[at].key);
+            if asked {
+                self.core_starts.remove(at);
+            } else {
+                successor.clone_into(&mut self.core_starts[at].origin);
+            }
         }
     }
 
     /// Ends the answer wait of every letter `actor` sent or received and the
     /// recipient took in, because its registration ended. A letter still
-    /// awaiting intake is left to the delivery deadline. Returns whether any
-    /// wait ended.
+    /// awaiting intake keeps its wait: one to the ended agent ends with it
+    /// (`end_letters_to`), and one from it still reaches its recipient.
+    /// Returns whether any wait ended.
     pub(crate) fn end_answer_waits_of(&mut self, actor: &Actor, now: u64) -> bool {
         let mut ended = false;
         for letter in &mut self.letters {
@@ -1087,10 +1049,20 @@ impl std::io::Write for Length {
     }
 }
 
+/// The ledger in `delivery-ledger.json` at `path`, where builds before the
+/// store kept it, as such a build loads it at its start: an absent file is
+/// an empty ledger. An older build started on a folder this build has used
+/// reads it so (B27), since this build only ever reads it.
 pub fn load(path: &Path) -> Result<Ledger, String> {
+    Ok(read_file(path)?.unwrap_or_default())
+}
+
+/// The ledger `delivery-ledger.json` at `path` holds, as it holds it; `None`
+/// when there is no such file. What the store imports (`delivery::store`).
+pub(crate) fn read_file(path: &Path) -> Result<Option<Ledger>, String> {
     let file = match hide_platform::fs::private::open_own_file(path, false) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Ledger::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("ledger_unavailable".into()),
     };
     if !hide_platform::fs::private::is_private(path).unwrap_or(false)
@@ -1102,15 +1074,11 @@ pub fn load(path: &Path) -> Result<Ledger, String> {
     file.take(FILE_LIMIT as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "ledger_unavailable")?;
-    let mut ledger = from_bytes(&bytes)?;
-    ledger.end_stretches_at_start();
-    Ok(ledger)
+    from_bytes(&bytes).map(Some)
 }
 
-/// The ledger `bytes` hold, under the rules the core loads its file with:
-/// within the size limit, a ledger of this build's shape, and valid. A core
-/// move asks it of the copy it is about to place, so a copy the new core
-/// would refuse never leaves the machine that can still run (`node_migration::copy`).
+/// The ledger `bytes` hold, under the rules `delivery-ledger.json` was loaded
+/// with: within the size limit, a ledger of this build's shape, and valid.
 pub fn from_bytes(bytes: &[u8]) -> Result<Ledger, String> {
     if bytes.len() > FILE_LIMIT {
         return Err("ledger_unavailable".into());
@@ -1120,39 +1088,64 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Ledger, String> {
     Ok(ledger)
 }
 
-/// Keep the persistence phase intact until the store has applied its
-/// admission policy. An uncertain replacement can never mean old bytes won.
+/// Why the store did not keep a ledger. A write the store refused left the
+/// file as it was; one whose commit failed may or may not have been kept, so
+/// the core stops answering from memory until a start reads the file again.
 #[derive(Debug)]
 pub enum SaveError {
+    /// Refused before anything was written: not a valid ledger, or past
+    /// its size limit.
     Validation(String),
-    Persistence(hide_platform::fs::atomic::DurableWriteError),
+    /// The store refused the write and rolled it back.
+    Refused(StoreFailure),
+    /// The commit failed: the rows may or may not be on the disk.
+    Uncertain(StoreFailure),
+    /// The state folder could not be made at the start.
     Bootstrap(hide_platform::fs::private::DirectoryDurabilityError),
+}
+
+/// What SQLite answered a failed write with: its kind and extended code,
+/// never a path or content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreFailure {
+    pub kind: &'static str,
+    pub extended: Option<i32>,
+}
+
+impl StoreFailure {
+    pub(crate) fn of(error: &rusqlite::Error) -> Self {
+        Self {
+            kind: super::store::code(error),
+            extended: error.sqlite_error().map(|error| error.extended_code),
+        }
+    }
 }
 
 impl SaveError {
     pub fn code(&self) -> &str {
         match self {
             Self::Validation(code) => code,
-            Self::Persistence(_) | Self::Bootstrap(_) => "ledger_unavailable",
+            Self::Refused(_) | Self::Uncertain(_) | Self::Bootstrap(_) => "ledger_unavailable",
         }
     }
 
     pub fn uncertain(&self) -> bool {
         matches!(
             self,
-            Self::Persistence(
-                hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. }
-                    | hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. }
-            ) | Self::Bootstrap(
-                hide_platform::fs::private::DirectoryDurabilityError::Uncertain { .. }
-            )
+            Self::Uncertain(_)
+                | Self::Bootstrap(
+                    hide_platform::fs::private::DirectoryDurabilityError::Uncertain { .. }
+                )
         )
     }
 
     pub fn diagnostic(&self) -> serde_json::Value {
-        use hide_platform::fs::atomic::DurableWriteError;
-        let (phase, source, cleanup) = match self {
-            Self::Validation(code) => return serde_json::json!({"phase":"validation","code":code}),
+        match self {
+            Self::Validation(code) => serde_json::json!({"phase":"validation","code":code}),
+            Self::Refused(failure) => serde_json::json!({"phase":"store_refused",
+                "sqlite":failure.kind,"extended":failure.extended}),
+            Self::Uncertain(failure) => serde_json::json!({"phase":"commit_uncertain",
+                "sqlite":failure.kind,"extended":failure.extended}),
             Self::Bootstrap(error) => {
                 use hide_platform::fs::private::DirectoryDurabilityError;
                 let (phase, source) = match error {
@@ -1163,20 +1156,10 @@ impl SaveError {
                         ("bootstrap_uncertain", source)
                     }
                 };
-                return serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind())});
+                // IO text can contain private directory names.
+                serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind())})
             }
-            Self::Persistence(DurableWriteError::BeforeReplace { source, cleanup }) => {
-                ("before_replace", source, cleanup.is_some())
-            }
-            Self::Persistence(DurableWriteError::ReplacementUncertain { source, cleanup }) => {
-                ("replacement_uncertain", source, cleanup.is_some())
-            }
-            Self::Persistence(DurableWriteError::ReplacedNotDurable { source, .. }) => {
-                ("replaced_not_durable", source, false)
-            }
-        };
-        // IO text and temporary paths can contain private directory names.
-        serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind()),"cleanup_failed":cleanup})
+        }
     }
 }
 
@@ -1189,35 +1172,17 @@ impl std::fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Validation(_) => None,
-            Self::Persistence(source) => Some(source),
             Self::Bootstrap(source) => Some(source),
+            Self::Validation(_) | Self::Refused(_) | Self::Uncertain(_) => None,
         }
     }
 }
 
-pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
-    write(path, &ledger.bytes().map_err(SaveError::Validation)?)
-}
-
-/// Replaces the file with `bytes`, which [`Ledger::bytes`] made, so a store
-/// that already checked and encoded its ledger writes it without encoding it
-/// again.
-pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
-    // The parent and its durable ancestry are established by initialization,
-    // never opportunistically created by a transaction after admission.
-    hide_platform::fs::atomic::write_file_durable(
-        path,
-        bytes,
-        hide_platform::fs::atomic::DurableAccess::Private,
-    )
-    .map_err(SaveError::Persistence)?;
-    Ok(())
-}
-
-/// Startup runs before Runtime is placed behind its mutex. Re-read the
-/// actual installed version and establish a new barrier before any effect.
-/// Corrupt or inaccessible bytes are preserved and never repaired by guess.
+/// Startup runs before Runtime is placed behind its mutex: makes the state
+/// folder when it is missing, opens the store at `path` (importing
+/// `delivery-ledger.json` the first time, `delivery::store`), so the file
+/// and the published ledger agree before any effect. A store the core cannot read is kept as it is,
+/// never repaired by guess.
 pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
     let refused = || SaveError::Validation("ledger_unavailable".into());
     let parent = path.parent().ok_or_else(refused)?;
@@ -1241,7 +1206,6 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(refused()),
     }
-    let ledger = load(path).map_err(SaveError::Validation)?;
     let mut ancestor = parent;
     let mut missing = Vec::new();
     loop {
@@ -1268,283 +1232,162 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
     if !hide_platform::fs::private::is_private(&canonical_parent).map_err(|_| refused())? {
         return Err(refused());
     }
-    save(path, &ledger)?;
-    Ok(ledger)
+    let (_, stored, _) = super::store::LedgerStore::open(path).map_err(SaveError::Validation)?;
+    // The file is named in its folder on the disk before any letter is
+    // answered from it, whether this open made it or a migration earlier in
+    // this start did (`node_migration::read_store`).
+    hide_platform::fs::private::establish_dir_durability(&canonical_parent)
+        .map_err(SaveError::Bootstrap)?;
+    Ok(stored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const MINUTE: u64 = 60_000;
+    /// Keeps `ledger` in the store at `path`, as the store thread does.
+    fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
+        super::super::store::save(path, ledger)
+    }
 
-    /// A ledger holding one letter sent at `sent` to an agent on `device`.
-    fn letter_to(device: &str, sent: u64) -> Ledger {
-        let mut ledger = Ledger::default();
-        let actor = |name: &str, device: &str| Actor {
-            pane_id: name.into(),
-            name: name.into(),
-            kind: "codex".into(),
-            device_id: device.into(),
-            session: Some(format!("{name}-native")),
+    /// The ledger a core starting on the store at `path` begins with
+    /// (`recover`, without its checks of the state folder).
+    fn load(path: &Path) -> Result<Ledger, String> {
+        super::super::store::load(path)
+    }
+
+    /// PRD device-connect-iroh D-72: at the cap only a start whose asker
+    /// ended goes, the oldest such first. While every asker may still take
+    /// its report a new start is refused and the oldest record, a long
+    /// mission's, keeps its place; a start asked again takes the newest
+    /// place and time and needs no room.
+    #[test]
+    fn the_remembered_starts_drop_only_ended_askers_and_refuse_when_none_ended() {
+        let key = "a".repeat(64);
+        let asker = |n: usize| format!("agent-{}", n + 1);
+        let holds = |ledger: &Ledger, n: usize| {
+            ledger
+                .core_starts
+                .iter()
+                .any(|start| start.origin == asker(n))
         };
-        super::super::mailbox::send(
-            &mut ledger,
-            &actor("sender", "local"),
-            &actor("recipient", device),
-            "once",
-            "private",
-            "request",
-            None,
-            sent,
-        )
-        .unwrap();
+        let mut ledger = Ledger::default();
+        for n in 0..=CORE_STARTS {
+            let actor = Actor {
+                pane_id: format!("w1:p{n}"),
+                name: format!("asker-{n}"),
+                kind: "codex".into(),
+                device_id: "local".into(),
+                session: crate::engine::tokens::session_digest(&format!("asker-{n}")),
+            };
+            ledger.agents.push(crate::coordination::AgentRecord {
+                id: asker(n),
+                name: Some(actor.name.clone()),
+                machine: "local".into(),
+                host_scope: "scope".into(),
+                native_machine: "machine".into(),
+                session: format!("asker-{n}"),
+                instance: format!("terminal-{n}"),
+                pane: actor.pane_id.clone(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor,
+                ended: false,
+                terminal_id: None,
+                forked: false,
+                successor: None,
+            });
+        }
+        for n in 0..CORE_STARTS {
+            ledger.note_core_start(&asker(n), &key, n as u64).unwrap();
+        }
+        assert_eq!(
+            ledger.note_core_start(&asker(CORE_STARTS), &key, 999),
+            Err("capacity")
+        );
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert_eq!(ledger.core_starts[0].origin, asker(0));
+
+        ledger.note_core_start(&asker(0), &key, 1_000).unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        let newest = ledger.core_starts.last().unwrap();
+        assert!(newest.origin == asker(0) && newest.at_unix_ms == 1_000);
+        // The same asker on another connection is another record.
+        assert_eq!(
+            ledger.note_core_start(&asker(0), &"b".repeat(64), 1_000),
+            Err("capacity")
+        );
+
+        // Askers 9 and 5 ended: the older record of the two goes for the
+        // new start, and no living asker's does.
+        for n in [9, 5] {
+            ledger.agents[n].ended = true;
+        }
         ledger
+            .note_core_start(&asker(CORE_STARTS), &key, 1_001)
+            .unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert!(!holds(&ledger, 5) && holds(&ledger, 9));
+        assert!(holds(&ledger, 1) && holds(&ledger, CORE_STARTS));
+
+        // The agent that takes asker 7's place takes its start, and where
+        // both asked the same machine one record stands.
+        ledger.hand_core_starts(&asker(7), "agent-next");
+        assert!(!holds(&ledger, 7));
+        assert!(
+            ledger
+                .core_starts
+                .iter()
+                .any(|start| start.origin == "agent-next")
+        );
+        ledger.hand_core_starts(&asker(1), "agent-next");
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS - 1);
+        assert!(!holds(&ledger, 1));
     }
 
-    fn reach(device: &str, reachable: bool) -> Reach {
-        [(device.to_owned(), reachable)].into()
-    }
-
-    /// The deadline of a letter to another machine runs only while that
-    /// machine is reachable: two hours away count nothing, and the letter
-    /// turns undelivered 60 reachable minutes after it was sent; then the
-    /// clock goes with the last letter waiting on it (B13).
+    /// PRD device-connect-iroh D-72: a letter to another core's agent waits,
+    /// with no deadline, until the core on its connection answers. Taken, it
+    /// is delivered under the name the agent has there; refused, it ends
+    /// with no recipient and keeps the other core's reason. An answer from
+    /// another connection, or a second one, moves nothing.
     #[test]
-    fn a_letter_to_another_machine_waits_only_while_that_machine_is_reachable() {
-        let mut ledger = letter_to("mini", 0);
-        ledger.observe_reach(&reach("mini", true), 0);
-        ledger.observe_reach(&reach("mini", false), 10 * MINUTE);
-        ledger.expire(130 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.observe_reach(&reach("mini", true), 130 * MINUTE);
-        ledger.expire(179 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.expire(180 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
-        ledger.observe_reach(&reach("mini", true), 180 * MINUTE);
-        assert!(ledger.node_clocks.is_empty());
-    }
-
-    /// PRD device-connect-iroh D-72: a letter to an agent of another core
-    /// waits on the connection between the two cores, not on this core's
-    /// own node on that machine. Its deadline stands still while the
-    /// connection is down, whatever that node does; the other core taking
-    /// it delivers it under the name the agent has there, and an answer
-    /// from another machine, or a second one, moves nothing.
-    #[test]
-    fn a_letter_to_another_cores_agent_waits_on_the_connection_between_the_cores() {
-        let mut ledger = letter_to("local", 0);
+    fn a_letter_to_another_cores_agent_ends_by_what_the_core_on_its_connection_answers() {
         let address =
             crate::address::CoreAddress::new("mini", crate::address::CoreItem::Agent, "agent-7");
-        ledger.letters[0].recipient = Actor::core(address, "Mac mini", "agent-7", "local");
-        assert_eq!(ledger.letters[0].recipient.reach(), "core:mini");
-        assert_eq!(ledger.letters[0].recipient.machine(), "mini");
-        let both = |core: bool| -> Reach {
-            [("mini".to_owned(), true), ("core:mini".to_owned(), core)].into()
+        let (mini, studio) = ("a".repeat(64), "b".repeat(64));
+        let there = Actor::core(address, &mini, "Mac mini", "agent-7", "local");
+        let to_core = || {
+            let mut ledger = letter();
+            ledger.letters[0].recipient = there.clone();
+            ledger
         };
-        ledger.observe_reach(&both(false), 0);
-        ledger.expire(130 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.observe_reach(&both(true), 130 * MINUTE);
-        ledger.expire(189 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
 
-        assert!(!ledger.settle_core(
-            "letter-1",
-            "studio",
-            "hide:core:Studio:worker",
-            189 * MINUTE
-        ));
-        assert!(ledger.settle_core(
-            "letter-1",
-            "mini",
-            "hide:core:Mac mini:worker",
-            189 * MINUTE
-        ));
+        let mut ledger = to_core();
+        assert!(!ledger.settle_core("letter-1", &studio, "hide:core:Mac mini:worker", 5));
+        assert!(ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:worker", 5));
         let letter = &ledger.letters[0];
         assert_eq!(letter.state, State::Delivered);
         assert_eq!(letter.recipient.name, "hide:core:Mac mini:worker");
-        assert_eq!(letter.recipient.reach(), "core:mini", "the same agent");
+        assert!(letter.recipient.core_of(&mini), "the same agent");
         assert!(letter.waiting_answer && letter.finished_at_unix_ms.is_none());
-        assert!(!ledger.settle_core("letter-1", "mini", "hide:core:Mac mini:other", 190 * MINUTE));
-        ledger.observe_reach(&both(true), 190 * MINUTE);
-        assert!(ledger.node_clocks.is_empty());
+        assert!(!ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:other", 6));
+        assert!(!ledger.refuse_core("letter-1", &mini, "target_unavailable", 6));
         ledger.validate().unwrap();
-    }
 
-    /// PRD mission-worker-sleep D-13: the deadline does not run while the
-    /// recipient sleeps. A letter that waited 50 minutes before its
-    /// recipient slept for two hours has 10 left once it wakes, and one sent
-    /// while it slept has the whole hour.
-    #[test]
-    fn a_letter_waits_out_its_recipients_sleep_without_its_deadline_running() {
-        let mut ledger = letter_to("local", 0);
-        let mut later = letter_to("local", 100 * MINUTE);
-        let mut sent = later.letters.remove(0);
-        sent.id = "letter-2".into();
-        sent.intent = "twice".into();
-        ledger.letters.push(sent);
-        let sleeper = Sleeper {
-            device_id: "local".into(),
-            session: Some("recipient-native".into()),
-            since: 50 * MINUTE,
-        };
-        let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
-        assert!(!ledger.expire_awake(170 * MINUTE, &asleep, &Woken::new()));
-        assert!(
-            ledger
-                .letters
-                .iter()
-                .all(|letter| letter.state == State::Pending)
-        );
-        assert!(ledger.resume_woken(&asleep, &Woken::new(), 170 * MINUTE));
-        ledger.expire(179 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.expire(180 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
-        ledger.expire(229 * MINUTE);
-        assert_eq!(ledger.letters[1].state, State::Pending);
-        ledger.expire(230 * MINUTE);
-        assert_eq!(ledger.letters[1].state, State::Undelivered);
-    }
-
-    /// Operator decision 2026-11-14: a letter whose recipient the doorbell
-    /// still sees in its pane, such as a Conductor waiting an hour on the
-    /// operator's answer, gets another hour at its deadline instead of ending
-    /// undelivered, once an hour rather than on every pass; once the pane is
-    /// no longer seen it ends at the end of that hour, and a letter a hook
-    /// already handed over ends delivered as before.
-    #[test]
-    fn a_letter_to_a_recipient_still_in_its_pane_gets_another_hour() {
-        let mut ledger = letter_to("local", 0);
-        let mut handed = letter_to("local", 0).letters.remove(0);
-        handed.id = "letter-2".into();
-        handed.intent = "handed".into();
-        handed.handed = true;
-        ledger.letters.push(handed);
-        let present: HashSet<String> = ["letter-1".to_owned(), "letter-2".to_owned()].into();
-        assert!(!ledger.renew_present(&present, 59 * MINUTE), "not due yet");
-        assert!(ledger.renew_present(&present, 60 * MINUTE));
-        assert!(
-            !ledger.renew_present(&present, 61 * MINUTE),
-            "renewed once, not again on the next pass"
-        );
-        ledger.expire(60 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        assert_eq!(ledger.letters[1].state, State::Delivered);
-        ledger.expire(119 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        let gone = HashSet::new();
-        assert!(!ledger.renew_present(&gone, 120 * MINUTE));
-        ledger.expire(120 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
-    }
-
-    /// A letter a prompt hook already took, or whose one wake started before
-    /// this sleep, wakes no one now, so its hour runs through the sleep; one
-    /// whose wake is this sleep's, or whose bell was typed and not taken,
-    /// waits it out.
-    #[test]
-    fn only_a_letter_waiting_for_its_recipients_wake_pauses_its_hour() {
-        let sleeper = Sleeper {
-            device_id: "local".into(),
-            session: Some("recipient-native".into()),
-            since: 50 * MINUTE,
-        };
-        let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
-        let mut taken = letter_to("local", 0);
-        taken.letters[0].bell_sent = true;
-        taken.letters[0].handed = true;
-        let mut taken_report = taken.clone();
-        taken_report.letters[0].kind = "report".into();
-        let mut typed = letter_to("local", 0);
-        typed.letters[0].bell_sent = true;
-        taken.expire_awake(60 * MINUTE, &asleep, &Woken::new());
-        assert_eq!(taken.letters[0].state, State::Delivered);
-        taken_report.expire_awake(60 * MINUTE, &asleep, &Woken::new());
-        assert_eq!(
-            taken_report.letters[0].state,
-            State::Pending,
-            "a report waits for the wake"
-        );
-        typed.expire_awake(60 * MINUTE, &asleep, &Woken::new());
-        assert_eq!(
-            typed.letters[0].state,
-            State::Pending,
-            "a bell typed and not taken leaves it the wake"
-        );
-        let mut woke_before = letter_to("local", 0);
-        let id = woke_before.letters[0].id.clone();
-        let before: Woken = [(id.clone(), 10 * MINUTE)].into();
-        woke_before.expire_awake(60 * MINUTE, &asleep, &before);
-        assert_eq!(woke_before.letters[0].state, State::Undelivered);
-        let mut woke_now = letter_to("local", 0);
-        let now: Woken = [(id, 55 * MINUTE)].into();
-        woke_now.expire_awake(60 * MINUTE, &asleep, &now);
-        assert_eq!(woke_now.letters[0].state, State::Pending);
-        assert!(woke_now.resume_woken(&asleep, &now, 70 * MINUTE));
-        woke_now.expire(79 * MINUTE);
-        assert_eq!(woke_now.letters[0].state, State::Pending);
-    }
-
-    /// D-16: a failed wake leaves its pending letter undelivered and its
-    /// sender waiting for no answer.
-    #[test]
-    fn a_failed_wake_leaves_its_letter_undelivered() {
-        let mut ledger = letter_to("local", 0);
-        let id = ledger.letters[0].id.clone();
-        assert!(ledger.fail_undeliverable(&[(id, "agent_wake.not_started".into())].into(), 5));
+        let mut ledger = to_core();
+        assert!(!ledger.refuse_core("letter-1", &studio, "target_unavailable", 7));
+        assert!(ledger.refuse_core("letter-1", &mini, "target_unavailable", 7));
         let letter = &ledger.letters[0];
-        assert_eq!(letter.state, State::Undelivered);
+        assert_eq!(letter.state, State::NoRecipient);
         assert!(!letter.waiting_answer);
-        assert_eq!(letter.finished_at_unix_ms, Some(5));
+        assert_eq!(letter.finished_at_unix_ms, Some(7));
+        assert_eq!(
+            letter.bell_failure.as_ref().map(|why| why.code.as_str()),
+            Some("target_unavailable")
+        );
+        assert!(!ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:worker", 8));
         ledger.validate().unwrap();
-    }
-
-    /// A letter keeps the wait it had when its recipient's machine changes
-    /// sides in a move (amendment 4): fifty wall minutes to this core's own
-    /// machine leave ten reachable minutes once it is another machine, and
-    /// fifty reachable minutes leave ten wall minutes once it is this core's.
-    #[test]
-    fn a_letter_keeps_its_wait_when_its_machine_changes_sides() {
-        let mut ledger = letter_to("macbook", 0);
-        ledger.observe_reach(&Reach::new(), 50 * MINUTE);
-        ledger.observe_reach(&reach("macbook", false), 50 * MINUTE);
-        ledger.observe_reach(&reach("macbook", true), 300 * MINUTE);
-        ledger.expire(309 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.expire(310 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
-
-        let mut ledger = letter_to("mini", 0);
-        ledger.observe_reach(&reach("mini", true), 0);
-        ledger.observe_reach(&reach("mini", false), 50 * MINUTE);
-        ledger.observe_reach(&Reach::new(), 400 * MINUTE);
-        ledger.expire(409 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.expire(410 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
-    }
-
-    /// A core that stops loses only the part of a reachable stretch it had
-    /// not written: the stretch is written every minute, and the next core
-    /// counts from what was written, not from the stretch's start (B13).
-    #[test]
-    fn a_restart_counts_a_running_stretch_only_up_to_its_last_write() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
-        let mut ledger = letter_to("mini", 0);
-        ledger.observe_reach(&reach("mini", true), 0);
-        assert!(ledger.observe_reach(&reach("mini", true), 30 * MINUTE));
-        save(&path, &ledger).unwrap();
-        // Stopped at 31 minutes, started again an hour later.
-        let mut ledger = load(&path).unwrap();
-        ledger.observe_reach(&reach("mini", true), 90 * MINUTE);
-        ledger.expire(119 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Pending);
-        ledger.expire(120 * MINUTE);
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
     fn letter() -> Ledger {
@@ -1581,14 +1424,12 @@ mod tests {
     fn total_doorbell_reservations_include_success_and_survive_restart_before_confirmation() {
         for sent in [true, false] {
             let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("ledger.json");
+            let path = root.path().join("delivery.sqlite3");
             let mut ledger = letter();
             for attempt in 1..=3 {
                 let line = format!("🦉 sender 보고: 시도 {attempt}");
                 assert_eq!(
-                    ledger.letters[0]
-                        .reserve_bell(&Default::default(), 2, line.clone())
-                        .unwrap(),
+                    ledger.letters[0].reserve_bell(line.clone()).unwrap(),
                     attempt
                 );
                 save(&path, &ledger).unwrap();
@@ -1609,7 +1450,7 @@ mod tests {
             let before = ledger.bytes().unwrap();
             assert_eq!(
                 ledger.letters[0]
-                    .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
+                    .reserve_bell("🦉 a 보고: b".into())
                     .unwrap_err(),
                 "doorbell_attempt_limit"
             );
@@ -1628,7 +1469,7 @@ mod tests {
             ledger = load(&path).unwrap();
             assert_eq!(
                 ledger.letters[0]
-                    .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
+                    .reserve_bell("🦉 a 보고: b".into())
                     .unwrap_err(),
                 "letter_not_pending"
             );
@@ -1655,20 +1496,20 @@ mod tests {
             if sent {
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
+                        .reserve_bell("🦉 a 보고: b".into())
                         .unwrap_err(),
                     "doorbell_attempt_limit"
                 );
             } else {
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
+                        .reserve_bell("🦉 a 보고: b".into())
                         .unwrap(),
                     3
                 );
                 assert_eq!(
                     restored.letters[0]
-                        .reserve_bell(&Default::default(), 2, "🦉 a 보고: b".into())
+                        .reserve_bell("🦉 a 보고: b".into())
                         .unwrap_err(),
                     "doorbell_attempt_limit"
                 );
@@ -1677,7 +1518,7 @@ mod tests {
         let mut invalid = ledger;
         assert_eq!(
             invalid.letters[0]
-                .reserve_bell(&Default::default(), 2, "🦉 a\n보고".into())
+                .reserve_bell("🦉 a\n보고".into())
                 .unwrap_err(),
             "bell_line_invalid"
         );
@@ -1692,7 +1533,7 @@ mod tests {
     fn acknowledgement_receipt_survives_durable_reload_and_replay_without_closing_new_watch() {
         use super::super::{mailbox, watch};
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         let mut ledger = letter();
         ledger.letters[0].kind = "report".into();
         ledger.letters[0].waiting_answer = false;
@@ -1797,7 +1638,7 @@ mod tests {
         }
         for (state, receipt) in [
             (State::Pending, true),
-            (State::Undelivered, true),
+            (State::NoRecipient, true),
             (State::Expired, true),
             (State::Delivered, false),
         ] {
@@ -1826,19 +1667,19 @@ mod tests {
         // stores its ledger inside a private state directory.
         let state = root.path().join("state");
         hide_platform::fs::private::create_dir(&state).unwrap();
-        let path = state.join("ledger.json");
+        let path = state.join("delivery.sqlite3");
         let ledger = letter();
         save(&path, &ledger).unwrap();
         assert_eq!(recover(&path).unwrap(), ledger);
         std::fs::write(&path, b"private damaged bytes").unwrap();
         assert_eq!(recover(&path).unwrap_err().code(), "ledger_unavailable");
         assert_eq!(std::fs::read(&path).unwrap(), b"private damaged bytes");
-        // A missing parent is not implicitly bootstrapped by a transaction.
-        let missing = root.path().join("absent/ledger.json");
+        // A missing parent is not implicitly bootstrapped by a write.
+        let missing = root.path().join("absent/delivery.sqlite3");
         let error = save(&missing, &Ledger::default()).unwrap_err();
         assert!(!error.uncertain());
         assert!(!missing.parent().unwrap().exists());
-        assert_eq!(error.diagnostic()["phase"], "before_replace");
+        assert_eq!(error.diagnostic()["phase"], "validation");
         assert!(
             !error
                 .diagnostic()
@@ -1853,7 +1694,7 @@ mod tests {
         let home = root.path().join("home");
         hide_platform::fs::private::create_dir(&home).unwrap();
         let state = root.path().join("new/state");
-        let path = state.join("ledger.json");
+        let path = state.join("delivery.sqlite3");
         assert_eq!(recover(&path).unwrap(), Ledger::default());
         assert!(hide_platform::fs::private::is_private(&state).unwrap());
         assert!(hide_platform::fs::private::is_private(&path).unwrap());
@@ -1866,7 +1707,7 @@ mod tests {
             let link = root.path().join("linked-state");
             std::os::unix::fs::symlink(&state, &link).unwrap();
             assert_eq!(
-                recover(&link.join("ledger.json")).unwrap_err().code(),
+                recover(&link.join("delivery.sqlite3")).unwrap_err().code(),
                 "ledger_unavailable"
             );
             assert_eq!(std::fs::read(&path).unwrap(), b"private corruption");
@@ -1882,7 +1723,7 @@ mod tests {
     #[test]
     fn durable_ledger_is_private_and_corruption_is_preserved() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         save(&path, &Ledger::default()).unwrap();
         assert!(hide_platform::fs::private::is_private(&path).unwrap());
         assert_eq!(load(&path).unwrap(), Ledger::default());

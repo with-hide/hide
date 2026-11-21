@@ -639,6 +639,28 @@ pub fn request_plan(
     })
 }
 
+/// `hide automation`: a call on the operator's automations, answered by the
+/// core. A change is never sent again on its own: a lost answer is read
+/// back with `list`.
+pub fn request_automation(
+    credential: &mut Credential,
+    call: &Value,
+    action: bool,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"automation","request_id":request_id,"call":call}),
+            &request_id,
+            action,
+            after,
+        )
+    })
+}
+
 /// `hide session fold-ask`: folds one of the caller's session's open questions
 /// with its reason. Running it again converges: a folded question answers
 /// that it is already closed.
@@ -701,6 +723,35 @@ pub fn request_agent_profile(
             &request_id,
             true,
             PROFILE_TIMEOUT,
+            after,
+        )
+    })
+}
+
+/// `hide skill` / `hide mcp`: a read answers at once; a change waits for
+/// its pass, and an install or an update for the operator's confirm too,
+/// which can take a while: `timeout` is the core's own wait and a little
+/// more.
+pub fn request_store(
+    credential: &mut Credential,
+    command: &hide_core::store_command::StoreCommand,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let action = !matches!(
+        command,
+        hide_core::store_command::StoreCommand::List { .. }
+            | hide_core::store_command::StoreCommand::Show { .. }
+    );
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"store","request_id":request_id,"command":command}),
+            &request_id,
+            action,
+            timeout,
             after,
         )
     })

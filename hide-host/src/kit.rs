@@ -189,6 +189,9 @@ fn bundled(
         KitAction::Apply | KitAction::Reinstall { .. } => {
             hide_kit::apply(&target, &scope_of(action))
         }
+        KitAction::Store { changes } => return to_value(hide_kit::apply_store(&target, changes)),
+        KitAction::FollowStore => return to_value(hide_kit::follow_store(&target)),
+        KitAction::StoreExport => return to_value(hide_kit::export_store(&target)),
         KitAction::Status => hide_kit::status(&target),
         KitAction::Remove => return Err(not_removed()),
     };
@@ -234,6 +237,9 @@ pub fn run_build(
             point_current(&placement.root, &placement.version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
         }
+        KitAction::Store { changes } => to_value(hide_kit::apply_store(&target, changes)),
+        KitAction::FollowStore => to_value(hide_kit::follow_store(&target)),
+        KitAction::StoreExport => to_value(hide_kit::export_store(&target)),
         KitAction::Status => to_value(hide_kit::status(&target)),
         KitAction::Remove => Err(not_removed()),
     }
@@ -256,6 +262,14 @@ pub fn run_guest(
         KitAction::Apply | KitAction::Reinstall { .. } => {
             point_current(root, version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
+        }
+        // The store is the account's, kept by its own Hide; a guest's
+        // installation keeps only its hook entries here.
+        KitAction::Store { .. } | KitAction::FollowStore | KitAction::StoreExport => {
+            Err(HostError::new(
+                ErrorCode::Unsupported,
+                "A guest's installation does not keep the account's store",
+            ))
         }
         KitAction::Status => to_value(hide_kit::status(&target)),
         KitAction::Remove => Err(not_removed()),
@@ -421,6 +435,9 @@ fn run_for_projects(
             let report = hide_kit::apply(&target(), &scope_of(action));
             to_value(report)
         }
+        KitAction::Store { changes } => to_value(hide_kit::apply_store(&target(), changes)),
+        KitAction::FollowStore => to_value(hide_kit::follow_store(&target())),
+        KitAction::StoreExport => to_value(hide_kit::export_store(&target())),
         KitAction::Status => to_value(hide_kit::status(&target())),
         KitAction::Remove => {
             let kit = hide_kit::remove(&target());

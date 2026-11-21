@@ -4,7 +4,7 @@ import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
 import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
-import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
+import { automationNames, drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
@@ -25,6 +25,8 @@ import { agentNumber, sidebarAgentNumbers } from "./numbering";
 import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
+import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { useMissionTurnCount } from "./MissionScreen";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
@@ -113,6 +115,10 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const operatorMissionsCount = useMissionTurnCount();
   const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
+  const automationsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "automations");
+  // The runs no one has looked at yet (B1); a tool's cell keeps the operator's numbers off its screen (B41).
+  const operatorAutomationsCount = useShellStore((s) => s.automations?.unseen ?? 0);
+  const automationsCount = tool ? 0 : operatorAutomationsCount;
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
   // A drag draws the nav alone at the width under the pointer, over the
@@ -168,6 +174,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
             missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
+            automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
@@ -482,7 +489,9 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
   const catalogLine = catalogState && catalogText ? { state: catalogState, text: catalogText } : null;
   const raisedOpen = useUiStore((s) => s.raisedOpen);
   // Needs You lists every device's rows, the front device's first; the rest of the list is the front device's.
-  const asks = useEveryDeviceMissionAsks(frontId);
+  const missionAsks = useEveryDeviceMissionAsks(frontId);
+  const automationAsks = useEveryDeviceAutomationAsks(frontId);
+  const asks = useMemo(() => [...missionOwnAsks(missionAsks), ...automationOwnAsks(automationAsks)], [missionAsks, automationAsks]);
   // It reads the devices and their connections alone, so it is read again only when those move.
   const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
   // A tool's cell raises nothing: its Needs You and Done would be the operator's (PRD hide-external-control B41).
@@ -497,7 +506,7 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
   const raised = useMemo(() => {
     const sections = rows.filter((row) => row.kind === "raised");
     if (tool) return sections;
-    const empty = (group: "needs_you" | "done"): Extract<ProjectRow, { kind: "raised" }> => ({ kind: "raised", group, agents: [], more: [], expanded: false, missions: [] });
+    const empty = (group: "needs_you" | "done"): Extract<ProjectRow, { kind: "raised" }> => ({ kind: "raised", group, agents: [], more: [], expanded: false, asks: [] });
     if (peerNeedsYou > 0 && !sections.some((row) => row.group === "needs_you")) sections.unshift(empty("needs_you"));
     if (peerDone > 0 && !sections.some((row) => row.group === "done")) sections.splice(sections.findIndex((row) => row.group === "needs_you") + 1, 0, empty("done"));
     return sections;
@@ -509,7 +518,8 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
   const children = useMemo(() => new Map(agents.map((agent) => [agent.pane_id, directChildren(agent, agents)])), [agents]);
   // A row Hide AI started names its task in its place line, so the place reads the agents too.
   const hideAiOf = useMemo(() => new Map(agents.flatMap((agent) => (agent.hide_ai ? [[agent.pane_id, agent.hide_ai] as const] : []))), [agents]);
-  const placeOf = useMemo(() => agentPlaces(localWorkspaces, remoteStatuses, devices, hideAiOf), [localWorkspaces, remoteStatuses, devices, hideAiOf, t]);
+  const names = useShellStore((s) => automationNames(s.automations));
+  const placeOf = useMemo(() => agentPlaces(localWorkspaces, remoteStatuses, devices, hideAiOf, names), [localWorkspaces, remoteStatuses, devices, hideAiOf, names, t]);
   // An ⌥ hold shows each agent's number once, on its raised row or else its
   // own checkout's row; ⌥n selects by the Agents list, so the number is that list's.
   const numbered = useUiStore((s) => s.hint === "agents");
@@ -653,7 +663,7 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
   const tool = useContext(InToolCell);
   const peerGroup = !tool && (row.group === "needs_you" || row.group === "done") ? row.group : null;
   const peers = usePeerRows(peerGroup ?? "needs_you");
-  const count = row.missions.length + row.agents.length + row.more.length + (peerGroup ? peers.length : 0);
+  const count = row.asks.length + row.agents.length + row.more.length + (peerGroup ? peers.length : 0);
   // Pressed while stuck at the top it goes back to its rows; otherwise it folds or unfolds them.
   const press = (event: MouseEvent<HTMLElement>) => {
     const head = event.currentTarget.parentElement!;
@@ -688,8 +698,9 @@ function RaisedSection({ row, stack, context }: { row: Extract<ProjectRow, { kin
       </div>
       {folded ? null : (
         <ul aria-labelledby={`raised-group-${row.group}`}>
-          {row.missions.map((ask) => (
-            <SidebarMissionRow key={`mission:${ask.mission.id}`} ask={ask} inset={PROJECT_COLUMN} actions={context.actions} />
+          {row.asks.map((own) => (own.kind === "mission"
+            ? <SidebarMissionRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
+            : <SidebarAutomationRow key={ownAskKey(own)} ask={own.ask} inset={PROJECT_COLUMN} actions={context.actions} />
           ))}
           {row.agents.map((listed) => (
             <RaisedAgentRow key={`${listed.device ?? ""}:${listed.agent.id}`} listed={listed} context={context} />

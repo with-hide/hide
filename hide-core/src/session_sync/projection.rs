@@ -143,11 +143,12 @@ pub(crate) struct ProjectionState {
     pub(crate) panes: Vec<ProjectedPane>,
     pub(crate) layouts: Vec<SessionLayoutPayload>,
     pub(crate) agents: Vec<ProjectedAgent>,
-    /// The agents a restore left resting in their panes rather than start
-    /// again, until an agent shows in the pane; the core keeps each as a
-    /// sleeping agent (`Runtime::adopt_resting`). None is running, so none
-    /// is among `agents`.
-    pub(crate) resting: Vec<ProjectedAgent>,
+    /// The panes a heal is bringing an agent back into: a restore has yet
+    /// to type its resume, or typed it and its hook has not named its
+    /// session yet. Nothing of the agent may run yet, so the core reads
+    /// no stop or quiet of the pane's agent while it is named
+    /// (`Runtime::note_healing`, PRD letters-missions-simplify B19).
+    pub(crate) healing: Vec<String>,
     /// The agents a restore did not bring back and will not, each until an
     /// agent shows in its pane, by a start, its hook or its foreground; the
     /// core ends the registration of each while it is named
@@ -168,12 +169,6 @@ pub(crate) struct ProjectionState {
 }
 
 impl ProjectionState {
-    /// The agents a restore left resting, as the session's own agents
-    /// project, so the core reads each the way it reads a listed one.
-    pub(crate) fn resting_payloads(&self) -> Vec<SessionAgentPayload> {
-        self.agent_payloads(&self.resting)
-    }
-
     fn agent_payloads(&self, agents: &[ProjectedAgent]) -> Vec<SessionAgentPayload> {
         let workspace_labels = self
             .workspaces
@@ -532,6 +527,7 @@ impl ProjectionState {
                             )),
                             empty: panes.is_empty(),
                             delegated: false,
+                            automation: false,
                             panes,
                         }
                     })
@@ -612,6 +608,7 @@ impl ProjectionState {
                         ..CheckoutSnapshot::default()
                     }],
                     pinned: false,
+                    unlisted: false,
                     inactive_checkouts: Default::default(),
                     session_folds: Default::default(),
                     removal: Default::default(),

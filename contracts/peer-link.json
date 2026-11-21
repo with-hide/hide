@@ -39,6 +39,10 @@
     }
   ],
   "core": {
+    "agent_fields": [
+      "id",
+      "name"
+    ],
     "asks": [
       "delivery",
       "pane"

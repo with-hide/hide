@@ -1,7 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // The lane's Project tool (PRD project-panel-results): its count line, 흘린
-// 것, disk line, 최근 7일 and costly tasks, the 보기 slot's worktree table,
+// 것, disk line, 최근 7일 and costly tasks, a card tab's worktree table,
 // 남은 것 and 작업 비용, and the sidebar's project filter.
 export const projectToolEnglish = {
   "projectTool.title": "Project",

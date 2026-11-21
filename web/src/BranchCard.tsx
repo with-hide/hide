@@ -9,7 +9,7 @@ import { attemptLine } from "./suggestionList";
 import { BranchButtons } from "./SuggestionsTab";
 import { cn } from "./lib/utils";
 
-// The 보기 slot's branch card (PRD hide-ai-branch-first-apply D-02, D-03,
+// A desk's branch card tab (PRD hide-ai-branch-first-apply D-02, D-03,
 // B4): a Hide AI branch waiting for the operator, its name and base, each
 // file it changes with its +/−, and the row's three choices in its head. A
 // file opens its diff against the base in the same slot, read on the

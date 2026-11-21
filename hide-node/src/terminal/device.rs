@@ -745,6 +745,10 @@ impl hide_host::serve::Terminals for NodeTerminals {
         }
         let home = hide_platform::host::home_dir()
             .map_err(|error| format!("pane holders need the account's home: {error}"))?;
+        // Raised before the first holder starts, which gets the limit this
+        // node started with back; recorded once the link takes records, since
+        // a device's stderr reaches no log and the link reads it as a failure.
+        let open_files = crate::diagnostics::raise_open_files();
         let (holders_home, state_dir) = match &self.resident {
             Some(folders) => (folders.holders_home.clone(), folders.state_dir.clone()),
             None => (home.clone(), hide_kit::layout::device_node_state(&home)),
@@ -770,6 +774,9 @@ impl hide_host::serve::Terminals for NodeTerminals {
         *service = Some(started);
         *holders = Some(Arc::clone(&panes));
         *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
+        if let Some(record) = open_files {
+            crate::diagnostic!(record);
+        }
         Ok(panes)
     }
 

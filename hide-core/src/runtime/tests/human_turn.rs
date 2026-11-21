@@ -47,6 +47,7 @@ fn ledger_with_sender(sender: &Actor) -> Ledger {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     ledger.next_id = 10;
     ledger
@@ -231,8 +232,8 @@ fn a_declaration_is_read_back_after_a_restart() {
     let sender = registered_sender(&mut runtime.lock().unwrap());
     let mut ledger = ledger_with_sender(&sender);
     declare(&mut ledger, &sender, HumanKind::Auth, "github.com/login", 1);
-    crate::delivery::ledger::save(&path, &ledger).unwrap();
-    let read = crate::delivery::ledger::load(&path).unwrap();
+    crate::delivery::store::save(&path, &ledger).unwrap();
+    let read = crate::delivery::store::load(&path).unwrap();
     assert_eq!(read.human_turns, ledger.human_turns);
     // A ledger without one is written as before declarations.
     let bare = serde_json::to_value(ledger_with_sender(&sender)).unwrap();
@@ -366,7 +367,7 @@ fn with_store(
     // B4: kept as written, query and fragment included.
     assert_eq!(declared["declaration"]["place"], CODE_PLACE);
     let id = declared["declaration"]["id"].as_str().unwrap().to_owned();
-    crate::delivery::ledger::save(&path, &ledger).unwrap();
+    crate::delivery::store::save(&path, &ledger).unwrap();
     let (worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -387,7 +388,11 @@ fn with_store(
 /// place anywhere.
 fn assert_place_gone_from(path: &std::path::Path) {
     wait_for("the saved ledger dropped the place", || {
-        !std::fs::read_to_string(path).unwrap().contains("WDJB-MJHT")
+        !crate::delivery::store::read_value(path)
+            .unwrap()
+            .unwrap()
+            .to_string()
+            .contains("WDJB-MJHT")
     });
 }
 

@@ -726,8 +726,26 @@ impl WorktreeReader {
         }
     }
 
+    /// Ends the Git watch while no renderer is attached; the next
+    /// [`Self::read_if_due`] starts it again (`GitWatch::rest`).
+    pub fn rest(&mut self) {
+        self.git_watch.rest();
+    }
+
     pub fn read_if_due(&mut self, request: WorktreeRequest) -> Option<WorktreeAnswer> {
         self.read_if_due_at(request, Instant::now())
+    }
+
+    /// The same read for a core no renderer is attached to, which keeps no
+    /// Git watch ([`Self::rest`]): the catalog is read when `request`
+    /// changes (a project, a removal, a generation), which is what a
+    /// mission made on a machine with no window needs of it. Nothing is
+    /// asked of the node on the caller's thread: following the request's
+    /// projects asks it for each repository's directories
+    /// (`GitWatch::reconcile`), which the session-sync thread does only for
+    /// a window that draws what the watch reports.
+    pub fn read_unwatched_if_due(&mut self, request: WorktreeRequest) -> Option<WorktreeAnswer> {
+        self.read_at(request, Instant::now(), false)
     }
 
     pub(crate) fn read_if_due_at(
@@ -735,8 +753,19 @@ impl WorktreeReader {
         request: WorktreeRequest,
         now: Instant,
     ) -> Option<WorktreeAnswer> {
-        self.git_watch.reconcile(&request.projects);
-        self.owed.extend(self.git_watch.settled());
+        self.read_at(request, now, true)
+    }
+
+    fn read_at(
+        &mut self,
+        request: WorktreeRequest,
+        now: Instant,
+        watched: bool,
+    ) -> Option<WorktreeAnswer> {
+        if watched {
+            self.git_watch.reconcile(&request.projects);
+            self.owed.extend(self.git_watch.settled());
+        }
         self.owed
             .retain(|root| request.projects.iter().any(|p| &p.root_path == root));
         // A change waits while a read runs, since that read may have begun

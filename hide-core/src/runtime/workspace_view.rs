@@ -20,6 +20,7 @@ use crate::model::{
     BrowserAreaScopeRow, BrowserViewInventoryRow, LaneCallSide, WorkspaceViewSnapshot,
 };
 use crate::view_layout::DisplayKind;
+use crate::workspace_views::Place;
 use crate::workspace_views::{self, Tool, WorkspaceView, WorkspaceViews};
 
 /// A Workspace's identity: the device and the checkout path.
@@ -140,6 +141,46 @@ pub(super) struct WorkspaceViewStore {
     save_pending: bool,
     save_active: bool,
     save_worker: Option<thread::JoinHandle<()>>,
+    /// The card whose data is being read: the tray in front's card tab in
+    /// front, as `sync_card_reads` last saw it (PRD lane-desk-pair-view,
+    /// conductor decision 3), and whether a press asked it to be read again.
+    /// Runtime only.
+    pub(super) card_read: Option<crate::model::DetailItem>,
+    pub(super) card_read_again: bool,
+    /// Pair view's left pane while the mode is on (PRD lane-desk-pair-view
+    /// D-45): the pane the operator last went to, whose View an event put on
+    /// its tab's desk. Runtime only: after a restart the front tab's
+    /// keyboard pane stands for it (`Runtime::pair_left_of`).
+    pub(super) pair_left: Option<super::pair_view::PairLeft>,
+    /// The pane that held the keyboard when pair view was entered, which
+    /// gets it back on leaving (B26). Runtime only.
+    pub(super) pair_before: Option<(WorkspaceKey, String)>,
+    /// The pane focus mode draws whose desk ⌘E or the rail's desk button
+    /// folded, so the pane is drawn alone beside a desk that holds a tab the
+    /// strip shows (PRD lane-desk-pair-view D-57, D-63). Runtime only: gone
+    /// when another pane takes the left, when the mode ends, at a restart,
+    /// and when a View is opened or chosen onto that desk.
+    pub(super) pair_desk_folded: Option<super::pair_view::PairLeft>,
+    /// When focus mode last came on, in the layouts' focus stamps' clock:
+    /// a tab nobody's agent owns shows on the drawn desk's strip only once
+    /// the operator brought it in front since then (D-60). Runtime only, so
+    /// after a restart the mode reads as begun at the load.
+    pub(super) pair_since: u64,
+    /// The desks pair view drew since the mode last moved or ended, each
+    /// with how it was before the mode first drew it, which it gets back
+    /// when the mode leaves it (D-51); a desk the mode passed drawing its
+    /// tab's usual screen is never here (D-45). Runtime only, and at most
+    /// the desk drawn now and the one it came from: every move restores and
+    /// drops the others.
+    pub(super) pair_drawn: Vec<super::pair_view::PairDrawn>,
+    /// The desk that floats with the tool now (PRD lane-desk-pair-view
+    /// D-50): a View came onto that tab's desk while the lane showed a tool
+    /// and not the desk, so the desk is drawn beside the tool over the
+    /// agents until the tool closes, and then takes its place on the right.
+    /// Every other shown desk stands. Runtime only, at most one, and gone
+    /// in the view pass (`settle_workspace_view`) once the lane no longer
+    /// draws both on the front tab.
+    pub(super) tray_floats: Option<(WorkspaceKey, String)>,
 }
 
 /// What an event asks of a Workspace's lane once it has moved the screen
@@ -177,15 +218,14 @@ impl AreaIntent {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkspaceViewPayload {
-    /// `true` opens a closed lane in the shape it had, or on the documents
-    /// when it has some and else on the Explorer when it had no column
-    /// (B15); `false` closes the whole lane, keeping both columns' shape
-    /// for the next open. The 보기 slot stops being drawn either way.
+    /// `true` opens a closed lane in the shape it had, or on the tray of the
+    /// tab in front when it has tabs and else on the Explorer when it had no
+    /// column (B15); `false` closes the whole lane, keeping both columns'
+    /// shape for the next open (PRD lane-desk-pair-view B30).
     #[serde(default)]
     pub(super) open: Option<bool>,
-    /// `true` shows the checkout's documents in the viewing column, in front
-    /// of the 보기 slot, which stays on the rail (B10, B11); `false` folds
-    /// the viewing column.
+    /// `true` shows the tray of the Agent tab in front (B14); `false` folds
+    /// it.
     #[serde(default)]
     pub(super) documents: Option<bool>,
     /// `project`, `memory`, `explorer` or `changes` shows that tool in the tool
@@ -194,15 +234,9 @@ pub(super) struct WorkspaceViewPayload {
     /// left as it is.
     #[serde(default, deserialize_with = "present")]
     pub(super) tool: Option<Option<String>>,
-    /// Whether the lane is pinned beside Agent Views (right-lane D-03).
-    #[serde(default)]
-    pub(super) pinned: Option<bool>,
-    /// The viewing column's width with the documents, in CSS pixels.
+    /// The tray's width, in CSS pixels.
     #[serde(default)]
     pub(super) document_width: Option<u32>,
-    /// The viewing column's width with the 보기 slot, in CSS pixels.
-    #[serde(default)]
-    pub(super) detail_width: Option<u32>,
     /// The tool column's width with the Explorer, in CSS pixels.
     #[serde(default)]
     pub(super) explorer_width: Option<u32>,
@@ -212,6 +246,10 @@ pub(super) struct WorkspaceViewPayload {
     /// An optional opaque identity for a width intent, at most 128 bytes.
     #[serde(default)]
     pub(super) width_request_id: Option<String>,
+    /// Pair view's divider landing (D-47): the left pane's share of the
+    /// body in thousandths, one value for the window's mode.
+    #[serde(default)]
+    pub(super) pair_ratio: Option<u16>,
     /// A file of the front Workspace to reveal: the tool column shows the
     /// Explorer with the file's folders unfolded, in the same event, and
     /// nothing is opened (B8); the viewing column stays.
@@ -229,6 +267,20 @@ where
 }
 
 impl WorkspaceViewStore {
+    /// Whether `tab`'s desk of `key` floats with the tool now (D-50): a
+    /// View came onto it while the lane drew a tool and not the desk, and
+    /// the open lane still shows both. The one reading of the floating
+    /// desk. Shown, not drawn: a file still loading leaves the desk with no
+    /// View yet while the shell already draws it, and it floats then too.
+    pub(super) fn tray_floats(&self, key: &WorkspaceKey, tab: &str) -> bool {
+        self.tray_floats
+            .as_ref()
+            .is_some_and(|(at, at_tab)| at == key && at_tab == tab)
+            && self.views.get(&key.0, &key.1).is_some_and(|view| {
+                view.open && view.tool.is_some() && view.tray(tab).is_some_and(|tray| tray.shown)
+            })
+    }
+
     /// Numbers a call that opened `key`'s lane and records which column it
     /// brought forward. The call history has the store's bound; it is
     /// pruned only when crossing it, never on a repeat.
@@ -260,10 +312,17 @@ impl WorkspaceViewStore {
                 repairs,
             } => {
                 if let Some(version) = migrated_from {
+                    // A schema 4 or 5 lane keeps its state; an older one
+                    // starts from the default shape (`workspace_views`).
+                    let lane = if version >= 4 {
+                        "its Views move to the desk of the Agent tab it showed last, and its lane keeps whether it was open, its tool and its widths"
+                    } else {
+                        "its lane starts closed at the default widths"
+                    };
                     diagnostics.push((
                         "workspace_views.migrated",
                         format!(
-                            "Workspace view state was migrated from schema {version} to {}; each Workspace keeps its Views, Agent layout, groups and comments, and its lane starts closed at the default widths",
+                            "Workspace view state was migrated from schema {version} to {}; each Workspace keeps its Views, Agent layout, groups and comments, and {lane}",
                             workspace_views::SCHEMA_VERSION
                         ),
                     ));
@@ -347,6 +406,14 @@ impl WorkspaceViewStore {
                 save_pending: false,
                 save_active: false,
                 save_worker: None,
+                card_read: None,
+                card_read_again: false,
+                pair_left: None,
+                pair_before: None,
+                pair_desk_folded: None,
+                pair_since: unix_milliseconds(),
+                pair_drawn: Vec::new(),
+                tray_floats: None,
             },
             diagnostics,
         )
@@ -394,24 +461,101 @@ impl Runtime {
             .map(|(workspace, checkout)| (workspace.device_id.clone(), checkout.path.clone()))
     }
 
-    /// The operator closed a view of `key`'s documents (lane-two-columns
-    /// B12): when none is left the viewing column closes, and the lane with
-    /// it when there is no tool column either; a tool column stays. The
-    /// displays of a document that just closed leave first.
+    /// The operator closed a tab of the tray in front (PRD
+    /// lane-desk-pair-view B11, B26): a pair view stays on and its desk
+    /// settles (D-64), and when no tab is left the tray folds; a tool column
+    /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        let Some(entry) = self
+        self.keep_pair_front_shown();
+        let tab = self.front_tab(key);
+        let Some(tray) = self
             .workspace_views
             .as_mut()
             .and_then(|store| store.views.get_mut(&key.0, &key.1))
+            .and_then(|entry| entry.tray_mut(&tab))
         else {
             return;
         };
-        if !entry.documents || entry.layout.display_count() > 0 {
+        if tray.layout.display_count() > 0 {
             return;
         }
-        entry.documents = false;
-        self.persist_workspace_views();
+        if std::mem::take(&mut tray.shown) {
+            self.persist_workspace_views();
+        }
+    }
+
+    /// Gives the tray a migration or a launch could not yet name to the
+    /// Agent tab `key` shows, once it shows one (PRD lane-desk-pair-view
+    /// D-18): one lookup while there is none.
+    fn adopt_pending_tray(&mut self, key: &WorkspaceKey) {
+        let pending = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .is_some_and(|view| view.tray(workspace_views::PENDING_TRAY).is_some());
+        if !pending {
+            return;
+        }
+        let tab = self.front_tab(key);
+        if tab == workspace_views::PENDING_TRAY {
+            return;
+        }
+        let store = self.workspace_views.as_mut().expect("read above");
+        if let Some(adopted) = store.views.entry(&key.0, &key.1).adopt_pending_tray(&tab) {
+            store.generation += 1;
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_layout", "kind": "tray.pending_adopted",
+                "device": key.0, "tab": tab, "inherited": adopted.inherited,
+                "shelved": adopted.shelved, "dropped": adopted.dropped,
+            }));
+            self.persist_workspace_views();
+        }
+    }
+
+    /// Opens `key`'s lane on the tray at `place` when the operator opened a
+    /// tab there: a closed lane opens on it alone (`open_on`), a folded
+    /// tray unfolds, and the call is numbered as the tray's. A View on no
+    /// tray opens no lane.
+    pub(super) fn open_tray_for(&mut self, key: &WorkspaceKey, place: &Place) {
+        let Place::Tray(tab) = place else {
+            return;
+        };
+        // Whether the operator saw this desk drawn, read from the view the
+        // core last published, since the View that calls this is already on
+        // the desk and may itself stand it: in focus mode beside the pane
+        // drawn there (`tray.pair` not alone), else the lane showing it.
+        let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
+            view.device_id == key.0
+                && view.path == key.1
+                && view.tray.tab_id == *tab
+                && match &view.tray.pair {
+                    Some(pair) => !pair.alone,
+                    None => view.open && view.tray.shown && view.tray.count > 0,
+                }
+        });
+        self.unfold_pair_desk(key, tab);
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        let before = (
+            entry.open,
+            entry.tool,
+            entry.tray(tab).is_some_and(|tray| tray.shown),
+        );
+        entry.show_tray(tab);
+        let changed = before != (entry.open, entry.tool, true);
+        // A View that comes onto a desk the operator did not see drawn while
+        // a tool stays drawn floats with that tool (D-50); a desk already
+        // drawn keeps standing, or floating, as it was.
+        if entry.tool.is_some() && !drawn {
+            store.tray_floats = Some((key.clone(), tab.clone()));
+        }
+        store.call_lane(key, LaneCallSide::View);
+        if changed {
+            self.persist_workspace_views();
+        }
     }
 
     pub(super) fn front_workspace_key(&self) -> Option<WorkspaceKey> {
@@ -690,30 +834,18 @@ impl Runtime {
     }
 
     pub(super) fn show_project_memory_at(&mut self, key: &WorkspaceKey, workspace: String) {
+        let tab = self.front_tab(key);
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
-            let before = (entry.open, entry.documents, entry.tool);
-            let opened = entry.show_tool(Tool::Memory);
-            let changed = before != (entry.open, entry.documents, entry.tool);
+            let before = entry.clone();
+            entry.show_tool(Tool::Memory, Some(&tab));
+            let changed = *entry != before;
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
                 self.persist_workspace_views();
             }
-            if opened {
-                self.leave_detail_at(key);
-            }
         }
         self.open_project_memory(Some(workspace));
-    }
-
-    /// A tool opened `key`'s closed lane on itself alone (`open_on`), so the
-    /// front tab's 보기 slot, which ⌘E's close left shown, stops being drawn
-    /// there and stays on the rail to come back to. Only the lane in front
-    /// gives way.
-    fn leave_detail_at(&mut self, key: &WorkspaceKey) {
-        if self.front_workspace_key().as_ref() == Some(key) {
-            self.leave_detail();
-        }
     }
 
     /// The device refused the request, or its answer was lost: a later move
@@ -735,38 +867,29 @@ impl Runtime {
         }
     }
 
-    /// Applies an area intent to one Workspace, in front or about to be.
+    /// Applies an area intent to one Workspace, in front or about to be:
+    /// a View the operator opened shows the tray of the tab in front, a
+    /// folder the Explorer.
     pub(super) fn apply_area_intent_to(&mut self, key: &WorkspaceKey, intent: AreaIntent) {
-        let Some(store) = self.workspace_views.as_mut() else {
-            return;
-        };
-        let entry = store.views.entry(&key.0, &key.1);
-        let before = (entry.open, entry.documents, entry.tool);
-        let tool_opened = match intent {
+        match intent {
             AreaIntent::Documents => {
-                entry.show_documents();
-                false
+                let place = self.front_place(key);
+                self.open_tray_for(key, &place);
             }
-            AreaIntent::Explorer => entry.show_tool(Tool::Explorer),
-        };
-        let changed = before != (entry.open, entry.documents, entry.tool);
-        store.call_lane(
-            key,
-            match intent {
-                AreaIntent::Documents => LaneCallSide::View,
-                AreaIntent::Explorer => LaneCallSide::Tool,
-            },
-        );
-        if changed {
-            self.persist_workspace_views();
-        }
-        // A file or diff opened from the card shows as a document in front
-        // of the card, which keeps its rail slot to come back to (PRD
-        // sidebar-task-lens B49, lane-two-columns B10). The slot is the
-        // window's, so only the lane in front gives way: an open in a
-        // Workspace behind it leaves the card or record the operator reads.
-        if intent == AreaIntent::Documents || tool_opened {
-            self.leave_detail_at(key);
+            AreaIntent::Explorer => {
+                let tab = self.front_tab(key);
+                let Some(store) = self.workspace_views.as_mut() else {
+                    return;
+                };
+                let entry = store.views.entry(&key.0, &key.1);
+                let before = (entry.open, entry.tool);
+                entry.show_tool(Tool::Explorer, Some(&tab));
+                let changed = before != (entry.open, entry.tool);
+                store.call_lane(key, LaneCallSide::Tool);
+                if changed {
+                    self.persist_workspace_views();
+                }
+            }
         }
     }
 
@@ -827,40 +950,42 @@ impl Runtime {
             );
             return true;
         }
-        let detail_shown =
-            self.snapshot.ui_state.detail.shown && !self.snapshot.ui_state.detail.items.is_empty();
+        let tab = self.front_tab(&key);
         let store = self.workspace_views.as_mut().expect("checked above");
         let entry = store.views.entry(&key.0, &key.1);
         let before = entry.clone();
-        // Whether a tool opened the closed lane on itself alone (`open_on`).
-        let mut tool_opened = false;
         match tool {
-            Some(Some(tool)) => tool_opened = entry.show_tool(tool),
+            Some(Some(tool)) => {
+                entry.show_tool(tool, Some(&tab));
+            }
             Some(None) => entry.close_tool(),
             None => {}
         }
         match payload.documents {
-            Some(true) => entry.show_documents(),
-            Some(false) => entry.documents = false,
+            Some(true) => entry.show_tray(&tab),
+            Some(false) => {
+                if let Some(tray) = entry.tray_mut(&tab) {
+                    tray.shown = false;
+                }
+            }
             None => {}
-        }
-        if let Some(pinned) = payload.pinned {
-            entry.pinned = pinned;
         }
         // A reveal is the Explorer's: the tool column shows it.
         if payload.reveal.is_some() {
-            tool_opened |= entry.show_tool(Tool::Explorer);
+            entry.show_tool(Tool::Explorer, Some(&tab));
         }
         match payload.open {
             Some(false) => entry.open = false,
             Some(true) => {
                 entry.open = true;
-                // A lane that had no column comes back on the documents when
-                // there are some, else on the Explorer (B15); the window's
-                // 보기 slot, still shown, is a column of its own.
-                if !entry.has_column() && !detail_shown {
-                    if entry.layout.display_count() > 0 {
-                        entry.documents = true;
+                // A lane that had no column comes back on the tray when it
+                // has tabs, else on the Explorer (B15).
+                if !entry.has_column(Some(&tab)) {
+                    if entry
+                        .tray(&tab)
+                        .is_some_and(|tray| tray.layout.display_count() > 0)
+                    {
+                        entry.tray_entry(&tab).shown = true;
                     } else {
                         entry.tool = Some(Tool::Explorer);
                     }
@@ -871,16 +996,19 @@ impl Runtime {
         if let Some(width) = payload.document_width {
             entry.document_width = Some(workspace_views::clamp_width(width));
         }
-        if let Some(width) = payload.detail_width {
-            entry.detail_width = Some(workspace_views::clamp_width(width));
-        }
         if let Some(width) = payload.explorer_width {
             entry.explorer_width = Some(workspace_views::clamp_width(width));
         }
         if let Some(width) = payload.panel_width {
             entry.panel_width = Some(workspace_views::clamp_width(width));
         }
-        let entry_changed = *entry != before;
+        let mut entry_changed = *entry != before;
+        if let Some(ratio) = payload.pair_ratio.map(workspace_views::clamp_pair_ratio)
+            && store.views.pair.ratio != Some(ratio)
+        {
+            store.views.pair.ratio = Some(ratio);
+            entry_changed = true;
+        }
         // Every open is a call, so a page shows a lane it had hidden even
         // when the lane already held that column.
         let called = matches!(tool, Some(Some(_)))
@@ -895,15 +1023,10 @@ impl Runtime {
             };
             store.call_lane(&key, side);
         }
-        // The documents brought in front stand before the 보기 slot, which
-        // stays on the rail (B10, B11); a lane closed whole keeps the slot
-        // shown, so ⌘E brings it back (B15), and a tool that opens it
-        // instead stands alone (`leave_detail_at`).
-        let leaves_detail = payload.documents == Some(true) || tool_opened;
         let width_request_changed = if payload.document_width.is_some()
-            || payload.detail_width.is_some()
             || payload.explorer_width.is_some()
             || payload.panel_width.is_some()
+            || payload.pair_ratio.is_some()
         {
             let next = payload.width_request_id.map(|id| (key.clone(), id));
             let changed = store.width_request != next;
@@ -915,8 +1038,7 @@ impl Runtime {
         let revealed = payload
             .reveal
             .is_some_and(|path| self.unfold_to(&key, &path));
-        let detail_left = leaves_detail && self.leave_detail();
-        if !entry_changed && !called && !revealed && !width_request_changed && !detail_left {
+        if !entry_changed && !called && !revealed && !width_request_changed {
             return false;
         }
         if entry_changed {
@@ -971,6 +1093,21 @@ impl Runtime {
         // The recent list follows the front checkout wherever the layout
         // store exists or not, and writes only when the front moved.
         self.track_recent_checkouts();
+        let Some(store) = self.workspace_views.as_ref() else {
+            return;
+        };
+        // The floating desk takes its place once its lane no longer draws it
+        // beside a tool on the front tab: the tool closed (its ✕, Escape, a
+        // press outside) or changed, the lane closed, the desk folded or
+        // emptied, or another tab came to the front (D-50).
+        if let Some((key, tab)) = store.tray_floats.clone()
+            && (self.front_tab(&key) != tab || !store.tray_floats(&key, &tab))
+        {
+            self.workspace_views
+                .as_mut()
+                .expect("read above")
+                .tray_floats = None;
+        }
         let Some(store) = self.workspace_views.as_ref() else {
             return;
         };
@@ -1057,15 +1194,20 @@ impl Runtime {
             }
         }
         self.restore_front_when_ready();
-        // The strip follows the session whose pane has the keyboard before
-        // the editor's active tab is derived from it (PRD session-files).
-        self.settle_view_sessions();
+        // The tray a migration could not yet name goes to the tab the
+        // Workspace shows once it shows one (PRD lane-desk-pair-view D-18).
+        if let Some(key) = front.as_ref() {
+            self.adopt_pending_tray(key);
+        }
         self.reconcile_view_displays();
         // What is in front of the operator now is seen, and the rows follow
         // whatever the View lists did (PRD unseen-agent-views D-07, D-09).
         self.settle_unseen_views();
         // The open record's gallery follows the View lists (D-40).
         self.settle_record_views();
+        // Only the card in front of the tray drawn is read (conductor
+        // decision 3).
+        self.sync_card_reads();
         self.sync_agent_selection();
         if let Some(store) = &self.workspace_views {
             for workspace in &mut self.snapshot.navigator.workspaces {
@@ -1119,38 +1261,51 @@ impl Runtime {
                     .iter()
                     .any(|key| key.0 == view.device_id && key.1 == view.path)
             }) {
-                for area in view.layout.areas() {
-                    scopes.push(BrowserAreaScopeRow {
-                        device_id: view.device_id.clone(),
-                        path: view.path.clone(),
-                        area_id: area.id.clone(),
-                        incarnation: incarnations
-                            .get(&(
-                                view.device_id.as_str(),
-                                view.path.as_str(),
-                                area.id.as_str(),
-                            ))
-                            .copied()
-                            .unwrap_or(store.generation),
-                    });
-                    // An outside HTML file is a page the host draws like any
-                    // other, kept alive while it is hidden.
-                    displays.extend(
-                        area.displays
-                            .iter()
-                            .filter(|display| {
-                                display.kind == DisplayKind::Browser
-                                    || display.external.as_ref().is_some_and(|file| {
-                                        file.kind == crate::view_layout::ExternalKind::Html
-                                    })
-                            })
-                            .map(|display| BrowserViewInventoryRow {
-                                device_id: view.device_id.clone(),
-                                path: view.path.clone(),
-                                area_id: area.id.clone(),
-                                view_id: display.id.clone(),
-                            }),
-                    );
+                // A page on no tray is still held, loaded off screen by the
+                // host (PRD lane-desk-pair-view D-37, B32).
+                for (place, layout) in view.layouts() {
+                    let tray = match &place {
+                        Place::Tray(tab) => Some(tab.clone()),
+                        Place::Shelf => None,
+                    };
+                    for area in layout.areas() {
+                        scopes.push(BrowserAreaScopeRow {
+                            device_id: view.device_id.clone(),
+                            path: view.path.clone(),
+                            area_id: area.id.clone(),
+                            incarnation: incarnations
+                                .get(&(
+                                    view.device_id.as_str(),
+                                    view.path.as_str(),
+                                    area.id.as_str(),
+                                ))
+                                .copied()
+                                .unwrap_or(store.generation),
+                        });
+                        // An outside HTML file is a page the host draws like any
+                        // other, kept alive while it is hidden.
+                        displays.extend(
+                            area.displays
+                                .iter()
+                                .filter(|display| {
+                                    display.kind == DisplayKind::Browser
+                                        || display.external.as_ref().is_some_and(|file| {
+                                            file.kind == crate::view_layout::ExternalKind::Html
+                                        })
+                                })
+                                .map(|display| BrowserViewInventoryRow {
+                                    device_id: view.device_id.clone(),
+                                    path: view.path.clone(),
+                                    area_id: area.id.clone(),
+                                    view_id: display.id.clone(),
+                                    tray: tray.clone(),
+                                    url: (display.kind == DisplayKind::Browser)
+                                        .then(|| display.url.clone())
+                                        .flatten(),
+                                    load: display.load,
+                                }),
+                        );
+                    }
                 }
             }
             // Every Workspace's, connected or not: a grant ends only when no
@@ -1159,7 +1314,7 @@ impl Runtime {
                 .views
                 .workspaces
                 .iter()
-                .flat_map(|view| view.layout.displays())
+                .flat_map(|view| view.views())
                 .filter_map(|display| display.external.as_ref().map(|file| file.grant.clone()))
                 .collect();
             self.snapshot.browser_views = displays;
@@ -1297,17 +1452,39 @@ impl Runtime {
             None => None,
         };
         let published = front.zip(view).map(|(key, view)| {
-            let layout = self.view_layout_snapshot(key, &view.layout);
+            let place = self.front_place(key);
+            let Place::Tray(tab) = &place else {
+                unreachable!("the place in front is a tray");
+            };
+            let empty = crate::view_layout::Layout::default();
+            let tray = view.tray(tab);
+            let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
+            let layout = self.view_layout_snapshot(key, tray_layout);
+            let every = self.every_view_snapshot(key);
+            // The pair's reads are taken once for the publish.
+            let reads = self.pair_reads(key);
+            let panes_with_views = self.panes_with_views(key, &reads);
+            let pair = self.pair_left_of(key, tab).map(|pane| {
+                let shown = self.pair_shown_count(key, tab, &pane, &reads);
+                let mut pair = crate::model::PairViewSnapshot {
+                    tab_id: tab.clone(),
+                    alone: !self.pair_desk_beside(key, tab, &pane, &reads),
+                    shown,
+                    pane_id: pane,
+                    folded: Vec::new(),
+                };
+                if !pair.alone {
+                    pair.folded = self.pair_folded(key, &pair, &layout.root);
+                }
+                pair
+            });
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),
                 git: self.checkout_header_snapshot(key),
                 open: view.open,
-                documents: view.documents,
                 tool: view.tool,
-                pinned: view.pinned,
                 document_width: view.document_width,
-                detail_width: view.detail_width,
                 explorer_width: view.explorer_width,
                 panel_width: view.panel_width,
                 width_request_id: store
@@ -1322,13 +1499,26 @@ impl Runtime {
                     .map_or(LaneCallSide::View, |(_, side)| *side),
                 lane_calls: store.lane_calls,
                 resumed: Some(key) == store.resumable.as_ref(),
-                // A pane's `N views` lists what its session opened, drawn in
-                // the strip or not (B8).
-                feedback: self.view_feedback_snapshot(
-                    key,
-                    &self.view_layout_projection(key, &view.layout, false),
-                ),
-                session_drafts: self.session_drafts(key, &view.layout),
+                tray: crate::model::TraySnapshot {
+                    tab_id: if tab == crate::workspace_views::PENDING_TRAY {
+                        String::new()
+                    } else {
+                        tab.clone()
+                    },
+                    shown: tray.is_some_and(|tray| tray.shown),
+                    count: tray_layout.display_count(),
+                    floats: store.tray_floats(key, tab),
+                    pair,
+                },
+                pair_mode: crate::model::PairModeSnapshot {
+                    on: store.views.pair.on,
+                    ratio: store.views.pair.ratio,
+                },
+                panes_with_views,
+                // A pane's `N views` lists what its session opened, on a
+                // tray or not (PRD lane-desk-pair-view D-04, D-19).
+                feedback: self.view_feedback_snapshot(key, &every),
+                session_drafts: self.session_drafts(key),
                 layout,
                 agent_layout: self
                     .arranges_agent_areas(&key.0)
@@ -1353,6 +1543,18 @@ impl Runtime {
             self.snapshot.ui_state.right_panel_section = section;
         }
         self.snapshot.workspace_view = published;
+        // A pair drawn without the mode moving onto it (after a restart)
+        // is recorded as it is now, alone or beside its desk.
+        let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
+            let pair = view.tray.pair.as_ref()?;
+            Some((
+                (view.device_id.clone(), view.path.clone()),
+                pair.tab_id.clone(),
+            ))
+        });
+        if let Some((key, tab)) = drawn {
+            self.note_pair_desk(&key, &tab);
+        }
     }
 
     /// A View display's file that could not be read back after a restart,

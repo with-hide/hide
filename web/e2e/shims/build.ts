@@ -33,12 +33,24 @@ const hashed = (source: string, name: FixtureShim): string => {
 };
 
 /**
- * One compile's bounds: with the 30 s the tree's end may take, inside the
- * 120 s a vitest `beforeAll` gives its build, so a compiler that hangs is
- * ended before the hook is abandoned; the output cap is `execFileSync`'s
- * default.
+ * A later, warm compile's bounds (and every Unix compile's unchanged bounds).
+ * fixtureBuildTimeout includes the first Windows compile's separate stages
+ * and the 30 s the final tree's end may take, before a hook is abandoned.
  */
 const COMPILE = { timeoutMs: 60_000, outputBytes: 1024 * 1024 };
+
+// Cold Windows measurements: compile 43.5-55.4 s (one exceeded 60 s),
+// plan 1.6 s, link 16.6 s (one exceeded its remaining 21.2 s). Each
+// independent process gets its own bound; compiling cannot spend the link's.
+const FIRST_COMPILE_MS = { compile: 90_000, "plan-link": 15_000, link: 60_000 };
+type CompileStage = keyof typeof FIRST_COMPILE_MS;
+
+/** The caller's hook includes every requested build and the final tree cleanup. */
+export function fixtureBuildTimeout(programs: readonly FixtureShim[]): number {
+  if (!windows) return 120_000;
+  const later = new Set(programs.filter((name) => name !== "hide-processes")).size;
+  return Object.values(FIRST_COMPILE_MS).reduce((sum, ms) => sum + ms, 0) + later * COMPILE.timeoutMs + (3 + later) * 30_000;
+}
 
 /**
  * Compiles each of `programs` (every program this system builds unless
@@ -67,6 +79,7 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     const program = path.join(outputDir, hashed(source, name));
     built[name] = program;
     if (fs.existsSync(program)) {
+      if (windows) console.error(JSON.stringify({ kind: "fixture.compile.cached", shim: name }));
       if (name === "hide-processes") processTool = program;
       continue;
     }
@@ -74,17 +87,12 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     let failure: unknown;
     let output = "";
     try {
-      // The steps share one compile's bounds.
-      const until = Date.now() + COMPILE.timeoutMs;
-      let step = 0;
       const done = windows && !processTool
-        ? await compileInSteps(compiler, source, partial, async (program, args, env) => {
-          const stage = ["compile", "plan-link", "link"][step++]!;
+        ? await compileInSteps(compiler, source, partial, async (program, args, env, stage, timeoutMs) => {
           const started = performance.now();
-          const remainingMs = Math.max(0, until - Date.now());
-          console.error(JSON.stringify({ kind: "fixture.compile.started", shim: name, stage, remaining_ms: remainingMs }));
+          console.error(JSON.stringify({ kind: "fixture.compile.started", shim: name, stage, timeout_ms: timeoutMs }));
           try {
-            const result = await runAlone(program, args, { ...COMPILE, timeoutMs: remainingMs, env });
+            const result = await runAlone(program, args, { ...COMPILE, timeoutMs, env });
             console.error(JSON.stringify({ kind: "fixture.compile.ended", shim: name, stage, elapsed_ms: Math.round(performance.now() - started), status: result.status, signal: result.signal }));
             return result;
           } catch (error) {
@@ -146,24 +154,34 @@ const SPAWNS_CC1 = ["CC_PRINT_PROC_STAT", "CLANG_SPAWN_CC1", "CCC_OVERRIDE_OPTIO
  * needs, before `hide-processes` exists to own one; the Windows unit suite
  * counts each step's processes in a job (`bounded-child.unit.ts`).
  */
-export async function compileInSteps(compiler: string, source: string, output: string, run: (program: string, args: string[], env: NodeJS.ProcessEnv) => Promise<BoundedResult>): Promise<BoundedResult> {
+export async function compileInSteps(compiler: string, source: string, output: string, run: (program: string, args: string[], env: NodeJS.ProcessEnv, stage: CompileStage, timeoutMs: number) => Promise<BoundedResult>): Promise<BoundedResult> {
   // Windows reads a variable's name without regard to case.
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !SPAWNS_CC1.includes(name.toUpperCase())));
   const object = `${output}.obj`;
+  const trace = `${output}.trace.json`;
   // A step whose end was not confirmed may still write the object.
   let held = false;
   try {
-    const compiled = await run(compiler, ["--no-default-config", "-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", "-o", object, source], env);
+    const compiled = await run(compiler, ["--no-default-config", "-c", "-O1", "-fintegrated-cc1", "-fno-crash-diagnostics", `-ftime-trace=${trace}`, "-o", object, source], env, "compile", FIRST_COMPILE_MS.compile);
     if (compiled.status !== 0) return compiled;
-    const planned = await run(compiler, ["--no-default-config", "-###", "-fuse-ld=lld", "-o", output, object], env);
+    // clang's trace starts inside cc1: compare its measured work with the
+    // process wall time above, rather than calling a cold start C compilation.
+    const events = JSON.parse(fs.readFileSync(trace, "utf8")).traceEvents as { name: string; dur?: number }[];
+    const duration = events.find((event) => event.name === "Total ExecuteCompiler")?.dur;
+    if (duration === undefined) throw new Error(`clang trace has no Total ExecuteCompiler: ${trace}`);
+    console.error(JSON.stringify({ kind: "fixture.compile.work", shim: path.basename(source, ".c"), compiler_ms: Math.round(duration / 1000) }));
+    const planned = await run(compiler, ["--no-default-config", "-###", "-fuse-ld=lld", "-o", output, object], env, "plan-link", FIRST_COMPILE_MS["plan-link"]);
     if (planned.status !== 0) return planned;
     const [linker, ...args] = plannedLink(planned.stderr);
-    return await run(linker!, args, env);
+    return await run(linker!, args, env, "link", FIRST_COMPILE_MS.link);
   } catch (error) {
     held = error instanceof BoundedChildError && !error.treeEnded;
     throw error;
   } finally {
-    if (!held) fs.rmSync(object, { force: true });
+    if (!held) {
+      fs.rmSync(object, { force: true });
+      fs.rmSync(trace, { force: true });
+    }
   }
 }
 

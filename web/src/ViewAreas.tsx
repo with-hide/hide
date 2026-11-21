@@ -1,6 +1,5 @@
 import { ExternalDisplay } from "./ExternalDisplay";
 import { useExternalGrant } from "./externalFiles";
-import { ProjectLanePin } from "./ProjectLanePin";
 import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -15,6 +14,8 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
 import { CommentCount, FeedbackRow } from "./ViewComments";
+import { CardBody, DetailIcon, useCardTitle } from "./CardBody";
+import { cardTitle } from "./cardTitle";
 import { StatusMark } from "./components/status-mark";
 import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
 import { fileIcon } from "./fileIcons";
@@ -22,11 +23,14 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { windowDeviceId } from "./screenMachine";
 import { editorTabFor, frontCheckout, type ViewDisplaySnapshot, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
+import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
 import { displayIdentity, displayMenu, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
-import { locateDisplay } from "./areaLayout";
+import { findArea, locateDisplay } from "./areaLayout";
+import { DeskPairButton, PairOthers } from "./DeskPairControls";
+import { drawnPair } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
 /**
@@ -82,12 +86,26 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   // keyboard, and the editor takes it as it mounts unless the operator has
   // moved it by then. One watch per tree, ended when the read settles, by
   // the next arrival, or with the tree.
+  // A card the operator opened is decided once, on the first frame that
+  // includes the open (`caughtUp`, the rule a pane's focus follows): the
+  // card in front of this desk takes the keyboard, after the pane the core
+  // focused with it, and otherwise the claim ends, so a card that landed
+  // where no desk draws it never takes the keys later. An earlier frame may
+  // already show the same card in front and must not settle it.
   const request = useUiStore((s) => s.viewFocusRequest);
   const opens = useShellStore((s) => s.rest?.status?.browser_opens);
+  const opensIncluded = useShellStore(caughtUp);
   const contentWatch = useRef<MutationObserver | null>(null);
   useEffect(() => () => contentWatch.current?.disconnect(), []);
   useEffect(() => {
-    if (!request || !body || !focusRequestArrived(request, key, layout, opens)) return;
+    if (!request || !body) return;
+    if ("card" in request) {
+      if (!opensIncluded) return;
+      if (!focusRequestArrived(request, key, layout, opens)) {
+        useUiStore.getState().setViewFocusRequest(null);
+        return;
+      }
+    } else if (!focusRequestArrived(request, key, layout, opens)) return;
     useUiStore.getState().setViewFocusRequest(null);
     const areaId = "areaId" in request ? request.areaId : layout.active_area;
     const revision = "revision" in request ? request.revision : undefined;
@@ -105,8 +123,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
         focusBrowserDisplay(key, browserId);
         return;
       }
-      const content = editorContent(area);
       const tab = area.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      const content = "tab" in request && request.tab ? null : editorContent(area);
       (content ?? tab)?.focus({ preventScroll: true });
       if (content || !tab || !area.querySelector(READING)) return;
       const waitingRevision = keyboardInputRevision();
@@ -121,7 +139,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
       watch.observe(area, { childList: true, subtree: true });
       contentWatch.current = watch;
     });
-  }, [request, key, layout, body, opens]);
+  }, [request, key, layout, body, opens, opensIncluded]);
 
   // One keeper per document on screen, however many displays show it.
   const documents = useMemo(
@@ -130,10 +148,21 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   );
 
 
+  // Focus mode (PRD lane-desk-pair-view D-41, D-42, D-60): the strip folds
+  // every tab the left pane does not own, but for what the operator opened
+  // since the mode came on, into one menu at its end; the ◧ beside ✕ only
+  // enters it and is not drawn while it is on.
+  const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
+  const front = findArea(layout.root, layout.active_area)?.active ?? null;
+  // The core names the folded tabs (D-60); the strip leaves them out and nothing else.
+  const folded = pair?.folded ?? [];
+  const inStrip = folded.length > 0 ? (display: ViewDisplaySnapshot) => !folded.includes(display.id) : undefined;
   const adapter: AreaAdapter<ViewDisplaySnapshot> = {
     words: VIEW_WORDS,
+    inStrip,
+    barEnd: inStrip ? (area) => <PairOthers hidden={area.displays.filter((display) => display.id !== area.active && !inStrip(display))} label={(display) => tabLabel(display, t)} actions={actions} /> : undefined,
     keyboardArea: owner.kind === "view" && owner.workspace === checkoutId ? owner.areaId : null,
-    label: (display) => display.label,
+    label: (display) => tabLabel(display, t),
     sameContent: showsSameDocument,
     tab: (display, interaction) => <DisplayTab display={display} workspace={workspace} interaction={interaction} actions={actions} />,
     body: (display) => (
@@ -143,7 +172,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
       </div>
     ),
     empty: () => <AreaEmpty state="no-view" text={t("documents.view.empty")} />,
-    floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{display.label}</span></>,
+    floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{tabLabel(display, t)}</span></>,
     menu: (id, geometry, sizes) => [{ id: "new_tab", icon: "add", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
     runMenu: (id, displayId) => id === "new_tab" ? actions.openBrowser("", workspace, locateDisplay(layout.root, displayId)?.area.id) : actions.runViewMenu(id as ViewMenuId, displayId),
     focus: actions.focusView,
@@ -156,7 +185,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <ProjectLanePin column="view" actions={actions} /> },
+    // Pair view draws neither the desk's ✕ nor its ◧: only its own ways out end it (D-42, D-46).
+    close: pair === null ? { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <DeskPairButton displayId={front} actions={actions} /> } : undefined,
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
@@ -170,6 +200,7 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
   const { t } = useInterfaceTranslation();
   if (display.kind === "browser") return <BrowserDisplay display={display} workspace={workspace} actions={actions} />;
   if (display.kind === "external") return <ExternalDisplay display={display} workspace={workspace} actions={actions} />;
+  if (display.kind === "card") return display.card ? <CardBody item={display.card} ownerPane={display.owner_pane ?? null} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
   }
@@ -193,7 +224,12 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
 }
 
 /** One display's tab: its kind's mark, italic while a preview, its save marks, and its whole identity (B2, B21). */
-export function DisplayTab({ display, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
+export function DisplayTab({ display: sent, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
+  // A card's name is the shell's to give (`cardTitle`): its short name on
+  // the tab, its full name in the tab's tooltip (PRD lane-desk-pair-view D-30).
+  const named = useCardTitle(sent.card ?? null, true);
+  const full = useCardTitle(sent.card ?? null);
+  const display = sent.kind === "card" ? { ...sent, label: named } : sent;
   const { selected, areaActive } = interaction;
   const fit = tabFit(selected, interaction.fit);
   const { t } = useInterfaceTranslation();
@@ -210,7 +246,7 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
   // A View an agent opened that the operator has not looked at leads its tab with the 볼 것 eye (PRD unseen-agent-views B10); a tab only one mark wide shows the eye in its mark's place.
   const look = display.unseen ? <StatusMark mark="look" data-view-unseen={display.id} /> : null;
   const identity = [
-    displayIdentity(display, t),
+    displayIdentity(sent.kind === "card" ? { ...sent, label: full } : display, t),
     display.unseen ? t("agents.mark.look") : null,
     display.opener ? [
       display.opener.pane_id ? display.opener.name : t("feedback.mark.closed", { name: display.opener.name }),
@@ -230,7 +266,9 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
       aria-selected={selected}
       aria-label={identity}
       tabIndex={0}
-      data-tab={display.tab_id ?? ""}
+      // Only a View with an editor tab names it; a card or a page carries
+      // none, so `[data-tab]` stays the Agent tabs' and the documents'.
+      data-tab={display.tab_id ?? undefined}
       data-display={display.id}
       data-tab-kind={display.kind}
       data-preview={display.preview ? "true" : "false"}
@@ -263,7 +301,7 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
         ) : null}
       </span>
       {attached ? <Badge aria-hidden="true" data-browser-attached="true"><Link2Icon /></Badge> : null}
-      <span className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
+      <span data-tab-title="true" className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
         {display.label}
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}
@@ -308,8 +346,14 @@ function ExternalBadge({ path }: { path: string | null }) {
   );
 }
 
-/** A file's type mark or the diff's comparison mark; never colour alone (D-15). */
-export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">) {
+/** A display's name on its tab, a card's short one from what the shell holds of its subject. */
+function tabLabel(display: ViewDisplaySnapshot, t: Parameters<typeof cardTitle>[1]): string {
+  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null, true) : display.label;
+}
+
+/** A file's type mark, the diff's comparison mark or a card's own; never colour alone (D-15). */
+export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label" | "card">) {
+  if (display.kind === "card" && display.card) return <DetailIcon item={display.card} className="size-(--size-icon) shrink-0 text-muted-foreground" />;
   if (display.kind === "browser") return <GlobeIcon aria-hidden="true" data-view-mark="browser" className="size-(--size-icon) shrink-0 text-muted-foreground" />;
   if (display.kind === "diff") {
     return (
@@ -322,6 +366,6 @@ export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">
 }
 
 /** The minimum-density identity choice lives here so review can replace it without changing the fit curve. */
-function collapsedDisplayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">) {
+function collapsedDisplayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label" | "card">) {
   return displayMark(display);
 }

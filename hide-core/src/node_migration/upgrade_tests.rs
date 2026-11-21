@@ -69,11 +69,42 @@ fn copy_tree(from: &Path, to: &Path) {
 /// store then reads as.
 pub(crate) fn started(fixture: &Path) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    copy_tree(fixture, dir.path());
-    let node = node_of(dir.path());
-    convert(dir.path(), &node).unwrap();
-    name_devices(dir.path(), &node).unwrap();
+    started_at(fixture, dir.path());
     dir
+}
+
+/// [`started`], with the folder at `state`.
+pub(crate) fn started_at(fixture: &Path, state: &Path) {
+    copy_tree(fixture, state);
+    let node = node_of(state);
+    convert(state, &node).unwrap();
+    name_devices(state, &node).unwrap();
+}
+
+/// What a start over `state` does that a start over a folder an earlier
+/// start already converted must not: change or refuse something, or write
+/// a file. Empty when it does none of them.
+pub(crate) fn second_start(state: &Path) -> Vec<String> {
+    let node = node_of(state);
+    let mut failures = Vec::new();
+    let before = digest(state).unwrap();
+    match (convert(state, &node), name_devices(state, &node)) {
+        (Ok(converted), Ok(named)) => {
+            if !converted.files.is_empty() || !named.renamed.is_empty() || !named.held.is_empty() {
+                failures.push(format!(
+                    "a second start changed something: {converted:?} {named:?}"
+                ));
+            }
+        }
+        (converted, named) => {
+            failures.push(format!("a second start refused: {converted:?} {named:?}"))
+        }
+    }
+    let changed = before.differs(&digest(state).unwrap());
+    if !changed.is_empty() {
+        failures.push(format!("a second start wrote {changed:?}"));
+    }
+    failures
 }
 
 /// The node the core of a released folder ran as, which a start of this
@@ -84,6 +115,17 @@ pub(crate) fn node_of(state: &Path) -> NodeId {
 
 fn json(state: &Path, name: &str) -> Value {
     serde_json::from_slice(&std::fs::read(state.join(name)).unwrap()).unwrap()
+}
+
+/// The ledger as a start reads it: from its store once one exists, from the
+/// old file the release left before.
+fn ledger(state: &Path) -> Value {
+    let store = hide_kit::layout::delivery_store(state);
+    if store.exists() {
+        crate::delivery::store::read_value(&store).unwrap().unwrap()
+    } else {
+        json(state, DELIVERY_LEDGER)
+    }
 }
 
 fn length(value: &Value, pointer: &str) -> usize {
@@ -118,7 +160,7 @@ struct Counts {
 fn counts(state: &Path) -> Counts {
     Counts {
         projects: length(&json(state, CORE_STATE), "/workspace_registrations"),
-        letters: length(&json(state, DELIVERY_LEDGER), "/letters"),
+        letters: length(&ledger(state), "/letters"),
         cards: cards(state),
     }
 }
@@ -162,8 +204,9 @@ fn load_every_store(state: &Path, node: &NodeId) -> Vec<String> {
         if !matches!(outcome, crate::workspace_views::LoadOutcome::Loaded { .. }) {
             refused.push(format!("{WORKSPACE_VIEWS}: {outcome:?}"));
         }
-        if let Err(reason) = crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER)) {
-            refused.push(format!("{DELIVERY_LEDGER}: {reason}"));
+        if let Err(reason) = crate::delivery::store::load(&hide_kit::layout::delivery_store(state))
+        {
+            refused.push(format!("{}: {reason}", hide_kit::layout::DELIVERY_STORE));
         }
         if let crate::mission_store::Restored::Unreadable(reason) =
             crate::mission_store::MissionStore::new(state).restore()
@@ -277,32 +320,27 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         // would point at a device that is no longer registered.
         let scoped = format!("remote:{old}:");
         if old != machine {
-            for path in json_stores(state) {
+            // The old ledger file is only read: its store holds the ledger.
+            let old_ledger = state.join(DELIVERY_LEDGER);
+            for path in json_stores(state)
+                .into_iter()
+                .filter(|path| *path != old_ledger)
+            {
                 if std::fs::read_to_string(&path).unwrap().contains(&scoped) {
                     let store = path.strip_prefix(state).unwrap().display().to_string();
                     failures.push(format!("{store} still names {scoped}"));
                 }
             }
-        }
-    }
-
-    let migrated = digest(state).unwrap();
-    match (convert(state, &node), name_devices(state, &node)) {
-        (Ok(converted), Ok(named)) => {
-            if !converted.files.is_empty() || !named.renamed.is_empty() || !named.held.is_empty() {
+            if ledger(state).to_string().contains(&scoped) {
                 failures.push(format!(
-                    "a second start changed something: {converted:?} {named:?}"
+                    "{} still names {scoped}",
+                    hide_kit::layout::DELIVERY_STORE
                 ));
             }
         }
-        (converted, named) => {
-            failures.push(format!("a second start refused: {converted:?} {named:?}"))
-        }
     }
-    let changed = migrated.differs(&digest(state).unwrap());
-    if !changed.is_empty() {
-        failures.push(format!("a second start wrote {changed:?}"));
-    }
+
+    failures.extend(second_start(state));
 
     let after = counts(state);
     if after != before {
@@ -581,7 +619,7 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
     );
     loaded.insert(
         "ledger agents",
-        crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER))
+        crate::delivery::store::load(&hide_kit::layout::delivery_store(state))
             .map(|ledger| ledger.agents)
             .unwrap_or_default()
             .iter()

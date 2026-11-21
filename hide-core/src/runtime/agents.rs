@@ -327,9 +327,18 @@ impl Runtime {
         terminal_intent: bool,
         report: FailureReport,
     ) -> bool {
+        // The operator choosing a device's pane moves its tab's pair view as
+        // choosing one of this machine does (B25, `follow_pair_focus`).
+        let focused = match &payload.request {
+            RemoteControlRequest::FocusPane { pane_id } => Some(pane_id.clone()),
+            _ => None,
+        };
         let (changed, read) = self.change_look(|runtime| {
             runtime.request_remote_control_inner_steps(payload, terminal_intent, report)
         });
+        if changed && let Some(pane) = focused {
+            self.follow_pair_focus(&pane);
+        }
         changed || read
     }
 
@@ -4153,9 +4162,15 @@ impl Runtime {
     /// matches while its registration is live and its session is the one the
     /// registration holds, so a later agent in a reused pane is not marked.
     /// A device's pane is registered under the id the core names it by
-    /// (`remote:<device>:pane:<pane>`), so one comparison serves both.
+    /// (`remote:<device>:pane:<pane>`), so one comparison serves both. The
+    /// pane of an automation's start that is still asked is the run's before
+    /// its agent registers (`StartingPane`), so its row never stands as the
+    /// operator's in between.
     fn lay_hide_ai(&self, agents: &mut [SidebarAgentSnapshot]) {
         for agent in agents {
+            let starting = self.hide_started.starting.iter().find(|starting| {
+                starting.pane_id == agent.pane_id && self.automation_asking(&starting.intent)
+            });
             agent.hide_ai = self
                 .hide_started
                 .agents
@@ -4165,22 +4180,26 @@ impl Runtime {
                         && started.session.is_some()
                         && started.session == agent.lineage_session
                 })
-                .map(|started| {
-                    let home = started.task.as_ref().and_then(|task| task.kind.home());
+                .map(|started| (Some(started.agent_id.as_str()), started.task.as_ref()))
+                .or_else(|| starting.map(|starting| (None, starting.task.as_ref())))
+                .map(|(agent_id, task)| {
+                    let home = task.and_then(|task| task.kind.home());
                     // Only a kind with a home has an attempt to read; a kind
                     // this build does not know stays an operator row (D-19).
-                    let attempt = home.and_then(|_| match started.task.as_ref()?.kind {
-                        crate::coordination::TaskKind::MemoryPromote => self
-                            .project_memory
-                            .promotions
-                            .home_attempt(&started.agent_id),
-                        crate::coordination::TaskKind::SuggestionApply => {
-                            self.suggestions_work.apply.home_attempt(&started.agent_id)
+                    let attempt = home.and_then(|_| match task?.kind {
+                        crate::coordination::TaskKind::MemoryPromote => {
+                            self.project_memory.promotions.home_attempt(agent_id?)
                         }
-                        crate::coordination::TaskKind::Unknown(_) => None,
+                        crate::coordination::TaskKind::SuggestionApply => {
+                            self.suggestions_work.apply.home_attempt(agent_id?)
+                        }
+                        // The automation screen keeps no attempt of its own:
+                        // its run is the row's.
+                        crate::coordination::TaskKind::Automation
+                        | crate::coordination::TaskKind::Unknown(_) => None,
                     });
                     crate::model::HideAiSnapshot {
-                        task: started.task.clone(),
+                        task: task.cloned(),
                         home,
                         workspace_id: attempt.and_then(|attempt| {
                             self.catalog_workspaces()

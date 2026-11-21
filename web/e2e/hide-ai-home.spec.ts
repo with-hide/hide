@@ -14,7 +14,7 @@ import { git, ledgerOf } from "./hide-ai-fixture";
 import { openProject, openWorktree, tabOfPane, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { sessionIn, startAgentInProject } from "./fixture-agents";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { countSent, sendEvent, showProjectMemory, showProjectRow } from "./wire";
 
@@ -173,7 +173,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
       seedPromotion(path.join(dir, "project-memory.sqlite3"), "agent-2");
-      fs.writeFileSync(path.join(dir, "delivery-ledger.json"), ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.worktree, branch: BRANCH, task: { kind: "memory_promote", target: "m43" } }]), { mode: 0o600 });
+      seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.worktree, branch: BRANCH, task: { kind: "memory_promote", target: "m43" } }]));
     });
     await open(page, stack.daemon);
 

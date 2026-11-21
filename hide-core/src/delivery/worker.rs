@@ -1,6 +1,7 @@
 //! One bounded writer. Runtime owns the published immutable ledger; owned
 //! candidates are validated and persisted before a result or publication.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -17,6 +18,7 @@ use crate::runtime::delivery::Observation;
 use crate::workspace_control::{Context, Query};
 
 use super::ledger::{self, Ledger};
+use super::store::{Changes, LedgerStore};
 use super::{Actor, Command, mailbox, watch};
 
 const QUEUE_LIMIT: usize = 64;
@@ -56,10 +58,17 @@ pub struct Prepared {
 /// asks.
 struct Forwarded {
     forward: crate::core_calls::Forward,
-    /// A start: the machine it is asked of. Its asker is remembered first,
-    /// so the result report of what starts there finds it
-    /// (`ledger::CoreStart`).
-    start: Option<String>,
+    /// A start: its asker is remembered first, so the result report of what
+    /// starts there finds it (`ledger::CoreStart`).
+    start: Option<Start>,
+}
+
+/// A start asked of another core: the connection it is asked on, and the
+/// registration its asker is made with first when it has none
+/// (`Effect::CoreStart`).
+pub(crate) struct Start {
+    pub(crate) key: String,
+    pub(crate) registers: Option<Box<crate::coordination::AgentRecord>>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -75,8 +84,8 @@ pub struct HumanNotice {
     /// The agent that has not confirmed or received the letter; the
     /// mission's title for a mission notice.
     pub recipient: String,
-    /// The watched agent an unconfirmed warning is about; empty for an
-    /// undelivered letter; the node's title for a mission notice.
+    /// The watched agent an unconfirmed warning is about; the node's title
+    /// for a mission notice.
     pub about: String,
 }
 
@@ -86,7 +95,6 @@ pub struct HumanNotice {
 #[serde(rename_all = "snake_case")]
 pub enum HumanNoticeKind {
     ObserverUnconfirmed,
-    LetterUndelivered,
     /// A mission node waits on the operator and no Needs You row stands to
     /// lay it on (PRD mission-node-simple B5): `id` is the mission's.
     MissionAttention,
@@ -97,7 +105,6 @@ impl HumanNoticeKind {
     pub fn code(self) -> &'static str {
         match self {
             Self::ObserverUnconfirmed => "observer_unconfirmed",
-            Self::LetterUndelivered => "letter_undelivered",
             Self::MissionAttention => "mission_attention",
         }
     }
@@ -163,6 +170,14 @@ pub(crate) struct Authority {
     /// (`mailbox::show`) and knows nothing of why.
     pub also_reads: Vec<mailbox::Exchange>,
     pub proven: Proven,
+    /// The registrations a new letter's parties are made with before it is
+    /// kept, when they have none, as the core read them from their panes
+    /// (`Runtime::party_registration`): a letter names the registrations it
+    /// is between (`Letter::to`, PRD letters-missions-simplify B3).
+    pub registers: Vec<crate::coordination::AgentRecord>,
+    /// How many bytes at the start of a sent body its sender wrote, when the
+    /// core appended something after them (`Letter::written`).
+    pub written: Option<usize>,
 }
 
 impl Prepared {
@@ -187,20 +202,15 @@ impl Prepared {
         }
     }
 
-    /// Has the core `forward` names run the command; `start` is the
-    /// machine a start is asked of.
+    /// Has the core `forward` names run the command; `start` is what a
+    /// start records first.
     pub(crate) fn forwarded(
         mut self,
         forward: crate::core_calls::Forward,
-        start: Option<String>,
+        start: Option<Start>,
     ) -> Self {
         self.forward = Some(Forwarded { forward, start });
         self
-    }
-
-    /// Who the command's letter goes to, when it names one.
-    pub(crate) fn target_actor(&self) -> Option<&Actor> {
-        self.target.as_ref().map(|target| &target.actor)
     }
 
     /// Words what the command hands over in `language`.
@@ -228,23 +238,78 @@ impl Prepared {
         self
     }
 
+    /// The brief a spawn will start its agent on, as the core prepared it.
+    #[cfg(test)]
+    pub(crate) fn spawn_brief(&self) -> Option<&str> {
+        match &self.command {
+            Command::Agents {
+                command: crate::coordination::Command::Spawn { brief, .. },
+            } => brief.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
-        let result = if let Some(answer) = self.answered {
+        // Hide's own notices are status cells, not letters (PRD
+        // letters-missions-simplify D-17): a turn's prompt reads the ones
+        // that changed after its letters, and `hide inbox` lists them; a
+        // tool event's those that reach a working agent (PRD mission-speed-2
+        // D-03).
+        let tool = matches!(
+            &self.command,
+            Command::Pull {
+                point: hide_node_link::panes::PullPoint::Tool,
+                ..
+            }
+        );
+        let status = match &self.command {
+            Command::Pull {
+                point:
+                    hide_node_link::panes::PullPoint::Prompt | hide_node_link::panes::PullPoint::Tool,
+                ..
+            } => Some(false),
+            Command::Inbox { bundle: true } => Some(true),
+            _ => None,
+        };
+        let caller = status.map(|_| {
+            (
+                self.client.runtime.clone(),
+                self.actor.device_id.clone(),
+                self.actor.pane_id.clone(),
+            )
+        });
+        let mut result = if let Some(answer) = self.answered {
             Ok(answer)
         } else if let Some(Forwarded { forward, start }) = self.forward {
             match start {
-                Some(machine) => self
+                // The start is asked as the agent the store registered.
+                Some(Start { key, registers }) => self
                     .client
                     .submit(
                         Effect::CoreStart {
                             origin: self.actor,
-                            machine,
+                            key,
+                            registers,
                         },
                         timeout,
                     )
-                    .and_then(|_| forward.run(timeout)),
+                    .and_then(|asker| {
+                        let party = |field: &str| {
+                            asker[field]
+                                .as_str()
+                                .map(str::to_owned)
+                                .ok_or("invalid_response")
+                        };
+                        forward
+                            .asked_by(crate::core_calls::Party {
+                                item: crate::core_calls::CoreItem::Agent,
+                                id: party("id")?,
+                                name: party("name")?,
+                            })
+                            .run(timeout)
+                    }),
                 None => forward.run(timeout),
             }
         } else if let Command::Agents { command } = self.command {
@@ -276,6 +341,23 @@ impl Prepared {
                 timeout,
             )
         };
+        if let (Some(inbox), Some((runtime, device, pane)), Ok(value)) =
+            (status, caller, result.as_mut())
+            && let Some(runtime) = runtime.upgrade()
+        {
+            crate::runtime::with_status(value, inbox, |room| {
+                let mut guard = runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let cells = guard.take_status(&device, &pane, room, tool)?;
+                let text = if cells.is_empty() {
+                    String::new()
+                } else {
+                    crate::runtime::status_text(&cells)
+                };
+                Some((text, json!(cells)))
+            });
+        }
         if let Some(after) = self.then {
             after(&result);
         }
@@ -382,24 +464,48 @@ pub(crate) enum Effect {
         id: String,
         recipient: Actor,
     },
+    /// A letter whose live recipient took none of its three bells, a round
+    /// ago (`Letter::bell_round_due`): it gets three more (B6).
+    BellRound {
+        id: String,
+        recipient: Actor,
+    },
     /// Hide told the letter's sender that its bell `attempt` was not taken
     /// (`delivery::typed`).
     InputNoticed {
         id: String,
         attempt: u8,
     },
+    /// What registration `recipient` has seen of its status cells now
+    /// (`runtime::status_cells`): the whole map, which replaces the one kept,
+    /// none to forget it.
+    StatusSeen {
+        recipient: String,
+        seen: BTreeMap<String, u64>,
+    },
+    /// A Reopen is about to bring these closed agents back: the letters
+    /// that wait for them now end, before anything starts (B2, B7; see
+    /// `Runtime::delivery_closed`). The store answers once they are saved.
+    EndClosed(Vec<crate::agent_sleep::DormantRegistration>),
     /// What the hooks of `recipient`'s pane could not confirm, as the node
     /// of its machine handed it over (`mailbox::confirm_owed`).
     Owed {
         recipient: Actor,
         owed: hide_agent_hooks::owed::Owed,
     },
-    /// The core of `machine` took letter `id` for the agent it calls
-    /// `name` (`Ledger::settle_core`).
+    /// The core on connection `key` took letter `id` for the agent it
+    /// calls `name` (`Ledger::settle_core`).
     CoreSettled {
         id: String,
-        machine: String,
+        key: String,
         name: String,
+    },
+    /// The core on connection `key` keeps nothing of letter `id`, and why
+    /// (`Ledger::refuse_core`).
+    CoreRefused {
+        id: String,
+        key: String,
+        reason: String,
     },
     /// Letter `id`, which an agent of another core sent, is `core_id` in
     /// its sender's ledger (`Ledger::name_core_letter`).
@@ -407,10 +513,15 @@ pub(crate) enum Effect {
         id: String,
         core_id: String,
     },
-    /// `origin` asks `machine`'s core for a start (`Ledger::note_core_start`).
+    /// `origin` asks the core on connection `key` for a start
+    /// (`Ledger::note_core_start`), refused `capacity` when the ledger can
+    /// remember no more. It is registered first when it has no registration
+    /// (`registers`), since the start's report is a letter to it; the store
+    /// answers with the agent it is.
     CoreStart {
         origin: Actor,
-        machine: String,
+        key: String,
+        registers: Option<Box<crate::coordination::AgentRecord>>,
     },
 }
 
@@ -759,7 +870,7 @@ impl Worker {
                     path,
                     receiver,
                     stopped,
-                    ledger::write,
+                    |store: &mut LedgerStore, changes: &Changes<'_>| store.apply(changes),
                 )
             })
             .map_err(|_| "delivery_unavailable".to_owned())?;
@@ -773,14 +884,17 @@ impl Worker {
     }
 
     /// A store whose first request is queued before it starts. The supplied
-    /// durable write lets a test bind a mission after settlement and before
-    /// publication, in a fixed order with no timed producers or sleeps.
+    /// write lets a test bind a mission after settlement and before
+    /// publication, in a fixed order with no timed producers or sleeps, or
+    /// make the write fail.
     #[cfg(test)]
     pub(crate) fn store_queued(
         runtime: Weak<Mutex<Runtime>>,
         path: PathBuf,
         effect: Effect,
-        write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError> + Send + 'static,
+        write: impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>
+        + Send
+        + 'static,
     ) -> (Self, Receiver<Result<Value, String>>) {
         let (requests, receiver) = mpsc::sync_channel(QUEUE_LIMIT);
         let (reply, result) = mpsc::sync_channel(1);
@@ -845,7 +959,7 @@ fn apply(
     now: u64,
     holds: &dyn crate::coordination::Holds,
 ) -> Result<(Value, bool), String> {
-    let (actor, target, command, language, also_reads) = match &request.effect {
+    let (actor, target, command, language, also_reads, written) = match &request.effect {
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
@@ -872,16 +986,12 @@ fn apply(
             ));
         }
         Effect::BellAttempt { id, observed, line } => {
-            let clocks = &ledger.node_clocks;
             let letter = ledger
                 .letters
                 .iter_mut()
                 .find(|letter| letter.id == *id && letter.recipient.same_identity(&observed.actor))
                 .ok_or("letter_unavailable")?;
-            return Ok((
-                json!({"attempt":letter.reserve_bell(clocks, now, line.clone())?}),
-                false,
-            ));
+            return Ok((json!({"attempt":letter.reserve_bell(line.clone())?}), false));
         }
         Effect::Bell {
             id,
@@ -927,8 +1037,7 @@ fn apply(
                 letter.bell_ended = Some(letter.attempts());
             }
             // Published either way: the core waits for the recipient's
-            // record of a typed bell (`delivery::typed`), and judges a letter
-            // whose last bell ended (`Runtime::drive_spent_bells`).
+            // record of a typed bell (`delivery::typed`).
             return Ok((Value::Null, true));
         }
         Effect::InputNoticed { id, attempt } => {
@@ -941,22 +1050,83 @@ fn apply(
             }
             return Ok((Value::Null, true));
         }
+        Effect::StatusSeen { recipient, seen } => {
+            let before = ledger.status_seen.get(recipient);
+            if before == Some(seen) || (before.is_none() && seen.is_empty()) {
+                return Ok((Value::Null, false));
+            }
+            if seen.is_empty() {
+                ledger.status_seen.remove(recipient);
+            } else {
+                ledger.status_seen.insert(recipient.clone(), seen.clone());
+            }
+            // A registration the ledger let go keeps nothing seen.
+            let agents = &ledger.agents;
+            ledger.status_seen.retain(|id, _| {
+                agents
+                    .iter()
+                    .any(|record| record.id == *id && !record.ended)
+            });
+            return Ok((Value::Null, true));
+        }
+        Effect::EndClosed(closed) => {
+            let mut ended = false;
+            for agent in closed {
+                ended |= ledger.end_letters_to(&agent.id, &agent.actor, now);
+            }
+            return Ok((json!({"ended": ended}), ended));
+        }
         Effect::Owed { recipient, owed } => {
             let confirmed = mailbox::confirm_owed(ledger, recipient, owed, now);
             let changed = !confirmed.is_empty();
             return Ok((json!(confirmed), changed));
         }
-        Effect::CoreSettled { id, machine, name } => {
-            let settled = ledger.settle_core(id, machine, name, now);
+        Effect::CoreSettled { id, key, name } => {
+            let settled = ledger.settle_core(id, key, name, now);
             return Ok((json!({ "settled": settled }), settled));
+        }
+        Effect::CoreRefused { id, key, reason } => {
+            let refused = ledger.refuse_core(id, key, reason, now);
+            return Ok((json!({ "refused": refused }), refused));
         }
         Effect::CoreName { id, core_id } => {
             ledger.name_core_letter(id, core_id);
             return Ok((Value::Null, false));
         }
-        Effect::CoreStart { origin, machine } => {
-            ledger.note_core_start(origin, machine, now);
-            return Ok((Value::Null, false));
+        Effect::CoreStart {
+            origin,
+            key,
+            registers,
+        } => {
+            if let Some(record) = registers {
+                crate::coordination::register_party(ledger, record, holds)?;
+            }
+            let asker = ledger
+                .agents
+                .iter()
+                .find(|record| !record.ended && record.actor.same_identity(origin))
+                .ok_or(crate::runtime::SENDER_NOT_REGISTERED)?;
+            let (id, name) = (asker.id.clone(), asker.wire_name().to_owned());
+            ledger.note_core_start(&id, key, now)?;
+            return Ok((json!({ "id": id, "name": name }), registers.is_some()));
+        }
+        Effect::BellRound { id, recipient } => {
+            let renewed = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+                    && !letter.handed
+                    && letter.attempts() >= super::ledger::BELLS
+                    && !letter.bell_in_flight()
+            });
+            let renewed = renewed
+                .map(super::ledger::Letter::renew_bell_round)
+                .is_some();
+            if renewed {
+                crate::diagnostic!(json!({"component":"delivery","kind":"letter.bell_round",
+                    "letter_id":id,"pane_id":recipient.pane_id}));
+            }
+            return Ok((Value::Null, renewed));
         }
         Effect::Deferred { id, recipient } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
@@ -974,7 +1144,21 @@ fn apply(
             target,
             command,
             language,
-        } => (actor, target, &**command, *language, &authority.also_reads),
+        } => {
+            if matches!(**command, Command::Send { .. }) {
+                for record in &authority.registers {
+                    crate::coordination::register_party(ledger, record, holds)?;
+                }
+            }
+            (
+                actor,
+                target,
+                &**command,
+                *language,
+                &authority.also_reads,
+                authority.written,
+            )
+        }
     };
     let value = match command {
         Command::WatchStart { .. } => {
@@ -1067,7 +1251,25 @@ fn apply(
             now,
             language,
             also_reads,
-        ),
+            written,
+        )
+        .map(|value| {
+            // A letter sent to an agent that is closed ends as the store
+            // keeps it, wherever it falls among a Reopen's requests: the
+            // agent was not there to take it (`Runtime::closed_target`).
+            let closed = matches!(command, Command::Send { .. })
+                && target
+                    .as_ref()
+                    .is_some_and(|target| target.status == "closed");
+            match value["id"].as_str() {
+                Some(id) if closed && ledger.end_letter(id, now) => ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == id)
+                    .map_or(value.clone(), |letter| json!(letter)),
+                _ => value,
+            }
+        }),
     }?;
     Ok((
         value,
@@ -1083,18 +1285,30 @@ fn apply(
     ))
 }
 
+/// The store thread: applies each batch of requests to the published ledger
+/// and keeps the rows it changed in the file at `path` before it publishes
+/// the result and answers (D-31). `write` keeps them; the core passes the
+/// store's own.
 fn run(
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
     path: PathBuf,
     requests: Receiver<Request>,
     stop: Arc<AtomicBool>,
-    write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError>,
+    mut write: impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>,
 ) {
+    // The file and the ledger it holds, which each write is the difference
+    // from: what this thread last kept, never what the runtime shows, so the
+    // file follows every write whoever published last. A file that does not
+    // open leaves every change refused, as an unwritable one did.
+    let mut store = LedgerStore::open(&path).map(|(store, ledger, _)| (store, Arc::new(ledger)));
+    if let Err(code) = &store {
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"ledger.store_unavailable",
+            "code":code})
+        );
+    }
     let mut maintenance_at = 0;
-    // The recipients asleep at the last saved pass, so the pass after one
-    // wakes takes its sleep out of its letters' waits once.
-    let mut asleep_before = ledger::Asleep::new();
     while !stop.load(Ordering::Acquire) {
         let mut batch = Vec::new();
         match requests.recv_timeout(Duration::from_millis(250)) {
@@ -1119,31 +1333,22 @@ fn run(
                     guard.delivery_state()?,
                     guard.delivery_registrations_gone(),
                     guard.delivery_registration_rebinds(),
-                    guard.delivery_reach(),
-                    guard.delivery_asleep(),
-                    guard.delivery_wakes_started(),
-                    guard.delivery_undeliverable(),
+                    guard.delivery_successions(),
+                    guard.delivery_closed(),
                     guard.delivery_tool_connections(),
-                    guard.delivery_present_holds(),
                     guard.delivery_core_machines(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools, present, cores) =
-            match state {
-                Ok(state) => state,
-                Err(code) => {
-                    for request in batch {
-                        let _ = request.reply.send(Err(code.clone()));
-                    }
-                    continue;
+        let (state, gone, rebinds, successions, closed, tools, cores) = match state {
+            Ok(state) => state,
+            Err(code) => {
+                for request in batch {
+                    let _ = request.reply.send(Err(code.clone()));
                 }
-            };
+                continue;
+            }
+        };
         let now = now();
-        let woke: ledger::Asleep = asleep_before
-            .iter()
-            .filter(|(pane, before)| asleep.get(*pane) != Some(*before))
-            .map(|(pane, sleeper)| (pane.clone(), sleeper.clone()))
-            .collect();
         if batch.is_empty() {
             if now.saturating_sub(maintenance_at) < 1_000 {
                 continue;
@@ -1151,54 +1356,47 @@ fn run(
             maintenance_at = now;
             if gone.is_empty()
                 && rebinds.is_empty()
+                && successions.is_empty()
+                && !closed_letters_wait(&state, &closed)
                 && !tools
                     .as_deref()
                     .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
                 && !cores
                     .as_deref()
                     .is_some_and(|cores| crate::coordination::cores_left_behind(&state, cores))
-                && !state.reach_moves(&reach, now)
-                && !state.letters.iter().any(|letter| {
-                    (letter.intake_overdue(&state.node_clocks, now)
-                        && ledger::Sleeper::pausing(&asleep, &woken, letter).is_none())
-                        || letter.answer_overdue(now)
-                        || !letter.retained(now)
-                        || (letter.state == ledger::State::Pending
-                            && (undeliverable.contains_key(&letter.id)
-                                || ledger::Sleeper::of(&woke, letter).is_some()))
-                })
+                && !state
+                    .letters
+                    .iter()
+                    .any(|letter| letter.answer_overdue(now) || !letter.retained(now))
             {
-                asleep_before = asleep;
                 continue;
             }
         }
         let upkeep = Upkeep {
-            reach,
             gone,
             rebinds,
-            asleep,
-            woke,
-            woken,
-            undeliverable,
+            successions,
+            closed,
             tools,
-            present,
             cores,
         };
         let Settled {
             ledger: candidate,
-            bytes,
+            fits,
             results,
             mut transitions,
-            moved,
-            ended,
+            upkept,
             made_room,
+            rooms,
         } = settle(&runtime, &state, &upkeep, &batch, now);
-        transitions |= !ended.is_empty() || !moved.is_empty();
-        let changed = bytes.is_some();
-        let mut saved = match bytes {
-            None => Ok(()),
-            Some(Ok(bytes)) => write(&path, &bytes),
-            Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
+        transitions |= upkept.any();
+        let changed = fits.is_some();
+        let candidate = Arc::new(candidate);
+        let mut saved = match (fits, &mut store) {
+            (None, _) => Ok(()),
+            (Some(Err(code)), _) => Err(ledger::SaveError::Validation(code)),
+            (Some(Ok(())), Err(code)) => Err(ledger::SaveError::Validation(code.clone())),
+            (Some(Ok(())), Ok((file, kept))) => keep(file, kept, &candidate, &mut write),
         };
         if let Err(error) = &saved {
             if error.uncertain() {
@@ -1208,10 +1406,10 @@ fn run(
                 }
             }
             crate::diagnostic!(json!({"component":"delivery","kind":"ledger.save_failed",
-                    "code":error.code(),"persistence":error.diagnostic()}));
+                    "code":error.code(),"persistence":error.diagnostic(),
+                    "requests":batch.len()}));
         }
         if saved.is_ok() {
-            asleep_before = upkeep.asleep.clone();
             if changed {
                 for (letter, why) in answer_waits_ended(&state, &candidate) {
                     crate::diagnostic!(json!({"component":"delivery","kind":"answer_wait.ended",
@@ -1220,11 +1418,15 @@ fn run(
                         "recipient_pane":letter.recipient.pane_id,"reason":why.as_str()}));
                 }
             }
-            for (id, from) in &moved {
+            for (id, from) in &upkept.moved {
                 crate::diagnostic!(json!({"component":"coordination","kind":"agent.continued",
                     "agent_id":id,"from_pane_id":from.pane_id}));
             }
-            for (record, reason) in &ended {
+            for (former, successor) in &upkept.succeeded {
+                crate::diagnostic!(json!({"component":"coordination","kind":"agent.succeeded",
+                    "agent_id":former,"successor":successor}));
+            }
+            for (record, reason) in &upkept.ended {
                 // A spawn's child says what became of its brief when it ends
                 // (`SpawnRecord::brief_phase`): an agent that ended with its
                 // brief unconfirmed is told from one that took it.
@@ -1236,6 +1438,11 @@ fn run(
                     "agent_id":record.id,"machine":record.machine,"pane_id":record.pane,
                     "reason":reason.reason(),"spawn":spawn.map(|spawn| &spawn.id),
                     "brief":spawn.map(|spawn| spawn.brief_phase().word())}));
+            }
+            for room in &rooms {
+                crate::diagnostic!(json!({"component":"delivery","kind":"ledger.room_made",
+                    "bytes":room.bytes,"freed_bytes":room.freed,"spawns":room.spawns,
+                    "letters":room.letters,"agents":room.agents}));
             }
             if made_room && changed {
                 let (agents, spawns) = crate::coordination::dropped(&state, &candidate);
@@ -1256,8 +1463,7 @@ fn run(
             let index = Arc::new(super::correspondence::Correspondence::of(&candidate));
             match runtime.lock() {
                 Ok(mut guard) => {
-                    let published =
-                        guard.publish_delivery_indexed(Arc::new(candidate), index, transitions);
+                    let published = guard.publish_delivery_indexed(candidate, index, transitions);
                     drop(guard);
                     if published {
                         notifier.notify();
@@ -1289,19 +1495,43 @@ fn run(
     }
 }
 
+/// Keeps `candidate` in the store's file in place of `kept`, the ledger the
+/// file holds: only the rows that differ (D-31). A failed write leaves `kept`
+/// as it was and logs what it was to keep, by id (B29).
+fn keep(
+    file: &mut LedgerStore,
+    kept: &mut Arc<Ledger>,
+    candidate: &Arc<Ledger>,
+    write: &mut impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>,
+) -> Result<(), ledger::SaveError> {
+    let changes = Changes::between(kept, candidate);
+    let written = write(file, &changes);
+    match &written {
+        Ok(()) => *kept = Arc::clone(candidate),
+        Err(error) => {
+            crate::diagnostic!(json!({"component":"delivery","kind":"ledger.write_failed",
+                "code":error.code(),"persistence":error.diagnostic(),
+                "records":changes.diagnostic()}));
+        }
+    }
+    written
+}
+
 /// What one batch made of the published ledger.
 struct Settled {
     ledger: Ledger,
-    /// The file's new bytes, once the batch changed the ledger: the batch's
-    /// one encoding, or why the ledger cannot be written.
-    bytes: Option<Result<Vec<u8>, String>>,
+    /// Once the batch changed the ledger, whether it can be kept: within the
+    /// size limit after making room, or why not.
+    fits: Option<Result<(), String>>,
     results: Vec<Result<Value, String>>,
     transitions: bool,
-    moved: Moved,
-    ended: Ended,
+    upkept: Upkept,
     /// A full ledger read what the core's books hold to make room, so a
     /// registration or spawn record may have been dropped.
     made_room: bool,
+    /// What the file's limit dropped, for each request that made room and
+    /// for the batch's end (`coordination::room::for_size`).
+    rooms: Vec<crate::coordination::room::Made>,
 }
 
 /// Applies `batch` after the store's upkeep to one copy of `state`. A request
@@ -1317,17 +1547,19 @@ fn settle(
     // The batch's one copy of the ledger; a request applies to it in place.
     let mut candidate = state.clone();
     let holds = BookHolds::new(runtime);
-    let (moved, ended, tools_ended) = upkeep.apply(&mut candidate, now);
+    let upkept = upkeep.apply(&mut candidate, now, &holds);
     let mut results = Vec::with_capacity(batch.len());
     let mut accepted = vec![false; batch.len()];
-    let mut transitions = tools_ended;
+    let mut rooms = vec![None; batch.len()];
+    let mut transitions = upkept.tools;
     for (index, request) in batch.iter().enumerate() {
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
             Ok(()) => match land(&mut candidate, request, now, &holds) {
-                Ok((value, publish)) => {
+                Ok((value, publish, room)) => {
                     transitions |= publish;
                     accepted[index] = true;
+                    rooms[index] = room;
                     Ok(value)
                 }
                 Err(code) => {
@@ -1340,6 +1572,7 @@ fn settle(
                         &batch[..index],
                         &mut accepted[..index],
                         &mut results[..index],
+                        &mut rooms[..index],
                         now,
                     );
                     Err(code)
@@ -1348,21 +1581,19 @@ fn settle(
         };
         results.push(result);
     }
-    // A letter this batch sent to a machine without a clock gets one.
-    candidate.observe_reach(&upkeep.reach, now);
-    // The upkeep alone can take a full ledger past the file's limit.
-    let bytes = (candidate != *state).then(|| {
-        crate::coordination::room::for_size(&mut candidate, &holds)?;
-        candidate.bytes()
+    // The upkeep alone can take a full ledger past the size limit.
+    let fits = (candidate != *state).then(|| {
+        rooms.push(crate::coordination::room::for_size(&mut candidate, &holds)?);
+        Ok(())
     });
     Settled {
         ledger: candidate,
-        bytes,
+        fits,
         results,
         transitions,
-        moved,
-        ended,
+        upkept,
         made_room: holds.read.get().is_some(),
+        rooms: rooms.into_iter().flatten().collect(),
     }
 }
 
@@ -1436,10 +1667,15 @@ fn current(
                     // Only the core's code-owned callers
                     // hold this authority; neither has a pane to
                     // re-check.
-                    return guard
-                        .code_owned_authority_current(&authority.caller, actor)
-                        .then_some(())
-                        .ok_or_else(|| "caller_identity_changed".into());
+                    if !guard.code_owned_authority_current(&authority.caller, actor) {
+                        return Err("caller_identity_changed".into());
+                    }
+                    // What another core's agent changes is judged again
+                    // by how its machine stands now (D-72).
+                    if actor.core_address().is_some() {
+                        guard.core_mutation_current(actor, mutation)?;
+                    }
+                    return Ok(());
                 }
                 let context = guard
                     .workspace_control_query(&actor.device_id, &authority.caller, Query::Info)
@@ -1458,13 +1694,16 @@ fn current(
             ..
         } => {
             let command: &Command = command;
-            // The intent lookup uses the owned candidate outside Runtime.
+            // The retry lookup uses the owned candidate outside Runtime.
             // Replays converge even after the original recipient leaves.
             let target_required = matches!(
                 command,
                 Command::WatchStart { .. } | Command::WatchAssign { .. }
-            ) || matches!(command, Command::Send { intent, .. }
-                    if super::mailbox::existing_intent(candidate, actor, intent, now).is_none());
+            ) || matches!(command, Command::Send { intent, kind, body, .. }
+                    if super::mailbox::retried_send(candidate, actor, intent, kind,
+                        authority.written.and_then(|written| body.get(..written)).unwrap_or(body), None,
+                        |stored| target.as_ref().is_some_and(|target| target.actor.same_identity(stored)),
+                        now).is_none());
             runtime
                 .lock()
                 .map_err(|_| "delivery_unavailable".to_owned())
@@ -1478,6 +1717,11 @@ fn current(
                     } else if actor.code_owned() {
                         if !guard.code_owned_authority_current(&authority.caller, actor) {
                             return Err("caller_identity_changed".into());
+                        }
+                        // What another core's agent asks is judged again
+                        // by how its machine stands now (D-72).
+                        if actor.core_address().is_some() {
+                            guard.core_command_current(actor, command)?;
                         }
                     } else {
                         // The caller is the agent's own pane.
@@ -1535,59 +1779,90 @@ fn current(
 }
 
 /// What a batch reads from the runtime for the store's own upkeep before its
-/// requests: which machines are reachable and which registrations ended or
-/// moved.
+/// requests: which registrations ended, moved or were taken over by the next
+/// agent in their pane, and which tools are still connected.
 struct Upkeep {
-    reach: ledger::Reach,
     gone: std::collections::BTreeMap<String, crate::coordination::PaneGone>,
     rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
-    /// The recipients asleep now, whose letters' deadlines are paused, and
-    /// those asleep at the last pass that are not now (PRD
-    /// mission-worker-sleep D-13).
-    asleep: ledger::Asleep,
-    woke: ledger::Asleep,
-    /// The letters whose one wake started, with when: those wake no one
-    /// in a later sleep, and their hour runs through it.
-    woken: ledger::Woken,
-    /// The letters that cannot be delivered now, with why: a failed wake
-    /// leaves them (D-16), or no bell can bring them
-    /// (`runtime::spent_bells`).
-    undeliverable: std::collections::BTreeMap<String, String>,
+    /// The registrations whose pane now runs another agent, which takes
+    /// their place (`coordination::succeed`).
+    successions: std::collections::BTreeMap<String, crate::coordination::Succession>,
+    /// The agents closed through Hide that Reopen closed can bring back: the
+    /// letters waiting for them end (`Runtime::delivery_closed`).
+    closed: Vec<crate::agent_sleep::DormantRegistration>,
     /// The external tools' connections the core holds, by id, once its list
     /// is restored: what a tool not among them keeps ends
     /// (`coordination::end_gone_tools`).
     tools: Option<Vec<String>>,
-    /// The pending letters whose recipient the doorbell last saw in its
-    /// pane, held by a state that ends on its own or by the operator's act:
-    /// their deadline is renewed rather than reached
-    /// (`Ledger::renew_present`).
-    present: std::collections::HashSet<String>,
-    /// The machines this core is paired with, by device id, once it was
-    /// told them: what an agent of any other machine keeps ends
+    /// The machines this core is paired with, by connection id, once it
+    /// was told them: what an agent of any other machine keeps ends
     /// (`coordination::end_gone_cores`).
     cores: Option<Vec<String>>,
 }
 
 type Moved = Vec<(String, Actor)>;
+type Succeeded = Vec<(String, String)>;
 type Ended = Vec<(
     crate::coordination::AgentRecord,
     crate::coordination::PaneGone,
 )>;
 
+/// What the upkeep did to the ledger, which the store logs and publishes.
+#[derive(Default)]
+struct Upkept {
+    moved: Moved,
+    succeeded: Succeeded,
+    ended: Ended,
+    /// Whether it ended letters waiting for a closed agent.
+    closed: bool,
+    /// Whether it ended what a gone tool kept, which the screens show.
+    tools: bool,
+}
+
+impl Upkept {
+    fn any(&self) -> bool {
+        self.tools
+            || self.closed
+            || !self.moved.is_empty()
+            || !self.succeeded.is_empty()
+            || !self.ended.is_empty()
+    }
+}
+
+/// Whether a letter still waits for one of the `closed` agents, which the
+/// store's next pass ends.
+fn closed_letters_wait(
+    ledger: &Ledger,
+    closed: &[crate::agent_sleep::DormantRegistration],
+) -> bool {
+    !closed.is_empty()
+        && ledger.letters.iter().any(|letter| {
+            letter.awaiting_intake()
+                && closed.iter().any(|agent| match &letter.to {
+                    Some(to) => *to == agent.id,
+                    None => letter.recipient.same_identity(&agent.actor),
+                })
+        })
+}
+
 impl Upkeep {
-    /// Brings `ledger` to `now` as every batch does before its requests;
-    /// with whether it ended what a gone tool kept, which the screens show.
-    fn apply(&self, ledger: &mut Ledger, now: u64) -> (Moved, Ended, bool) {
-        // First, so a deadline and a letter sent in this batch read the
-        // machines' clocks as they are now.
-        ledger.observe_reach(&self.reach, now);
-        ledger.resume_woken(&self.woke, &self.woken, now);
-        ledger.renew_present(&self.present, now);
-        ledger.expire_awake(now, &self.asleep, &self.woken);
-        ledger.fail_undeliverable(&self.undeliverable, now);
+    /// Brings `ledger` to `now` as every batch does before its requests; a
+    /// successor's new record makes room as a registration does (`holds`).
+    fn apply(
+        &self,
+        ledger: &mut Ledger,
+        now: u64,
+        holds: &dyn crate::coordination::Holds,
+    ) -> Upkept {
+        ledger.cleanup(now);
         ledger.end_overdue_answer_waits(now);
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
+        let succeeded = crate::coordination::succeed(ledger, &self.successions, now, holds);
         let ended = crate::coordination::end_gone(ledger, &self.gone, now);
+        let mut closed = false;
+        for agent in &self.closed {
+            closed |= ledger.end_letters_to(&agent.id, &agent.actor, now);
+        }
         let tools = self
             .tools
             .as_deref()
@@ -1596,7 +1871,14 @@ impl Upkeep {
             .cores
             .as_deref()
             .is_some_and(|cores| crate::coordination::end_gone_cores(ledger, cores, now));
-        (moved, ended, tools | cores)
+        crate::coordination::shed_finished_briefs(ledger);
+        Upkept {
+            moved,
+            succeeded,
+            ended,
+            closed,
+            tools: tools | cores,
+        }
     }
 }
 
@@ -1611,10 +1893,10 @@ fn land(
     request: &Request,
     now: u64,
     holds: &dyn crate::coordination::Holds,
-) -> Result<(Value, bool), String> {
-    let landed = apply(ledger, request, now, holds)?;
-    crate::coordination::room::for_size(ledger, holds)?;
-    Ok(landed)
+) -> Result<(Value, bool, Option<crate::coordination::room::Made>), String> {
+    let (value, publish) = apply(ledger, request, now, holds)?;
+    let room = crate::coordination::room::for_size(ledger, holds)?;
+    Ok((value, publish, room))
 }
 
 /// The batch's copy made again from `state`: the same upkeep, then the
@@ -1623,6 +1905,7 @@ fn land(
 /// so each lands as it did the first time, and its result is the one this
 /// copy gave it; one that does not land is refused and logged, and the copy
 /// is made again without it.
+#[allow(clippy::too_many_arguments)] // each slice is one request's own record
 fn rebuild(
     state: &Ledger,
     upkeep: &Upkeep,
@@ -1630,23 +1913,27 @@ fn rebuild(
     batch: &[Request],
     accepted: &mut [bool],
     results: &mut [Result<Value, String>],
+    rooms: &mut [Option<crate::coordination::room::Made>],
     now: u64,
 ) -> (Ledger, bool) {
     'again: loop {
         let mut ledger = state.clone();
-        let (_, _, mut transitions) = upkeep.apply(&mut ledger, now);
+        let mut transitions = upkeep.apply(&mut ledger, now, holds).tools;
         for (index, request) in batch.iter().enumerate() {
             if !accepted[index] {
                 continue;
             }
             match land(&mut ledger, request, now, holds) {
-                Ok((value, publish)) => {
+                Ok((value, publish, room)) => {
                     transitions |= publish;
                     results[index] = Ok(value);
+                    rooms[index] = room;
                 }
                 Err(code) => {
                     accepted[index] = false;
                     results[index] = Err(code.clone());
+                    // A refused request made no room.
+                    rooms[index] = None;
                     crate::diagnostic!(json!({"component":"delivery",
                         "kind":"ledger.replay_refused","code":code}));
                     continue 'again;
@@ -1679,69 +1966,9 @@ fn answer_waits_ended<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delivery::store;
     use crate::runtime::delivery::tests::{authority, fixture, show_agents};
     use crate::sidebar::SessionSnapshotPayload;
-
-    #[test]
-    fn human_claims_only_undelivered_letters_once_across_restart() {
-        let parent = Actor {
-            pane_id: "parent".into(),
-            name: "parent".into(),
-            kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
-            session: Some("parent-session".into()),
-        };
-        let child = Actor {
-            pane_id: "child".into(),
-            name: "child".into(),
-            kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
-            session: Some("child-session".into()),
-        };
-        let mut ledger = Ledger::default();
-        let letter = mailbox::send(
-            &mut ledger,
-            &child,
-            &parent,
-            "report",
-            "done",
-            "report",
-            None,
-            1,
-        )
-        .unwrap();
-        let (reply, _) = mpsc::sync_channel(1);
-        let request = Request {
-            effect: Effect::HumanClaim,
-            reply,
-        };
-        let none = crate::coordination::Held::default();
-        assert_eq!(apply(&mut ledger, &request, 2, &none).unwrap().0, json!([]));
-        assert!(!ledger.expire(super::super::DELIVERY_EXPIRY_MS));
-        assert!(ledger.expire(1 + super::super::DELIVERY_EXPIRY_MS));
-        let notices = apply(
-            &mut ledger,
-            &request,
-            1 + super::super::DELIVERY_EXPIRY_MS,
-            &none,
-        )
-        .unwrap()
-        .0;
-        assert_eq!(notices[0]["id"], letter.id);
-        assert_eq!(ledger.letters.len(), 1);
-        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-        assert_eq!(
-            apply(
-                &mut restored,
-                &request,
-                2 + super::super::DELIVERY_EXPIRY_MS,
-                &none,
-            )
-            .unwrap()
-            .0,
-            json!([])
-        );
-    }
 
     struct ActivityPeer(std::sync::atomic::AtomicU64);
     impl crate::node_access::NodeLink for ActivityPeer {
@@ -2079,11 +2306,17 @@ mod tests {
                 stopped + crate::delivery::QUESTION_WINDOW_MS,
             )
             .unwrap();
-            let lines: Vec<&str> = ledger
-                .letters
+            // The warning is the parent's status cell, read from the watch.
+            let lines: Vec<String> = ledger
+                .watches
                 .iter()
-                .filter_map(|letter| letter.body.lines().next())
+                .filter(|watch| watch.warning_count > 0)
+                .filter_map(|watch| {
+                    let line = watch::warning_line(watch, watch.first_warning_at_unix_ms?);
+                    line.lines().next().map(str::to_owned)
+                })
                 .collect();
+            assert!(ledger.letters.is_empty(), "no warning is a letter");
             match first_line {
                 Some(first) => {
                     assert_eq!(
@@ -2143,8 +2376,8 @@ mod tests {
             now(),
         )
         .unwrap();
-        ledger::save(&path, &installed).unwrap();
-        let original = std::fs::read(&path).unwrap();
+        store::save(&path, &installed).unwrap();
+        let original = store::read_value(&path).unwrap();
         {
             let mut guard = runtime.lock().unwrap();
             guard.publish_delivery(Arc::new(installed), false);
@@ -2204,7 +2437,7 @@ mod tests {
                 .unwrap_err(),
             "ledger_unavailable"
         );
-        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(store::read_value(&path).unwrap(), original);
         drop(worker);
         let (recovered, _, _, _) = fixture(root.path());
         assert_eq!(
@@ -2266,7 +2499,7 @@ mod tests {
                     .letters
                     .is_empty()
             );
-            assert!(ledger::load(&path).unwrap().letters.is_empty());
+            assert!(store::load(&path).unwrap().letters.is_empty());
 
             let present: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[sender.clone(),
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"}
@@ -2282,7 +2515,7 @@ mod tests {
                     Effect::Command {
                         authority: authority(&actor),
                         actor: actor.clone(),
-                        target: Some(Box::new(target)),
+                        target: Some(Box::new(target.clone())),
                         command: Box::new(command.clone()),
                         language: crate::model::InterfaceLanguage::English,
                     },
@@ -2299,10 +2532,12 @@ mod tests {
             );
             let replay = client
                 .submit(
+                    // The core hands a retry the recipient of the letter
+                    // it repeats, which no longer runs.
                     Effect::Command {
                         authority: authority(&actor),
                         actor,
-                        target: None,
+                        target: Some(Box::new(target)),
                         command: Box::new(command),
                         language: crate::model::InterfaceLanguage::English,
                     },
@@ -2310,7 +2545,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(first["id"], replay["id"]);
-            let persisted = ledger::load(&path).unwrap();
+            let persisted = store::load(&path).unwrap();
             assert_eq!(persisted.letters.len(), 1);
             assert_eq!(persisted.letters[0].id, first["id"].as_str().unwrap());
             drop(worker);
@@ -2352,7 +2587,7 @@ mod tests {
             );
             if writable {
                 let id = result.unwrap()["id"].as_str().unwrap().to_owned();
-                let persisted = ledger::load(&path).unwrap();
+                let persisted = store::load(&path).unwrap();
                 assert_eq!(persisted.letters[0].id, id);
                 assert_eq!(
                     runtime
@@ -2432,7 +2667,7 @@ mod tests {
         };
         let old = report("old", day + 60_000);
         let recent = report("recent", day - 60_000);
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2455,7 +2690,7 @@ mod tests {
         };
         wait_for_ledger("the old finished letter to be dropped", || !kept(&old));
         assert!(kept(&recent));
-        let saved = ledger::load(&path).unwrap();
+        let saved = store::load(&path).unwrap();
         assert!(saved.letters.iter().all(|letter| letter.id != old));
         assert!(saved.letters.iter().any(|letter| letter.id == recent));
     }
@@ -2493,7 +2728,7 @@ mod tests {
         };
         let old = ask("old", 25 * hour);
         let recent = ask("recent", 23 * hour);
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2522,7 +2757,7 @@ mod tests {
             (false, Some(super::super::ledger::AnswerWaitEnd::Deadline))
         );
         assert!(waiting(&recent).0);
-        let persisted = ledger::load(&path).unwrap();
+        let persisted = store::load(&path).unwrap();
         let saved = persisted.letters.iter().find(|l| l.id == old).unwrap();
         assert_eq!(saved.answer_wait_ended, waiting(&old).1);
     }
@@ -2597,7 +2832,7 @@ mod tests {
         let watch = watch::start(&mut installed, &actor, &target.actor, now()).unwrap();
         // The count an earlier build kept raising every tick.
         installed.watches[0].activity_failures = 9622;
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2621,7 +2856,7 @@ mod tests {
         let reported = json!([[watch.id, watch::READ_FAILURES_REPORTED]]);
         assert_eq!(tick()["failures"], reported);
         assert_eq!(
-            ledger::load(&path).unwrap().watches[0].activity_failures,
+            store::load(&path).unwrap().watches[0].activity_failures,
             watch::READ_FAILURES_REPORTED
         );
         let written = hide_platform::fs::identity::file_id(&path).unwrap();
@@ -2656,17 +2891,61 @@ mod tests {
         }
     }
 
+    /// A Reopen's `EndClosed` ends every letter to its closed agents the
+    /// store took in before it, one in the same batch too, before anything
+    /// is saved or published; a letter it takes in after waits, and one the
+    /// core prepared while the agent read closed ends as it is kept
+    /// (review of with-hide/hide#2749, finding 9).
+    #[test]
+    fn a_reopens_end_closed_ends_what_the_store_took_in_before_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (_runtime, sender, target, _) = fixture(root.path());
+        let holds = crate::coordination::Held::default();
+        let mut ledger = Ledger::default();
+        let mut land = |request: &Request, now: u64| apply(&mut ledger, request, now, &holds);
+        let before = land(&send(&sender, &target, "before", "Rebase"), 1)
+            .unwrap()
+            .0;
+        let end = Request {
+            effect: Effect::EndClosed(vec![crate::agent_sleep::DormantRegistration {
+                id: "agent-closed".into(),
+                actor: target.actor.clone(),
+            }]),
+            reply: mpsc::sync_channel(1).0,
+        };
+        assert_eq!(land(&end, 2).unwrap(), (json!({"ended": true}), true));
+        let after = land(&send(&sender, &target, "after", "Rebase"), 3)
+            .unwrap()
+            .0;
+        let closed = Observation {
+            status: "closed".into(),
+            ..target.clone()
+        };
+        let late = land(&send(&sender, &closed, "late", "Rebase"), 4)
+            .unwrap()
+            .0;
+        assert_eq!(late["state"], "no_recipient");
+        let state = |answer: &Value| {
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == answer["id"])
+                .unwrap()
+                .state
+        };
+        assert_eq!(state(&before), super::ledger::State::NoRecipient);
+        assert_eq!(state(&after), super::ledger::State::Pending);
+        assert_eq!(state(&late), super::ledger::State::NoRecipient);
+        ledger.validate().unwrap();
+    }
+
     fn upkeep() -> Upkeep {
         Upkeep {
-            asleep: Default::default(),
-            woke: Default::default(),
-            woken: Default::default(),
-            undeliverable: Default::default(),
-            reach: ledger::Reach::new(),
             gone: Default::default(),
             rebinds: Default::default(),
+            successions: Default::default(),
+            closed: Default::default(),
             tools: None,
-            present: Default::default(),
             cores: None,
         }
     }
@@ -2687,22 +2966,36 @@ mod tests {
         };
         watch::start(&mut ledger, &tool, &target, 1).unwrap();
         assert!(
-            !upkeep().apply(&mut ledger, 2).2,
+            !upkeep()
+                .apply(&mut ledger, 2, &crate::coordination::Held::default())
+                .tools,
             "the list is not restored yet"
         );
         let held = Upkeep {
             tools: Some(vec!["00000000000000a1".into()]),
             ..upkeep()
         };
-        assert!(!held.apply(&mut ledger, 3).2);
+        assert!(
+            !held
+                .apply(&mut ledger, 3, &crate::coordination::Held::default())
+                .tools
+        );
         assert_eq!(ledger.watches.len(), 1);
         let gone = Upkeep {
             tools: Some(Vec::new()),
             ..upkeep()
         };
-        assert!(gone.apply(&mut ledger, 4).2);
+        assert!(
+            gone.apply(&mut ledger, 4, &crate::coordination::Held::default())
+                .tools
+        );
         assert!(ledger.watches.is_empty());
-        assert!(!gone.apply(&mut ledger, 5).2, "nothing left to end");
+        assert!(
+            !gone
+                .apply(&mut ledger, 5, &crate::coordination::Held::default())
+                .tools,
+            "nothing left to end"
+        );
     }
 
     #[test]
@@ -2748,14 +3041,15 @@ mod tests {
         assert_eq!(together.results[4], together.results[0]);
         assert_eq!(together.ledger, alone);
         assert_eq!(together.ledger.letters.len(), 2);
-        assert_eq!(together.bytes, Some(Ok(together.ledger.bytes().unwrap())));
+        assert_eq!(together.fits, Some(Ok(())));
     }
 
     #[test]
     fn a_request_the_file_cannot_hold_is_refused_alone_within_its_batch() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, target, _) = fixture(root.path());
-        near_limit(&runtime, &actor, &target, 0, 1_100);
+        // Every letter is open, so nothing can go to make room.
+        near_limit(&runtime, &actor, &target, 1_000, 0);
         let body_limit = super::super::BODY_LIMIT;
         let state = runtime.lock().unwrap().delivery_state().unwrap();
         let batch = [
@@ -2773,9 +3067,8 @@ mod tests {
         ];
         assert_eq!(answered(&settled, &[0, 2]), expected);
         assert_eq!(stored(&settled.ledger, &state), expected);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
-        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     #[test]
@@ -2848,8 +3141,8 @@ mod tests {
     }
 
     /// Publishes a ledger of `open` open letters, then `finished` finished
-    /// ones, the oldest first, whose bodies fill it, the oldest first, up to
-    /// 8,000 bytes below the file's limit.
+    /// ones, the oldest first, whose bodies fill it, the first letter first,
+    /// up to 8,000 bytes below the file's limit.
     fn near_limit(
         runtime: &Mutex<Runtime>,
         actor: &Actor,
@@ -2897,7 +3190,7 @@ mod tests {
         }
         // A body's `x` is one byte in the file too.
         let mut need = super::super::FILE_LIMIT - 8_000 - installed.bytes().unwrap().len();
-        for letter in &mut installed.letters[open..] {
+        for letter in &mut installed.letters {
             let add = need.min(super::super::BODY_LIMIT - letter.body.len());
             letter.body.push_str(&"x".repeat(add));
             need -= add;
@@ -2909,38 +3202,215 @@ mod tests {
             .publish_delivery(Arc::new(installed), false);
     }
 
+    /// Keeps the published ledger in the store, as a running core has it.
+    fn keep_published(runtime: &Mutex<Runtime>, path: &std::path::Path) -> Arc<Ledger> {
+        let published = runtime.lock().unwrap().delivery_state().unwrap();
+        store::save(path, &published).unwrap();
+        published
+    }
+
+    fn submit_send(
+        client: &Client,
+        actor: &Actor,
+        target: &Observation,
+        intent: &str,
+        body: &str,
+    ) -> Result<Value, String> {
+        client.submit(
+            send(actor, target, intent, body).effect,
+            Duration::from_secs(10),
+        )
+    }
+
+    /// B26: a full ledger takes a new letter by letting the finished letters
+    /// that finished first go, and the store keeps exactly what the core
+    /// then holds, without them.
     #[test]
-    fn a_request_over_the_limit_is_refused_though_a_later_one_makes_room() {
+    fn a_send_to_a_full_ledger_lands_and_the_store_lets_the_oldest_finished_letters_go() {
         let root = tempfile::tempdir().unwrap();
-        let (runtime, actor, target, _) = fixture(root.path());
-        // One short of the total, the oldest finished letter a full body:
-        // the second send would drop it and bring the batch back under the
-        // file's limit the first one broke.
-        near_limit(&runtime, &actor, &target, 0, super::super::LETTER_LIMIT - 1);
-        let state = runtime.lock().unwrap().delivery_state().unwrap();
-        let oldest = state.letters[0].id.clone();
-        assert_eq!(state.letters[0].body.len(), super::super::BODY_LIMIT);
-        let batch = [
-            send(
+        let (runtime, actor, target, path) = fixture(root.path());
+        near_limit(&runtime, &actor, &target, 10, 1_100);
+        let installed = keep_published(&runtime, &path);
+        let first_finished = installed.letters[10].id.clone();
+        let last_finished = installed.letters.last().unwrap().id.clone();
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let sent = submit_send(
+            &client,
+            &actor,
+            &target,
+            "too-big",
+            &"y".repeat(super::super::BODY_LIMIT),
+        )
+        .unwrap();
+        drop(worker);
+        let kept = store::load(&path).unwrap();
+        assert_eq!(kept, *runtime.lock().unwrap().delivery_state().unwrap());
+        let held = |id: &str| kept.letters.iter().any(|letter| letter.id == id);
+        assert!(held(sent["id"].as_str().unwrap()));
+        assert!(
+            installed.letters[..10]
+                .iter()
+                .all(|letter| held(&letter.id))
+        );
+        assert!(!held(&first_finished));
+        assert!(held(&last_finished));
+        assert!(kept.size().unwrap() <= super::super::FILE_LIMIT);
+    }
+
+    /// B26: only when live letters alone fill the ledger is a send refused,
+    /// as `capacity`, and the store keeps what it held.
+    #[test]
+    fn a_send_that_only_live_letters_leave_no_room_for_is_refused_and_the_store_is_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, path) = fixture(root.path());
+        near_limit(&runtime, &actor, &target, 1_000, 0);
+        let installed = keep_published(&runtime, &path);
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            submit_send(
+                &client,
                 &actor,
                 &target,
                 "too-big",
-                &"y".repeat(super::super::BODY_LIMIT),
+                &"y".repeat(super::super::BODY_LIMIT)
             ),
-            send(&actor, &target, "after", "short"),
-        ];
-        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
-        assert_eq!(settled.results[0], Err("capacity".into()));
-        let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
-        assert_eq!(answered(&settled, &[1]), expected);
-        assert_eq!(stored(&settled.ledger, &state), expected);
-        assert!(
-            settled
-                .ledger
-                .letters
-                .iter()
-                .any(|letter| letter.id == oldest)
+            Err("capacity".into())
         );
+        drop(worker);
+        assert_eq!(store::load(&path).unwrap(), *installed);
+        assert_eq!(
+            *runtime.lock().unwrap().delivery_state().unwrap(),
+            *installed
+        );
+    }
+
+    /// B29: a write that fails is logged with the ids of what it was to
+    /// keep, and the store's record of what its file holds stays as it was,
+    /// so the next write is the difference from the file.
+    #[test]
+    fn a_failed_write_is_logged_with_the_ids_it_was_to_keep_and_leaves_the_kept_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        let (_runtime, actor, target, path) = fixture(root.path());
+        let (mut file, held, _) = LedgerStore::open(&path).unwrap();
+        let held = Arc::new(held);
+        let mut kept = Arc::clone(&held);
+        let mut candidate = (*held).clone();
+        let letter = mailbox::send(
+            &mut candidate,
+            &actor,
+            &target.actor,
+            "lost",
+            "private",
+            "request",
+            None,
+            now(),
+        )
+        .unwrap();
+        let candidate = Arc::new(candidate);
+        let mut refuse = |_: &mut LedgerStore, _: &Changes<'_>| {
+            Err(ledger::SaveError::Refused(ledger::StoreFailure {
+                kind: "io",
+                extended: Some(10),
+            }))
+        };
+        let (written, records) =
+            crate::diagnostics::capture(|| keep(&mut file, &mut kept, &candidate, &mut refuse));
+        assert_eq!(written.unwrap_err().code(), "ledger_unavailable");
+        assert!(Arc::ptr_eq(&kept, &held));
+        let logged = records
+            .iter()
+            .find(|record| record["kind"] == "ledger.write_failed")
+            .unwrap();
+        assert_eq!(logged["records"]["letters"]["ids"], json!([letter.id]));
+        assert_eq!(logged["persistence"]["sqlite"], "io");
+        assert!(!logged.to_string().contains("private"));
+        // The next write keeps the letter through the real file.
+        keep(&mut file, &mut kept, &candidate, &mut |file, changes| {
+            file.apply(changes)
+        })
+        .unwrap();
+        drop(file);
+        assert_eq!(store::load(&path).unwrap(), *candidate);
+    }
+
+    /// B29: a send whose write fails is answered as a failure and is never
+    /// published; a commit that may or may not have kept it stops the core
+    /// answering from memory until a start reads the file again.
+    #[test]
+    fn a_send_whose_write_fails_is_answered_as_a_failure_and_never_published() {
+        for uncertain in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, actor, target, path) = fixture(root.path());
+            let failure = ledger::StoreFailure {
+                kind: "io",
+                extended: Some(10),
+            };
+            let (worker, answer) = Worker::store_queued(
+                Arc::downgrade(&runtime),
+                path.clone(),
+                send(&actor, &target, "unsaved", "private").effect,
+                move |_, _| {
+                    Err(if uncertain {
+                        ledger::SaveError::Uncertain(failure)
+                    } else {
+                        ledger::SaveError::Refused(failure)
+                    })
+                },
+            );
+            let result = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(result.unwrap_err(), "ledger_unavailable");
+            drop(worker);
+            let published = runtime.lock().unwrap().delivery_state();
+            if uncertain {
+                assert!(published.is_err());
+            } else {
+                assert!(published.unwrap().letters.is_empty());
+            }
+            assert!(store::load(&path).unwrap().letters.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_letter_past_the_files_limit_drops_the_finished_letters_that_finished_first() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // Ten letters still open, then finished ones: together at the limit.
+        near_limit(&runtime, &actor, &target, 10, 1_100);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let open: Vec<String> = state.letters[..10]
+            .iter()
+            .map(|letter| letter.id.clone())
+            .collect();
+        let first_finished = state.letters[10].id.clone();
+        let last_finished = state.letters.last().unwrap().id.clone();
+        let batch = [send(
+            &actor,
+            &target,
+            "too-big",
+            &"y".repeat(super::super::BODY_LIMIT),
+        )];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        let expected = vec![("too-big".to_owned(), format!("letter-{}", state.next_id))];
+        assert_eq!(answered(&settled, &[0]), expected);
+        let kept = |id: &str| settled.ledger.letters.iter().any(|letter| letter.id == id);
+        assert!(open.iter().all(|id| kept(id)));
+        assert!(!kept(&first_finished));
+        assert!(kept(&last_finished));
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
+        assert_eq!(settled.rooms.len(), 1);
+        assert!(settled.rooms[0].letters > 0);
+        assert_eq!(settled.rooms[0].spawns, 0);
     }
 
     #[test]
@@ -2948,14 +3418,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, target, _) = fixture(root.path());
         // One open place left: the too-big letter takes it in the batch's
-        // first pass, and the file's limit then refuses it.
-        near_limit(
-            &runtime,
-            &actor,
-            &target,
-            super::super::OPEN_LIMIT - 1,
-            1_100,
-        );
+        // first pass, and the file's limit, with no finished letter to
+        // drop, then refuses it.
+        near_limit(&runtime, &actor, &target, super::super::OPEN_LIMIT - 1, 0);
         let state = runtime.lock().unwrap().delivery_state().unwrap();
         let batch = [
             send(
@@ -2971,8 +3436,8 @@ mod tests {
         let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
         assert_eq!(answered(&settled, &[1]), expected);
         assert_eq!(stored(&settled.ledger, &state), expected);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     /// The fixture's sender, registered as `agent-1` under its native
@@ -3020,6 +3485,7 @@ mod tests {
             ended,
             terminal_id: None,
             forked: false,
+            successor: None,
         };
         let mut ledger = Ledger {
             agents: vec![
@@ -3062,9 +3528,8 @@ mod tests {
         assert!(agents.is_empty());
         let spawns: Vec<&str> = spawns.iter().map(|spawn| spawn.id.as_str()).collect();
         assert_eq!(spawns, ["spawn-3000", "spawn-3001"]);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
-        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     #[test]
@@ -3077,7 +3542,53 @@ mod tests {
         let settled = settle(&runtime, &state, &upkeep(), &[reserve(&lead)], now());
         assert_eq!(settled.results[0], Err("capacity".into()));
         assert_eq!(settled.ledger, *state);
-        assert!(settled.bytes.is_none());
+        assert!(settled.fits.is_none());
+    }
+
+    #[test]
+    fn a_batch_lets_a_finished_spawns_brief_go_and_keeps_a_running_ones() {
+        use crate::coordination::room::tests::{agent, spawn};
+        use crate::coordination::{AgentRecord, SpawnRecord};
+        use sha2::Digest;
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let brief = "Fix the flaky test, then report.";
+        let child = |n, ended| AgentRecord {
+            parent: Some("agent-1".into()),
+            ..agent(n, ended)
+        };
+        // The lead's spawn-3000 made agent-2, which ended; spawn-3001 made
+        // agent-3, which runs.
+        let mut installed = Ledger {
+            agents: vec![agent(1, false), child(2, true), child(3, false)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        for (n, made) in [(3000, 2), (3001, 3)] {
+            installed.spawns.push(SpawnRecord {
+                brief: Some(brief.into()),
+                launch_words: vec!["--prompt".into(), brief.into()],
+                ..spawn(n, 1, Some(made))
+            });
+        }
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let settled = settle(&runtime, &state, &upkeep(), &[], now());
+        settled.fits.unwrap().unwrap();
+        let saved = settled.ledger;
+        let (ended, running) = (&saved.spawns[0], &saved.spawns[1]);
+        assert_eq!(ended.brief, None);
+        assert!(ended.launch_words.is_empty());
+        assert_eq!(
+            ended.brief_sha256.as_deref(),
+            Some(format!("{:x}", sha2::Sha256::digest(brief.as_bytes())).as_str())
+        );
+        assert_eq!(running.brief.as_deref(), Some(brief));
+        assert_eq!(running.launch_words, ["--prompt", brief]);
+        assert_eq!(running.brief_sha256, None);
     }
 
     /// The intent and letter id each request at `indexes` was answered.

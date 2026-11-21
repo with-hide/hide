@@ -16,8 +16,9 @@ import type { KeyboardOwner } from "./viewFocus";
 import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
-import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
+import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
+import type { AutomationExample } from "./automationDraft";
 
 export type { ViewFocusRequest } from "./viewLayout";
 
@@ -82,7 +83,7 @@ export type PendingViewsClose = {
  * device-connect-iroh B10): the window's own page, since that pane is no
  * tab of this core's. It is read, typed into, sized and closed here.
  */
-export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "guest"; paneId: string };
+export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "automations" } | { kind: "guest"; paneId: string };
 
 /**
  * The mission screen's page state (PRD mission-screen D-10): the device it
@@ -104,6 +105,31 @@ export type MissionPlace = {
 };
 
 export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, closedAll: false, scroll: 0 };
+
+/**
+ * Where the automation screen stands (PRD automations D-02): the table, an
+ * automation's detail with the run its terminal shows, or the form. Page
+ * navigation, never saved; the core hears only the run whose terminal shows
+ * (`automation_run_viewing`, B15) and that a detail was opened (`automation_seen`, B11).
+ */
+export type AutomationPlace = {
+  /** The automation the detail shows; null shows the table. */
+  selected: string | null;
+  /** The run whose terminal the detail shows (B16, B17); null shows the run list alone. */
+  run: number | null;
+  /** The form, new or editing the selected automation (B4, B26); null shows the table or the detail. */
+  form: "new" | "edit" | null;
+  /**
+   * The selected automation and run are what the core just answered a make
+   * with (B8): they wait for the section that holds them instead of reading
+   * as removed, since the answer and the snapshot reach the window in no fixed order.
+   */
+  arriving: boolean;
+  /** The starting point a new automation's form opens on, picked on the empty screen (B2, B4); null opens it blank. */
+  example: AutomationExample | null;
+};
+
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -310,6 +336,10 @@ type UiStore = {
   viewFocusRequest: ViewFocusRequest | null;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
+  /** The keyboard's input count (`keyboardInputRevision`) when the operator last asked focus mode for a pane: the pane it draws takes the keys on arriving only while the operator has not moved them since, such as onto a desk tab pressed before the core answered (D-26, B26). */
+  pairEntryInput: number | null;
+  /** `laneExpanded` as it was when focus mode came on, given back when it ends, null outside the mode (PRD lane-desk-pair-view D-51, D-59). Kept here, not on the Workspace screen, so leaving that screen in focus mode forgets nothing. */
+  laneExpandedBeforePair: boolean | null;
   /**
    * The Hide AI tool's tab and the 제안 row shown in full, by its id (`s12`,
    * `m72`); a Needs You row opens the tool on its row (PRD hide-ai-suggestions
@@ -329,10 +359,15 @@ type UiStore = {
   /** Where the mission screen stands (PRD mission-screen D-10). */
   missions: MissionPlace;
   setMissions: (patch: Partial<MissionPlace>) => void;
-  /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
+  /** Where the automation screen stands (PRD automations D-02). */
+  automations: AutomationPlace;
+  setAutomations: (patch: Partial<AutomationPlace>) => void;
+  /** The column in front while a narrow lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
+  /** The page each Workspace drew last in front of its desk (`laneCalls.ts`). Never sent. */
+  drawnPages: DrawnPages;
   /**
    * The Workspace (`workspaceKey`) whose lane call put a page in front, until
    * the Workspace screen, which measures the body, widens its lane for it
@@ -364,6 +399,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
+  storeAskRequested: string | null;
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
@@ -446,6 +483,8 @@ type UiStore = {
   /** The overlay ⌘K replaced when it opened, so Settings in front reads as a screen with nothing to relate to (PRD cmdk-navigation B7). */
   searchOver: Overlay;
   closeOverlay: (overlay?: Overlay) => void;
+  openStoreAsk: (id: string) => void;
+  clearStoreAsk: () => void;
   openSettings: (tab: SettingsTab) => void;
   openProjectSettings: (target: ProjectSettingsTarget, returnFocus?: HTMLElement | null, focus?: "name") => void;
   /** Opens Settings on Devices with the Add device dialog in front. */
@@ -525,11 +564,15 @@ export const useUiStore = create<UiStore>((set, get) => ({
   agentFindRequest: null,
   viewFocusRequest: null,
   laneExpanded: false,
+  laneExpandedBeforePair: null,
+  pairEntryInput: null,
   hideAiTab: "suggestions",
   openSuggestion: null,
   missions: MISSION_ENTRY,
+  automations: AUTOMATION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
+  drawnPages: NO_DRAWN_PAGES,
   pageWiden: null,
   browserDevices: {},
   drawnLane: { mode: "closed", view: "none", tool: null, stacked: false },
@@ -543,6 +586,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  storeAskRequested: null,
   switchedDevices: [],
   moveGiveUpRequested: false,
   pendingClose: null,
@@ -605,6 +649,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ browserDevices: next });
   },
   setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
+  // Any move but the one that names an answered automation ends its wait, and any but the one that picks an example drops it.
+  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, example: null, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
@@ -631,6 +677,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  openStoreAsk: (id) => set({ overlay: "settings", settingsTab: "skills", storeAskRequested: id }),
+  clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),

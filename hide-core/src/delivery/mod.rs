@@ -8,6 +8,7 @@ mod human;
 pub(crate) mod ladder;
 pub mod ledger;
 pub mod mailbox;
+pub mod store;
 pub mod typed;
 pub mod watch;
 pub mod worker;
@@ -16,9 +17,6 @@ pub mod answer;
 
 pub use mailbox::Command;
 
-/// How long a letter waits to be taken before it ends; the hooks keep a
-/// confirmation they owe no longer (`hide_agent_hooks::owed`).
-pub const DELIVERY_EXPIRY_MS: u64 = hide_agent_hooks::delivery::DELIVERY_EXPIRY_MS;
 /// How long a `request` or `block` letter waits for its answer, from the time
 /// it was sent, before the wait ends as `deadline`.
 pub const ANSWER_WAIT_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -40,6 +38,14 @@ pub const OPEN_LIMIT: usize = 1_024;
 pub const LETTER_LIMIT: usize = 5_000;
 pub const WATCH_LIMIT: usize = 32;
 pub const BODY_LIMIT: usize = 16 * 1_024;
+/// How the list of Views a report's sender opened begins, which the core
+/// appends to the report's body as it is sent (`Runtime::list_opened_views`):
+/// a retry of the report is the body its sender wrote, without the list.
+pub(crate) const OPENED_VIEWS_HEAD: &str = "\n\nViews this agent opened (read one with `hide view status <view-id>` or `hide browser snapshot <view-id>`; open it again from your own pane to show it to the operator):";
+/// The most bytes the ledger encodes to (`Ledger::size`): the limit its
+/// records are kept within by dropping the finished ones oldest first
+/// (`coordination::room::for_size`), which bounds the store's rows
+/// (`delivery::store`), and the size `delivery-ledger.json` was read up to.
 pub const FILE_LIMIT: usize = 16 * 1_024 * 1_024;
 pub const HOOK_LIMIT: usize = 8 * 1_024;
 /// The most letters one handover bundle confirms, shown and folded together
@@ -153,17 +159,20 @@ impl Actor {
     /// `machine` that machine's name and `name` the agent's name there, so a
     /// letter's recipient reads which machine wrote it. Its pane slot is the
     /// address, which names one agent of one machine whatever either is
-    /// called later, and its session is of that slot, so the same agent is
-    /// the same identity however it was named when it was written to.
+    /// called later, and its session is of that slot on the connection
+    /// `key` ([`Self::core_caller`]), so the same agent is the same identity
+    /// however it was named when it was written to, and an agent of another
+    /// connection that says the same device id is another identity.
     pub fn core(
         address: crate::address::CoreAddress<'_>,
+        key: &str,
         machine: &str,
         name: &str,
         node: &str,
     ) -> Self {
         let pane_id = format!("{HIDE_PREFIX}{address}");
         Self {
-            session: crate::engine::tokens::session_digest(&pane_id),
+            session: crate::engine::tokens::session_digest(&Self::core_caller(key, &pane_id)),
             name: Self::core_name(machine, name),
             pane_id,
             kind: HIDE_KIND.into(),
@@ -171,7 +180,22 @@ impl Actor {
         }
     }
 
-    /// The agent on another machine's core this identity stands for.
+    /// The caller an agent of another core acts as here, which its session
+    /// is the digest of: the connection id its machine proved, then its
+    /// slot. A device id is only what a machine says of itself, and two
+    /// connections may say the same one; the connection id is what keeps
+    /// their agents, and what is stored for them, apart.
+    pub fn core_caller(key: &str, pane_id: &str) -> String {
+        format!("{key}:{pane_id}")
+    }
+
+    /// Whether this is an agent of the core on connection `key`.
+    pub fn core_of(&self, key: &str) -> bool {
+        self.core_address().is_some()
+            && self.session
+                == crate::engine::tokens::session_digest(&Self::core_caller(key, &self.pane_id))
+    }
+
     /// The name another machine's agent goes by here: its machine's name,
     /// then its own, cut to what a ledger key holds, since the other core
     /// chose it.
@@ -191,36 +215,6 @@ impl Actor {
             return None;
         }
         crate::address::CoreAddress::parse(self.pane_id.strip_prefix(HIDE_PREFIX)?)?.ok()
-    }
-
-    /// The machine a letter to this identity is handed over on: the other
-    /// core's for an agent of another core, which this core reaches only
-    /// while the two are connected, and the identity's own otherwise.
-    pub fn machine(&self) -> &str {
-        self.core_address()
-            .map_or(self.device_id.as_str(), |address| address.device)
-    }
-
-    /// What a letter to this identity waits on to be handed over, as the
-    /// ledger's clocks name it (`Ledger::node_clocks`): its machine, and
-    /// for an agent of another core `core:<device>`, the connection between
-    /// the two cores, which stands or falls apart from this core's own node
-    /// on that machine.
-    pub fn reach(&self) -> &str {
-        match self.core_address() {
-            // The pane slot is `hide:` then the address, which begins with
-            // `core:<device>`.
-            Some(address) => {
-                let from = HIDE_PREFIX.len();
-                &self.pane_id[from..from + crate::address::CORE_PREFIX.len() + address.device.len()]
-            }
-            None => &self.device_id,
-        }
-    }
-
-    /// The name [`Self::reach`] gives an agent of the core on `device`.
-    pub fn core_reach(device: &str) -> String {
-        format!("{}{device}", crate::address::CORE_PREFIX)
     }
 
     /// The operator's own code-owned identity on `node`, the core's own:

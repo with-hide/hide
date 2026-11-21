@@ -7,6 +7,29 @@ use std::sync::OnceLock;
 
 static SINK: OnceLock<fn(serde_json::Value)> = OnceLock::new();
 
+/// Raises this process's open-file limit as far as the system lets it
+/// (`hide_platform::process::raise_open_file_limit`) and answers the record
+/// of what it got, for the caller to send to the log its role writes; `None`
+/// on Windows, which has no such limit. A core or a node holds a connection,
+/// a watch and files for each pane, and at the 256 a macOS app starts with
+/// the core ran out on 2026-11-20.
+pub fn raise_open_files() -> Option<serde_json::Value> {
+    Some(match hide_platform::process::raise_open_file_limit() {
+        Ok(Some(limit)) => serde_json::json!({
+            "component": "daemon",
+            "kind": "open_files.limit",
+            "before": limit.before,
+            "after": limit.after,
+        }),
+        Ok(None) => return None,
+        Err(error) => serde_json::json!({
+            "component": "daemon",
+            "kind": "open_files.raise_failed",
+            "message": error.to_string(),
+        }),
+    })
+}
+
 /// Emits one JSON record.
 #[macro_export]
 macro_rules! diagnostic {

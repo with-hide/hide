@@ -51,6 +51,38 @@ const TAB_SLOT = {
   others: "flex shrink-0 w-(--tab-other-width) has-data-renaming:w-(--size-tab-preferred)",
 };
 
+/**
+ * The width the selected tab's whole name takes, for a tab that marks its
+ * title (`data-tab-title`): its drawn chrome plus the width of the title's
+ * text (`titleTextWidth`), not the title's box, which a wide tab stretches,
+ * so a tab once wide asks only for its name again. A title its
+ * fit hides asks nothing: that fit leaves the selected tab less than a
+ * title's room, which no need changes.
+ */
+function selectedTabNeed(list: HTMLElement): number | undefined {
+  const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
+  if (!tab || !title || title.offsetParent === null) return undefined;
+  // Fractional boxes throughout, so rounding never leaves the title a pixel short of its text.
+  return Math.ceil(tab.getBoundingClientRect().width - title.getBoundingClientRect().width + titleTextWidth(title));
+}
+
+/**
+ * A title's whole text width, from a hidden copy laid out at its natural
+ * width: neither the title's box (which a wide tab stretches) nor its
+ * scroll width (whole pixels, equal to the box while the text overflows it
+ * by less than one, already cut) says it exactly.
+ */
+function titleTextWidth(title: HTMLElement): number {
+  const copy = title.cloneNode(true) as HTMLElement;
+  copy.removeAttribute("data-tab-title");
+  copy.style.cssText = "position:absolute;visibility:hidden;width:max-content;max-width:none;flex:none;overflow:visible";
+  title.parentElement!.appendChild(copy);
+  const width = copy.getBoundingClientRect().width;
+  copy.remove();
+  return width;
+}
+
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };
 export type AreaAdapter<I extends AreaItem> = {
   words: AreaWords;
@@ -59,6 +91,8 @@ export type AreaAdapter<I extends AreaItem> = {
   barAttributes?: Record<string, string>;
   barStart?: (area: Area<I>) => React.ReactNode;
   barEnd?: (area: Area<I>) => React.ReactNode;
+  /** Which tabs the strip draws; the shown one always is. An item left out stays in the area, reached through `barEnd` (PRD lane-desk-pair-view D-41). */
+  inStrip?: (item: I) => boolean;
   /** The column's own ✕, drawn once at its top-right corner as a tool's head draws it: it closes the whole column. */
   close?: { label: string; onClose: () => void; attributes?: Record<string, string>; beside?: React.ReactNode };
   shown?: (area: Area<I>) => I | null;
@@ -473,6 +507,8 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   const { t } = useInterfaceTranslation();
   const shown = area.displays.find((row) => row.id === area.active) ?? null;
   const selectedId = tree.adapter.shown ? tree.adapter.shown(area)?.id : area.active;
+  const inStrip = tree.adapter.inStrip;
+  const stripped = inStrip ? area.displays.filter((display) => display.id === selectedId || inStrip(display)) : area.displays;
   // Both columns share the room left of the bar's own controls in stages,
   // the selected tab keeping its title longest (`tabStripFit`). The room is
   // the zone's, which the bar sizes, so the tabs' own widths never feed back.
@@ -481,15 +517,17 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   const newTabMenu = useRef<HTMLSpanElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const [fits, setFits] = useState<{ selected: TabFit; others: TabFit }>({ selected: "titled", others: "titled" });
-  const tabCount = area.displays.length;
-  const hasSelected = area.displays.some((display) => display.id === selectedId);
+  const tabCount = stripped.length;
+  const hasSelected = stripped.some((display) => display.id === selectedId);
+  const selected = stripped.find((display) => display.id === selectedId);
+  const selectedLabel = selected ? tree.adapter.label(selected) : "";
   useLayoutEffect(() => {
     const node = zone.current;
     const list = strip.current;
     if (!node || !list) return;
     const sizes = readTabStripSizes();
     // Fractional bounds, rounded down: the tabs fill the bar to its end and never overflow it by a sliver.
-    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes);
+    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes, selectedTabNeed(list));
     // The widths go straight onto the tab list; only a change of fit renders
     // the bar again, so a resize costs a style write, not a render per pixel.
     // Both land before paint, so the frame never shows tabs overflowing.
@@ -501,8 +539,31 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     apply(measure(), (update) => update());
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
-    return () => observer.disconnect();
-  }, [tabCount, hasSelected]);
+    // The selected name's width can change after this measure with no label or selection changing: a mark or control
+    // drawn beside it a frame later changes its room, its own style changes its text (a preview's italic name kept
+    // open), and a font that finishes loading changes the text with no box resized. Each measures again on the next
+    // frame, which settles once the title holds its name.
+    let frame = 0;
+    const again = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => apply(measure(), flushSync));
+    };
+    const title = new ResizeObserver(again);
+    const restyled = new MutationObserver(again);
+    const selectedTitle = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"] [data-tab-title]');
+    if (selectedTitle) {
+      title.observe(selectedTitle);
+      restyled.observe(selectedTitle, { attributes: true, attributeFilter: ["class", "style"], childList: true, characterData: true, subtree: true });
+    }
+    document.fonts?.addEventListener("loadingdone", again);
+    return () => {
+      observer.disconnect();
+      title.disconnect();
+      restyled.disconnect();
+      cancelAnimationFrame(frame);
+      document.fonts?.removeEventListener("loadingdone", again);
+    };
+  }, [tabCount, hasSelected, selectedId, selectedLabel, fits.selected]);
   // The shown view's tab stays in sight however many tabs the area holds
   // (B20, B21): the strip scrolls itself, and nothing around it, whenever
   // the shown view changes, the tabs change density or the strip is resized.
@@ -519,13 +580,13 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     const observer = new ResizeObserver(reveal);
     observer.observe(list);
     return () => observer.disconnect();
-  }, [area.active, area.displays.length, fits]);
+  }, [area.active, stripped.length, fits]);
   return (
     <div className={`flex h-[var(--size-tab-strip)] shrink-0 items-stretch border-b border-border ${active ? "bg-background" : "bg-card"}`} data-area-tab-bar={area.id} {...data("tab-bar", area.id)} {...tree.adapter.barAttributes}>
       {tree.adapter.barStart?.(area)}
       <div ref={zone} className="flex min-w-0 flex-1 items-stretch">
         <div ref={strip} role="tablist" aria-label={t("panes.area.tabListOf", { label: tree.adapter.tabListLabel, index: index + 1, total: count })} className="flex min-w-0 items-stretch overflow-x-auto">
-          {area.displays.map((display) => (
+          {stripped.map((display) => (
             <EntryContextMenu
               key={display.id}
               returnToInput={column === "view"}

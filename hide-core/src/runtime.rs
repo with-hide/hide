@@ -13,6 +13,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 mod agent_profiles;
+pub(crate) mod automations;
 pub(crate) use agent_definitions::settle_and_hand_off;
 mod add_project;
 mod agent_groups;
@@ -31,6 +32,8 @@ mod checkout_git;
 mod checks_wait;
 mod clone;
 mod closed_registrations;
+pub(crate) use closed_registrations::settle_reopen;
+pub(crate) use core_calls::SENDER_NOT_REGISTERED;
 mod control_lane;
 mod core_calls;
 pub(crate) mod core_move;
@@ -54,14 +57,15 @@ mod github_poll;
 mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
+mod heal_letters;
 mod herdr_import;
-mod hide_notes;
 mod home_retire;
 mod hosts;
 mod human_turn;
 mod inbound;
 mod issues;
 mod kit;
+mod kit_store;
 mod ledger_walk;
 pub(crate) mod links;
 mod look;
@@ -89,6 +93,7 @@ mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
 mod own_devices;
+mod pair_view;
 mod pane_command;
 pub(crate) mod pane_move;
 mod pane_move_preview;
@@ -114,9 +119,10 @@ mod session_command;
 mod session_state;
 mod session_thread;
 mod snapshot_delta;
-mod spent_bells;
 mod ssh_hosts;
 pub(crate) mod start_hook;
+mod status_cells;
+mod store_cli;
 mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
@@ -125,11 +131,16 @@ pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
-mod transition_letters;
 mod tree_close;
 mod tree_reopen;
 pub(crate) mod turn_answer;
 pub(crate) mod typed_input;
+#[cfg(test)]
+pub(crate) use status_cells::Cell as StatusCell;
+pub(crate) use status_cells::{
+    child_subject as status_subject_child, letter_subject as status_subject_letter,
+    recipient_key as status_recipient, render as status_text, with_status,
+};
 mod unreadable_letters;
 mod unseen_views;
 pub(crate) mod usage_ledger;
@@ -148,7 +159,9 @@ pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use hosts::device_links;
 pub(crate) use inbound::InboundLink;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead};
+pub(crate) use kit_store::{StoreAnswered, StoreJob};
 pub use snapshot_delta::serialize_snapshot_delta;
+pub use store_cli::StoreAskSnapshot;
 
 use agent_areas::AgentLayoutPayload;
 use agent_groups::AgentGroupPayload;
@@ -1173,6 +1186,27 @@ pub(crate) struct DeviceGithubRead {
     links: Vec<crate::issues::IssueReference>,
 }
 
+/// Whether `actor` is one of Hide's own roles that writes notices rather
+/// than hands work: what it writes is its recipient's status now, never a
+/// letter (PRD letters-missions-simplify D-03, D-16), so a letter of one an
+/// earlier build kept waiting ends `expired` (`Ledger::address_letters`).
+/// Desk, Memory and automations hand work, and their letters stay letters.
+pub(crate) fn hide_notice(actor: &crate::delivery::Actor) -> bool {
+    actor.hide_itself()
+        && [
+            unreadable_letters::DELIVERY_ROLE,
+            agent_sleep::letters::WAKE_ROLE,
+            blocked_children::BLOCKED_ROLE,
+            // The role an earlier build told agents of an engine switch
+            // under, which the heal's line replaced (`heal_letters`).
+            "transition",
+            crate::delivery::typed::INPUT_ROLE,
+            missions::CONDUCTOR_ROLE,
+        ]
+        .into_iter()
+        .any(|role| actor.pane_id.strip_prefix(crate::delivery::HIDE_PREFIX) == Some(role))
+}
+
 pub struct Runtime {
     snapshot: Snapshot,
     delivery_ledger: Result<Arc<crate::delivery::ledger::Ledger>, String>,
@@ -1193,6 +1227,9 @@ pub struct Runtime {
     /// ledger last read says, which every row pass lays on its row
     /// (`human_turn.rs`). A ledger that could not be read leaves it as it was.
     human_turns_laid: HashMap<String, crate::model::DeclaredHumanTurn>,
+    /// The person's turns the ledger holds, by pane; `human_turns_laid` adds
+    /// the store's confirms to them (`store_cli`).
+    human_turns_declared: HashMap<String, crate::model::DeclaredHumanTurn>,
     /// Counts `observe_delivery` passes; fences each observation's laid turn.
     delivery_observe_generation: u64,
     /// View openers waiting for their document, Sends under way, and the
@@ -1227,6 +1264,10 @@ pub struct Runtime {
     /// store to point at the woken pane; an entry leaves once the published
     /// ledger shows the registration moved.
     registration_rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+    /// The registrations whose pane runs another agent's conversation now,
+    /// with that agent's registration, which the delivery store hands them
+    /// over to (`Runtime::observe_successions`, `coordination::succeed`).
+    registration_successions: std::collections::BTreeMap<String, crate::coordination::Succession>,
     /// Archive deletes whose record lines the link worker is removing.
     archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
     /// What the session archive last handed the link worker.
@@ -1272,10 +1313,6 @@ pub struct Runtime {
     /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
-    /// The pending letters whose recipient the doorbell's last pass saw in
-    /// its pane (`Hold::recipient_present`), whose deadline the delivery
-    /// upkeep renews. Memory only, as the holds are.
-    delivery_present: std::collections::HashSet<String>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
     letters_waiting: BTreeMap<String, u32>,
@@ -1499,6 +1536,7 @@ pub struct Runtime {
     desk: desk::Desk,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
+    automations: automations::AutomationsRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -1506,6 +1544,11 @@ pub struct Runtime {
     /// The kit call each device's helper runs next, merged across requests,
     /// keyed by device id.
     device_kit_pending: BTreeMap<String, KitJob>,
+    /// Each machine's store work, schedule and new-session marks
+    /// (`runtime/kit_store.rs`).
+    stores: kit_store::Stores,
+    /// The `hide skill` / `hide mcp` commands waiting (`store_cli`).
+    store_runs: store_cli::StoreRuns,
     /// The passes spawns asked of each machine's kit before starting an
     /// agent there, by device id (`runtime/start_hook.rs`); one entry per
     /// machine, dropped with the device's kit work.
@@ -1598,6 +1641,9 @@ pub struct Runtime {
     /// Registrations of reopened agents waiting for their new pane to take
     /// them over (`closed_registrations.rs`).
     reopen_continuations: Vec<closed_registrations::Continuation>,
+    /// The closed registrations whose letters a Reopen bringing them back
+    /// already ended in the delivery store (`closed_registrations::settle_reopen`).
+    reopen_settled: std::collections::BTreeSet<String>,
     /// User-initiated local closes, newest last. Memory only by contract.
     recent_closed: VecDeque<ClosedItem>,
     /// User closes in request order. A close is promoted onto
@@ -1958,19 +2004,21 @@ pub struct Runtime {
     /// whose agent has not appeared by the start's deadline failed.
     agent_wake_started: HashMap<String, u64>,
     /// The wakes letters to sleeping agents ask for, and the letters a
-    /// failed one leaves undelivered (PRD mission-worker-sleep).
+    /// failed one leaves waiting (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
-    spent_bells: spent_bells::SpentBells,
     /// Letters to and from other machines' cores (`core_calls`).
     core_letters: core_calls::CoreLetters,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
-    /// The letters owed to agents whose turn a move or a machine restart cut
-    /// off (`transition_letters.rs`); session-only.
-    transition_letters: transition_letters::TransitionLetters,
+    /// The lines owed to agents a heal resumed after their work was cut
+    /// (`heal_letters.rs`); session-only.
+    heal_letters: heal_letters::HealLetters,
     /// Each delegated child's block, and the note its parent is owed
     /// (`blocked_children.rs`); session-only.
     blocked_children: blocked_children::BlockedChildren,
+    /// Hide's own notices as one cell per subject, and what each agent saw
+    /// of them (`status_cells.rs`).
+    status_cells: status_cells::StatusCells,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2177,7 +2225,7 @@ impl Runtime {
     ) -> Self {
         let state_path = PathBuf::from(&options.app_state_path);
         let delivery_path =
-            hide_kit::layout::delivery_ledger(state_path.parent().unwrap_or(Path::new(".")));
+            hide_kit::layout::delivery_store(state_path.parent().unwrap_or(Path::new(".")));
         let delivery_ledger = crate::delivery::ledger::recover(&delivery_path)
             .map(Arc::new)
             .map_err(|error| {
@@ -2452,6 +2500,7 @@ impl Runtime {
             delivery_observations: HashMap::new(),
             human_turns_settling: Arc::default(),
             human_turns_laid: HashMap::new(),
+            human_turns_declared: HashMap::new(),
             delivery_observe_generation: 0,
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),
@@ -2467,6 +2516,7 @@ impl Runtime {
             delivery_panes: HashMap::new(),
             registrations_gone: std::collections::BTreeMap::new(),
             registration_rebinds: std::collections::BTreeMap::new(),
+            registration_successions: std::collections::BTreeMap::new(),
             archive_deletes_sent: HashSet::new(),
             archive_retention_sent: Arc::default(),
             recorded_pulls: Default::default(),
@@ -2557,9 +2607,12 @@ impl Runtime {
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             access: access::AccessRuntime::default(),
+            automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
+            stores: kit_store::Stores::default(),
+            store_runs: store_cli::StoreRuns::default(),
             start_passes: BTreeMap::new(),
             device_first_run_choice: BTreeMap::new(),
             device_kit_running: BTreeSet::new(),
@@ -2593,6 +2646,7 @@ impl Runtime {
             tree_reopen_captures: Vec::new(),
             tree_reopen: None,
             reopen_continuations: Vec::new(),
+            reopen_settled: std::collections::BTreeSet::new(),
             recent_closed: VecDeque::new(),
             close_capture_order: VecDeque::new(),
             close_operations: HashMap::new(),
@@ -2653,7 +2707,6 @@ impl Runtime {
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
-            delivery_present: std::collections::HashSet::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,
             #[cfg(test)]
@@ -2742,11 +2795,11 @@ impl Runtime {
             memory_pressure: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
-            spent_bells: Default::default(),
             core_letters: Default::default(),
             unreadable_letters: Default::default(),
-            transition_letters: Default::default(),
+            heal_letters: Default::default(),
             blocked_children: Default::default(),
+            status_cells: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

@@ -38,6 +38,6 @@ export function ledgerOf(node: string, started: { pane: string; session: string;
       ...(one.task ? { task: one.task } : {}),
     });
   });
-  return JSON.stringify({ version: 1, next_id: 100, letters: [], watches: [], agents, spawns, node_clocks: {} });
+  return JSON.stringify({ version: 1, next_id: 100, letters: [], watches: [], agents, spawns });
 }
 

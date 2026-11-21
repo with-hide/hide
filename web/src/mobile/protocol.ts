@@ -10,7 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
-import type { SubagentRow } from "../snapshot";
+import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
 import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
@@ -177,6 +177,24 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
   nodes_omitted?: number;
 };
 
+/** One run as the phone gets it (`hide-core` phone `PhoneRun`): no pane, branch, conversation or answer. */
+export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen" | "spend">;
+
+export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exclude<AutomationRecord, { kind: "run" }>;
+
+/**
+ * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
+ * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
+ */
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
+  schedule: AutomationSchedule;
+  records: PhoneAutomationRecord[];
+  records_omitted?: number;
+};
+
+/** The phone's own presses on an automation (PRD automations B34); making, editing and removing stay with an agent. */
+export type AutomationAction = "run" | "pause" | "resume";
+
 /** One project the PR tab lists pull requests of, with how its GitHub reads stand (`hided/src/mobile/prs.rs`, `PhoneProject`). */
 export type PhonePrProject = {
   id: string;
@@ -301,6 +319,8 @@ export type StartCatalog = {
   kinds: StartKindEntry[];
   /** The kind and each kind's model the last start chose, shared with the desktop. */
   remembered: { kind: StartKind | null; models: Partial<Record<StartKind, string>> };
+  /** How many places past hided's cap were left out, the ones used longest ago; absent from an older Mac. */
+  omitted?: number;
 };
 
 export type ServerFrame =
@@ -320,6 +340,10 @@ export type ServerFrame =
   | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
+  /** The automations this computer's core runs, in its order; `omitted` counts the ones past the frame's caps; `zone` is the IANA zone their times are read in. */
+  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; unreadable?: boolean }
+  /** hided's answer to an `automation` press: whether it sent the core's event; what the core did comes back on the automation. */
+  | { type: "automation_result"; request_id?: string; action: AutomationAction | null; id?: string | null; ok: boolean; reason: string | null }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
   | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
   /** The holder watch's last screen mode; absent on older computers means false. */
@@ -381,6 +405,8 @@ export type PhoneMessage =
   | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }
   | { type: "merge_pr"; request_id: string; pr: string; head: string; method?: PrMergeMethod }
   | { type: "read_pr_feedback"; request_id: string; pr: string }
+  /** [지금 실행], [멈춤] or [다시 켜기] on a listed automation, answered by an `automation_result`. */
+  | { type: "automation"; request_id: string; action: AutomationAction; id: string }
   /** Answered by a `start_result`, like `start_agent`; the agent starts where the desktop would start it and the desktop's screen stays. */
   | { type: "delegate_pr"; request_id: string; pr: string; prompt: string; kind: StartKind; model?: string }
   | { type: "start_sheet"; open: boolean }
@@ -409,7 +435,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}` | `mobile.automations.refusal.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -530,6 +556,22 @@ export function prFailure(reason: string | null): Notice {
       return { key: "mobile.prs.refusal.offline" };
     default:
       return { key: "mobile.prs.refusal.failed" };
+  }
+}
+
+/** The line under an automation's buttons for a press hided refused or the connection lost. */
+export function automationFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "running":
+      return { key: "mobile.automations.refusal.running" };
+    case "gone":
+      return { key: "mobile.automations.refusal.gone" };
+    case "in_flight":
+      return { key: "mobile.automations.refusal.inFlight" };
+    case "offline":
+      return { key: "mobile.automations.refusal.offline" };
+    default:
+      return { key: "mobile.automations.refusal.failed" };
   }
 }
 

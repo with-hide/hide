@@ -29,6 +29,7 @@ const bridge: HostBridge = {
   kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {}, reportDesk() {},
   revealPath() {}, openPractice() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, openNotificationSettings() {}, reportBadge() {},
   updates: { onStatus: () => () => {}, check() {}, restart() {}, setPrerelease() {}, dismiss() {} },
+  whatsNew: { onState: () => () => {}, save() {} },
   browser: {
     sync: (state: BrowserSync) => {
       sent.push(state);
@@ -186,6 +187,7 @@ describe("native browser attachment facts", () => {
       retained: inventory.map((row) => ({ workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id })),
       authorized_scopes: [],
       attachment_epoch: expect.any(String),
+      inventoried: true,
     });
     latestEpoch();
     expect(listeners.size).toBe(1);
@@ -213,7 +215,7 @@ describe("native browser attachment facts", () => {
       { ...other, area_id: "a1", incarnation: 6 },
       { ...remote, area_id: "a1", incarnation: 7 },
     ];
-    const rest = { workspace_view: { ...local, open: true, documents: true, tool: null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout }, browser_views: inventory, browser_scopes: scopes } as SnapshotRest;
+    const rest = { workspace_view: { ...local, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout }, browser_views: inventory, browser_scopes: scopes } as SnapshotRest;
     act(() => useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest } }));
     flush();
     expect(sent.at(-1)?.authorized_scopes).toEqual([
@@ -248,7 +250,7 @@ describe("native browser attachment facts", () => {
   });
 
   it("grants no area authority when core scopes are missing or removed while manual placement remains", () => {
-    const manual: SnapshotRest = { workspace_view: { ...local, open: true, documents: true, tool: null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout } as SnapshotRest["workspace_view"], browser_views: inventory };
+    const manual: SnapshotRest = { workspace_view: { ...local, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout } as SnapshotRest["workspace_view"], browser_views: inventory };
     const scopes = [{ ...local, area_id: "empty-area", incarnation: 5 }];
     act(() => useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: { ...manual, browser_scopes: scopes } } }));
     flush();
@@ -264,6 +266,19 @@ describe("native browser attachment facts", () => {
     act(() => useShellStore.getState().applyFrame({ type: "delta", payload: { revision: 4, rest: { ...manual, browser_scopes: [] } } }));
     flush();
     expect(sent.at(-1)?.authorized_scopes).toEqual([]);
+  });
+
+  it("names its retained list the core's inventory only while the shell holds the core's snapshot (B32)", () => {
+    const rest = { workspace_view: { ...local, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout }, browser_views: inventory } as SnapshotRest;
+    act(() => useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest } }));
+    flush();
+    expect(sent.at(-1)?.inventoried).toBe(true);
+    expect(sent.at(-1)?.retained).toHaveLength(inventory.length);
+    // A reload starts again with no snapshot: its sync names nothing as the core's.
+    act(() => useShellStore.setState({ rest: null }));
+    flush();
+    expect(sent.at(-1)?.inventoried).toBeUndefined();
+    expect(sent.at(-1)?.retained).toEqual([]);
   });
 
   it("shows the existing badge only on the attached browser's own Workspace tab", () => {

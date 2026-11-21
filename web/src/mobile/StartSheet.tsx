@@ -57,11 +57,18 @@ export function StartSheet() {
             className={SELECT_CLASS}
           >
             {selection.target ? (
-              catalog?.targets.map((target) => (
-                <option key={target.id} value={target.id} disabled={!target.connected}>
-                  {target.connected ? targetText(t, target, catalog.core_platform) : `${targetText(t, target, catalog.core_platform)} · ${t("mobile.start.targetDisconnected")}`}
-                </option>
-              ))
+              <>
+                {catalog?.targets.map((target) => (
+                  <option key={target.id} value={target.id} disabled={!target.connected}>
+                    {target.connected ? targetText(t, target, catalog.core_platform) : `${targetText(t, target, catalog.core_platform)} · ${t("mobile.start.targetDisconnected")}`}
+                  </option>
+                ))}
+                {catalog?.omitted ? (
+                  <option value="" disabled data-phone-start-targets-omitted={catalog.omitted}>
+                    {t("mobile.start.targetsOmitted", { count: catalog.omitted })}
+                  </option>
+                ) : null}
+              </>
             ) : (
               <option value="">{t("mobile.start.noProject")}</option>
             )}

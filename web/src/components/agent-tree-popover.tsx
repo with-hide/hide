@@ -81,7 +81,7 @@ export function AgentTreePopover({
   trigger: ReactNode;
   triggerLabel: string;
   /** Done on a descendant's person's turn (PRD ask-human B14); without it the tree draws none. */
-  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -331,7 +331,7 @@ function TreeItem({
   place: ReturnType<typeof treePlaces>[number];
   ask: RaisedAsk | null;
   pending: boolean;
-  actions: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
+  actions: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
   onToggle: () => void;
   onOpen: () => void;
   onOpenAsk: (ask: RaisedAsk) => void;

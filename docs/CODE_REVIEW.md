@@ -47,6 +47,7 @@ So every review covers the perspectives below, and names the perspective of each
 - Whatever the change starts (a process, a thread, a timer, a watcher, a file, a connection) has an owner and ends on every exit path, and when that owner ends.
 - Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and it never grows past that cap.
   At the cap, a record that keeps accumulating (agent registrations, the session archive, closed missions) makes room by dropping its oldest finished entries, with a diagnostic, rather than refusing the new one; new work is refused, as a reported failure, only when nothing finished can be dropped ([delivery.md](delivery.md), [ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
+- A cap added or changed says in its doc comment or the pull request what it counts and what each path does when it is full ([Reviewing a cap](#reviewing-a-cap)).
 - Work added to a high-frequency path says its cost per input, its fan-out and its bound (`docs/PERFORMANCE_TESTING.md`).
 
 ### 6. Tests
@@ -60,6 +61,21 @@ So every review covers the perspectives below, and names the perspective of each
 - A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
 
+### Reviewing a cap
+
+A reviewer asks these four questions of every cap the change adds or changes; a failed answer is an ordinary finding.
+
+1. What does it count?
+   What use adds (checkouts the operator opened, session files), not what use passes (every checkout published, every entry walked).
+2. What is in use, and what is finished?
+   What is in use is never dropped, and a record ages by when it was last used, not when it was made.
+3. What does each path do when it is full?
+   A write drops the oldest finished entry and refuses only when nothing finished can go.
+   A read, list or walk answers its newest part and says it was cut, in the answer itself; an `Err` or a refusal of the whole read at a cap is a finding while anything finished could go.
+   A loop that accepts, spawns or opens ends only when its owner ends; a failure such as a full file table fails that one unit and is reported.
+4. Which test fills it?
+   It puts one in-use and some finished entries past the cap, and asserts the in-use entry survives, new work is taken and the read says it was cut.
+
 ## Writing a finding
 
 - Name the perspective, the file and line, and the failure scenario or the duplicated decision with both of its places.
@@ -69,7 +85,12 @@ So every review covers the perspectives below, and names the perspective of each
   - **minor**: anything else worth saying.
 - Serious and ordinary findings block the merge until fixed or until the person who owns the decision accepts them in writing on the pull request.
   Minor findings do not block; the author fixes them or lists them as follow-ups.
-- A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed.
+- In a mission, after the last review round its verification strength allows (`hide mission help`, Verification strength), the Conductor owns that decision for ordinary findings: it may accept them as follow-up issues, named on the pull request, and go on without asking the operator.
+  Serious findings still block until fixed in the node.
+- A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed; it raises a new finding only when it is serious.
+- The first round gives every finding at once, each with its grade, so the author fixes them in one pass rather than one round per finding.
+- The author fixes a finding together with every other place the same kind of problem appears, not only the line it was found on.
+- In a mission, the worker confirms its plan for each serious finding with the checker that raised it before fixing it; the checker answers only OK or what to change, and the worker goes on with its plan when no answer comes in 10 minutes, or with the changes the checker named, without asking again. Ordinary and minor findings are fixed at once.
 
 ## Work spread over several pull requests
 

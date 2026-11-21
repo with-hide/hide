@@ -118,6 +118,62 @@
     "line": "Installs Hide's hooks into a profile's account folder again.",
     "example": "hide agent profile reinstall claude work"
   },
+  "skill list": {
+    "line": "Lists the skills in this machine's store, each with its version, whether a newer one was found, and where it is on, by skill folder.",
+    "example": "hide skill list"
+  },
+  "skill show": {
+    "line": "Shows one skill of the store: its source, version, files and where it is on.",
+    "example": "hide skill show archify"
+  },
+  "skill add": {
+    "line": "Reads a GitHub address or a folder and installs its skills once the operator confirms them in Needs You; nothing skips that confirm.",
+    "example": "hide skill add anthropics/skills --name pdf"
+  },
+  "skill update": {
+    "line": "Fetches a skill's newer version and takes it once the operator has seen what changes and confirmed it in Needs You.",
+    "example": "hide skill update archify"
+  },
+  "skill on": {
+    "line": "Switches a skill on for every agent, or for the one --agent names.",
+    "example": "hide skill on archify --agent codex"
+  },
+  "skill off": {
+    "line": "Switches a skill off for every agent, or for the one --agent names.",
+    "example": "hide skill off archify --agent antigravity"
+  },
+  "skill remove": {
+    "line": "Takes a skill out of every agent's folder; Settings can bring it back from the undo list.",
+    "example": "hide skill remove archify"
+  },
+  "mcp list": {
+    "line": "Lists the MCP servers in this machine's store, each with where it is on, by agent.",
+    "example": "hide mcp list"
+  },
+  "mcp show": {
+    "line": "Shows one MCP server of the store: how it is reached and the names of its keys, never their values.",
+    "example": "hide mcp show github"
+  },
+  "mcp add": {
+    "line": "Adds an MCP server once the operator confirms it in Needs You and types its keys there; --env and --header take a key's name only, and Hide's options, --machine among them, come before --.",
+    "example": "hide mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github"
+  },
+  "mcp update": {
+    "line": "Changes how an MCP server is reached once the operator confirms it in Needs You and types its keys there.",
+    "example": "hide mcp update linear --url https://mcp.linear.app/mcp --header Authorization"
+  },
+  "mcp on": {
+    "line": "Switches an MCP server on for every agent, or for the one --agent names.",
+    "example": "hide mcp on github --agent codex"
+  },
+  "mcp off": {
+    "line": "Switches an MCP server off for every agent, or for the one --agent names.",
+    "example": "hide mcp off github --agent pi"
+  },
+  "mcp remove": {
+    "line": "Takes an MCP server out of every agent's file; Settings can bring it back from the undo list.",
+    "example": "hide mcp remove github"
+  },
   "agent spawn": {
     "line": "Starts a new agent in a tab of its own, or beside your pane with --beside (your own checkout only), and gives it a brief to start on; --machine starts it on a device, and only the machine that runs Hide may do that.",
     "example": "hide agent spawn --parent here --name review-1 --intent review-1 --kind claude --repo ~/projects/app --branch review-1 --brief 'Review the diff and report.'"
@@ -249,6 +305,46 @@
   "task show": {
     "line": "Shows an agent's plan, with the status of each of its steps.",
     "example": "hide task show"
+  },
+  "automation help": {
+    "line": "Prints the guide for making an automation from the operator's words: the schedule forms, the task, the folder and the agent.",
+    "example": "hide automation help"
+  },
+  "automation add": {
+    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --folder names a project. An automation runs at most every five minutes.",
+    "example": "hide automation add --name 'Morning issues' --task 'Sort the new issues' --schedule 'weekdays 09:00' --kind claude"
+  },
+  "automation list": {
+    "line": "Lists the automations with what each schedule reads as, the next run on this machine's clock and the newest run.",
+    "example": "hide automation list"
+  },
+  "automation show": {
+    "line": "Shows one automation, by its id or its name, with its task, settings and runs, newest first.",
+    "example": "hide automation show 'Morning issues'"
+  },
+  "automation run": {
+    "line": "Starts a run of the automation now, marked manual; refused while one of its runs is going.",
+    "example": "hide automation run 'Morning issues'"
+  },
+  "automation pause": {
+    "line": "Stops the automation's next runs; a run going finishes.",
+    "example": "hide automation pause 'Morning issues'"
+  },
+  "automation resume": {
+    "line": "Turns a paused automation on again from its next time.",
+    "example": "hide automation resume 'Morning issues'"
+  },
+  "automation edit": {
+    "line": "Changes an automation's name, task, schedule, agent or folder from its next run on; a run going keeps what it started with.",
+    "example": "hide automation edit 'Morning issues' --schedule 'weekly mon,thu 09:00'"
+  },
+  "automation remove": {
+    "line": "Removes an automation and its runs' records, ending a run that is going; its folder and files stay.",
+    "example": "hide automation remove 'Morning issues'"
+  },
+  "automation preview": {
+    "line": "Shows what a schedule reads as and when it would run next, without making anything.",
+    "example": "hide automation preview --schedule 'cron 0 9 * * 1-5'"
   },
   "pane read": {
     "line": "Prints the last lines of a pane, unwrapped, so you can see what its program last showed.",

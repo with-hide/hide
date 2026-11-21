@@ -260,11 +260,10 @@ impl Runtime {
         if !self.ui_attached {
             return None;
         }
-        let detail = &self.snapshot.ui_state.detail;
         let Some(crate::model::DetailItem::Remains {
             workspace_id,
             checkout_id,
-        }) = detail.shown.then(|| detail.top()).flatten()
+        }) = self.shown_card()
         else {
             return None;
         };
@@ -2026,6 +2025,18 @@ impl Runtime {
     pub fn refresh_worktrees(&mut self) {
         self.worktree_generation = self.worktree_generation.wrapping_add(1);
         self.snapshot.git_worktrees_loading = true;
+    }
+
+    /// The core made a worktree in a repository of this machine (a start
+    /// did), so the catalog is asked again and the wait for it announced, as
+    /// after a worktree the New Task flow makes. With no window this is the
+    /// only thing that reads the new worktree: the Git watch rests then
+    /// (`WorktreeReader::read_unwatched_if_due`).
+    pub(crate) fn worktree_made_here(&mut self) {
+        self.refresh_worktrees();
+        if let Some(context) = &self.worker_context {
+            context.notifier.notify();
+        }
     }
 
     pub(super) fn refresh_project_worktrees(&mut self, project_path: &str) {
@@ -5563,6 +5574,22 @@ impl Runtime {
     /// A row whose last pane is closing, registered so the project stays
     /// listed once the engine's workspace is gone.
     fn retain_registration(&mut self, registration: crate::model::WorkspaceRegistration) -> bool {
+        let line = format!(
+            "Registered {} at {} so closing its last pane keeps the project listed",
+            registration.label, registration.path
+        );
+        self.register_without_workspace(registration, "workspace.retained", line)
+    }
+
+    /// Registers a project with no workspace in the engine and no pane: a
+    /// closing row's, or an automation's own folder, which its runs start in
+    /// (PRD automations D-08). Whether it was added.
+    pub(super) fn register_without_workspace(
+        &mut self,
+        registration: crate::model::WorkspaceRegistration,
+        kind: &str,
+        line: String,
+    ) -> bool {
         if self
             .snapshot
             .ui_state
@@ -5572,13 +5599,7 @@ impl Runtime {
         {
             return false;
         }
-        self.push_diagnostic(
-            "workspace.retained",
-            format!(
-                "Registered {} at {} so closing its last pane keeps the project listed",
-                registration.label, registration.path
-            ),
-        );
+        self.push_diagnostic(kind, line);
         let registration_id = registration.id.clone();
         self.snapshot
             .ui_state

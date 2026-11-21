@@ -18,6 +18,9 @@ import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
 import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
+import { LookChip } from "./components/linked-view";
+import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { DeviceChip } from "./components/device-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
@@ -32,7 +35,7 @@ import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./Si
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
-import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
+import { automationNames, automationRun, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
@@ -44,7 +47,7 @@ import { sessionOfAgent } from "./sessionWork";
 import { commandLabel } from "./shortcutLabels";
 import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
-import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
+import { catalogWorkspaces, listedCatalog, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
@@ -111,7 +114,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   // Lineage crosses devices, so a row's children are read from every device's agents.
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
-  const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
+  // A run in an automation's own folder stands under no project (PRD automations B30).
+  const projects = useMemo(() => listedCatalog(rest), [rest]);
   const archived = useMemo(() => {
     const rows = archivedRows(rest, deviceId);
     return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.workspace_id) : rows;
@@ -120,7 +124,9 @@ export function TaskLens({ actions }: { actions: Actions }) {
   // 내 차례 lists every connected device's tasks and missions, each other device's named on its row, unless a project narrows the list.
   const ownAsks = useMissionAsks(deviceId, filter?.workspace_id ?? null);
   const everyAsk = useEveryDeviceMissionAsks(deviceId);
-  const asks = filter ? ownAsks : everyAsk;
+  // An automation stopped for a person stands in 내 차례 beside them (PRD automations B23); it is no project's, so a project filter leaves it out.
+  const everyAutomation = useEveryDeviceAutomationAsks(deviceId);
+  const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation)]), [filter, ownAsks, everyAsk, everyAutomation]);
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
   const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
   // Another machine's rows and panes are listed with this computer's, so a list with nothing of its own, or a computer with no project yet, still draws them (PRD device-connect-iroh B10, B49).
@@ -279,7 +285,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
   const siblings = useShellStore((s) => siblingsShown(s.rest));
   const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll, siblings) }));
-  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "mission" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
+  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "ask" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
   const restingTrees = treesOf(shown.resting);
   const cleanupTrees = treesOf(shown.cleanup);
   const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
@@ -313,8 +319,10 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? groupLabel(band.state, tool, t) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
-            {band.rows.map((row) => (row.kind === "mission"
-              ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+            {band.rows.map((row) => (row.kind === "ask"
+              ? row.own.kind === "mission"
+                ? <SidebarMissionRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+                : <SidebarAutomationRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
               : rows([row.tree])[0]))}
           </ul>
         </Fragment>
@@ -429,7 +437,7 @@ function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const counts = TASK_GROUPS.filter((state) => group.counts[state]);
   return (
     <h3 tabIndex={-1} data-task-focus="group" className="flex min-w-0 items-center gap-sm rounded-xs px-xs pt-sm pb-xs text-caption font-semibold text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-task-group-head="project">
-      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? ""}</span>
+      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? t("taskLens.outsideProjects")}</span>
       {counts.map((state: TaskGroupState) => (
         <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" && !tool ? "text-warning" : "text-muted-foreground")}>
           {groupLabel(state, tool, t)} {group.counts[state]}
@@ -516,8 +524,9 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const revisitWords = starMark || starred(agent) ? t("taskLens.revisit.starred") : read ? t("taskLens.revisit.readAsk") : null;
   const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
+  const names = useShellStore((s) => automationNames(s.automations));
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
-  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
+  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai, names)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
@@ -530,8 +539,8 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
-            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} profile={agent.profile} />
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationRun(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} />}
+            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
@@ -756,26 +765,32 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
  */
 function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
+  const indent = detailIndent(useAgentLogosShown() || (Boolean(entry.agent.hide_ai) && !automationRun(entry.agent)));
   const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
+  const names = useShellStore((s) => automationNames(s.automations));
+  // An automation run names its automation where a project would stand, its own folder being no project (PRD automations B15, B30).
+  const origin = agent.hide_ai?.task?.kind === "automation" ? taskLine(t, agent.hide_ai.task, names) : null;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
-  if (!parts && !(showProject && project) && !tool) return null;
+  // What it opened rides its own chip where the row's line says something else, an ask or a run's result (operator decision 2026-11-21).
+  const look = card.state === "needs_you" && agent.mark !== "look" ? agent.look : undefined;
+  if (!parts && !(showProject && project) && !tool && !origin && !look) return null;
   // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
   const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
     <>
       <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
         <ToolLabel tool={tool} />
-        {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
+        {origin ? <span className="shrink-0 text-muted-foreground" data-task-origin="automation">{origin}</span> : showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
         {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
+      {look ? <div className={cn(indent, "flex min-w-0")}><LookChip look={look} onOpen={() => actions.openAgent(agent.pane_id, look)} /></div> : null}
     </>
   );
 }

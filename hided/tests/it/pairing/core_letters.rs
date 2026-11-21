@@ -56,13 +56,12 @@ impl Core {
     /// wait is on the core's saved ledger, so a slow machine costs the
     /// agent's pane no commands.
     fn receives<T>(&mut self, what: &str, wanted: impl Fn(&Value) -> Option<T>) -> T {
-        let ledger = hide_kit::layout::delivery_ledger(&self.machine.terminal.state);
+        let state = self.machine.terminal.state.clone();
         let pane = self.agent.pane.clone();
         wait_within(what, WITHIN, || {
-            let Ok(saved) = std::fs::read(&ledger) else {
+            let Some(saved) = saved(&state)? else {
                 return Ok(None);
             };
-            let saved: Value = serde_json::from_slice(&saved)?;
             Ok(saved["letters"]
                 .as_array()
                 .into_iter()
@@ -81,6 +80,18 @@ impl Core {
             .find_map(&wanted)
             .unwrap_or_else(|| panic!("{what} is not in the inbox: {inbox}"))
     }
+}
+
+/// A core's ledger as its store holds it; none until the daemon has made
+/// the store, which this never makes itself.
+fn saved(state: &Path) -> anyhow::Result<Option<Value>> {
+    let path = hide_kit::layout::delivery_store(state);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let ledger = hide_core::delivery::store::load(&path)
+        .map_err(|code| anyhow::anyhow!("the ledger store: {code}"))?;
+    Ok(Some(serde_json::to_value(ledger)?))
 }
 
 /// The code a refused `hide` command answered with.
@@ -323,9 +334,36 @@ async fn agents_of_two_paired_hides_write_read_and_report_across() {
             }
             pane
         });
-        let started = mac.asks(&spawn);
-        finished.store(true, Ordering::Relaxed);
-        (started, reporter.join().unwrap())
+        let mut started = mac.asks(&spawn);
+        // On a slow machine the start answers before its agent's session
+        // is in, and says so: the same command asked again answers it once
+        // the Mac mini has registered the agent.
+        let unfinished = started.status != 0 && refusal(&started) == "native_identity_unavailable";
+        if !unfinished {
+            finished.store(true, Ordering::Relaxed);
+        }
+        let pane = reporter.join().unwrap();
+        if unfinished {
+            let state = mini.machine.terminal.state.clone();
+            wait_within(
+                "the Mac mini's registration of the Conductor",
+                WITHIN,
+                || {
+                    let Some(saved) = saved(&state)? else {
+                        return Ok(None);
+                    };
+                    Ok(saved["agents"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|agent| agent["name"] == "lead" && agent["ended"] == false)
+                        .then_some(()))
+                },
+            )
+            .unwrap_or_else(|error| panic!("{error:#}"));
+            started = mac.asks(&spawn);
+        }
+        (started, pane)
     });
     let started = started
         .value()

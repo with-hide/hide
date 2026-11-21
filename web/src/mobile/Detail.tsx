@@ -43,7 +43,7 @@ import {
 import { agentOf, openMission, usePhone } from "./store";
 import { agentLinks, progress } from "./missionModel";
 import { TONE_TEXT } from "../components/mission-tone";
-import { missionToneOf } from "../missions";
+import { missionStalled, missionToneOf } from "../missions";
 import { PR_LOOK } from "../prMark";
 import { cn } from "../lib/utils";
 
@@ -197,7 +197,7 @@ function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
           <Button key={mission.id} variant="ghost" className={chip} data-phone-detail-mission={mission.id}
             aria-label={`${t("mobile.tab.missions")} · ${mission.title}`} onClick={() => { closeDetail(); openMission(mission.id); }}>
             <span className={pill}>
-              <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn)])} />
+              <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} />
               <span className="min-w-0 truncate">{mission.title}</span>
               <span aria-hidden="true" className="shrink-0 text-muted-foreground">·</span>
               {node ? <span className="min-w-0 truncate text-subtle-foreground">{node.title}</span>

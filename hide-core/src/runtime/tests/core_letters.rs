@@ -7,11 +7,13 @@
 //! An agent of the machine that opens writes to an agent of the other and
 //! gets its reply, each letter once; the machine that is only opened
 //! answers and reports but writes nothing first; a letter the other core
-//! refuses ends undelivered with its reason and blocks nothing behind it.
+//! refuses ends with its reason and blocks nothing behind it. A letter is
+//! between agents: a pane is no recipient, and a sender Hide holds no
+//! registration for writes none (PRD letters-missions-simplify D-21).
 
 use super::access_letters::Fixture;
 use super::*;
-use crate::core_calls::{Asked, CoreItem, CoreLink, Letter, Outcome, Party, take};
+use crate::core_calls::{Agent, Asked, CoreLink, Letter, Outcome, Party, take};
 use crate::delivery::Command;
 use crate::delivery::ledger::State;
 use crate::delivery::worker::Effect;
@@ -69,8 +71,11 @@ struct Pair {
 impl Pair {
     /// The MacBook opens the Mac mini, and the two are connected.
     fn start() -> Self {
-        let mac = Fixture::start();
-        let mini = Fixture::start();
+        Self::of(Fixture::start(), Fixture::start())
+    }
+
+    /// [`Pair::start`], of two cores that already run.
+    fn of(mac: Fixture, mini: Fixture) -> Self {
         let wire = |here: &Fixture, there: &Fixture, key: String| {
             let wire = Arc::new(Wire {
                 there: Arc::downgrade(&there.runtime),
@@ -124,8 +129,9 @@ impl Pair {
     /// Hands what waits in `from`'s outbox to `to` and each answer back,
     /// as the connection does; the answers.
     fn carry(from: &Fixture, to: &Fixture, to_key: &str, from_key: &str) -> Vec<Outcome> {
-        let waiting = from.runtime.lock().unwrap().core_outbox(to_key);
-        waiting
+        let outbox = from.runtime.lock().unwrap().core_outbox(to_key);
+        outbox
+            .settled(WITHIN)
             .into_iter()
             .map(|letter| {
                 let id = letter.id.clone();
@@ -184,20 +190,49 @@ fn agent_there(device: &str, id: &str) -> String {
     format!("core:{device}:agent:{id}")
 }
 
-/// The fixture's worker as its core names it to another: registered under
-/// no name of its own, it goes by its registration id, as on its own core.
-fn worker(fixture: &Fixture) -> Party {
-    Party {
-        item: CoreItem::Agent,
-        id: fixture.ids["worker"].clone(),
-        name: fixture.ids["worker"].clone(),
+/// The fixture's worker as its core names it to another, by the name it
+/// registered under.
+fn agent(fixture: &Fixture) -> Agent {
+    let guard = fixture.runtime.lock().unwrap();
+    let ledger = guard.delivery_state().unwrap();
+    let record = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == fixture.ids["worker"])
+        .unwrap();
+    Agent {
+        id: record.id.clone(),
+        name: record.wire_name().to_owned(),
     }
+}
+
+/// The worker as the one that asks a read or a start.
+fn worker(fixture: &Fixture) -> Party {
+    agent(fixture).into()
+}
+
+/// What `fixture`'s core hands machine `key` now.
+fn outbox(fixture: &Fixture, key: &str) -> Vec<Letter> {
+    let outbox = fixture.runtime.lock().unwrap().core_outbox(key);
+    outbox.settled(WITHIN)
+}
+
+/// The cells Hide keeps for the fixture's worker, by subject and line.
+fn cells(fixture: &Fixture) -> Vec<(String, String)> {
+    let guard = fixture.runtime.lock().unwrap();
+    let ledger = guard.delivery_state().unwrap();
+    guard
+        .status_cells(Some(&ledger))
+        .into_iter()
+        .filter(|addressed| addressed.recipient == fixture.ids["worker"])
+        .map(|addressed| (addressed.cell.subject, addressed.cell.line))
+        .collect()
 }
 
 /// The name the worker of the machine called `machine` goes by on the other
 /// core.
 fn named_there(machine: &str, fixture: &Fixture) -> String {
-    format!("hide:core:{machine}:{}", fixture.ids["worker"])
+    format!("hide:core:{machine}:{}", agent(fixture).name)
 }
 
 /// B66: the letter waits in the sender's ledger, the other core keeps it
@@ -232,7 +267,7 @@ fn an_agent_writes_to_another_cores_agent_and_gets_its_reply_each_once() {
     assert_eq!(
         pair.mac_to_mini(),
         [Outcome::Taken {
-            recipient: worker(&pair.mini)
+            recipient: agent(&pair.mini)
         }]
     );
     let kept = letters(&pair.mini);
@@ -284,7 +319,7 @@ fn an_agent_writes_to_another_cores_agent_and_gets_its_reply_each_once() {
     assert_eq!(
         pair.mini_to_mac(),
         [Outcome::Taken {
-            recipient: worker(&pair.mac)
+            recipient: agent(&pair.mac)
         }]
     );
     let answered = letters(&pair.mac);
@@ -302,9 +337,9 @@ fn an_agent_writes_to_another_cores_agent_and_gets_its_reply_each_once() {
     assert_eq!(answered.len(), 2, "the letter and its one reply");
 }
 
-/// B66: with no connection the letter stays in the sender's ledger on the
-/// connection's clock, and when the two connect it arrives once, even when
-/// the first answer never came back.
+/// B66: with no connection the letter stays in the sender's ledger, which
+/// gives it no deadline, and when the two connect it arrives once, even
+/// when the first answer never came back.
 #[test]
 fn a_letter_written_while_the_other_machine_is_away_waits_and_arrives_once() {
     let pair = Pair::start();
@@ -316,16 +351,10 @@ fn a_letter_written_while_the_other_machine_is_away_waits_and_arrives_once() {
         .unwrap();
     let sent_id = sent["id"].as_str().unwrap();
     assert_eq!(letter(&pair.mac, sent_id).state, State::Pending);
-    let reach = pair.mac.runtime.lock().unwrap().delivery_reach();
-    assert_eq!(
-        reach.get(&format!("core:{MINI}")),
-        Some(&false),
-        "its deadline does not run while the machine is away"
-    );
 
     pair.paired(true, false, true);
     // The Mac mini keeps the letter, and its answer is lost on the way.
-    let waiting = pair.mac.runtime.lock().unwrap().core_outbox(&mini_key());
+    let waiting = outbox(&pair.mac, &mini_key());
     assert_eq!(waiting.len(), 1);
     let prepared = pair
         .mini
@@ -360,8 +389,8 @@ fn a_machine_that_is_only_opened_reports_a_start_and_writes_nothing_first() {
 
     // The MacBook's core refuses it whoever carried it there.
     let wire = |kind: &str, intent: &str, to: &str| Letter {
-        id: "letter-9".into(),
-        from: worker(&pair.mini),
+        id: format!("letter-{intent}"),
+        from: agent(&pair.mini),
         to: to.into(),
         reply_to: None,
         kind: kind.into(),
@@ -389,32 +418,89 @@ fn a_machine_that_is_only_opened_reports_a_start_and_writes_nothing_first() {
         "a report of nothing this machine asked for is a first letter"
     );
 
-    // The MacBook's worker asks the Mac mini for a start.
-    let (client, origin) = {
+    // The MacBook's worker asks the Mac mini for a start: the store
+    // answers with the agent it asks as.
+    let (client, origin, worker_record) = {
         let guard = pair.mac.runtime.lock().unwrap();
         let ledger = guard.delivery_state().unwrap();
-        let origin = ledger
+        let record = ledger
             .agents
             .iter()
             .find(|record| record.id == mac_id)
             .unwrap()
-            .actor
             .clone();
-        (guard.delivery_client.clone().unwrap(), origin)
+        (
+            guard.delivery_client.clone().unwrap(),
+            record.actor.clone(),
+            record,
+        )
     };
-    client
+    let asked_as = client
         .submit(
             Effect::CoreStart {
                 origin,
-                machine: MINI.into(),
+                key: mini_key(),
+                registers: None,
             },
             WITHIN,
         )
         .unwrap();
+    assert_eq!(asked_as["id"], mac_id.as_str());
+    // The ledger then remembers as many starts as it can, every asker
+    // still alive: one more is refused before it leaves, and the report of
+    // the first, a mission that ran through all of them, is still taken.
+    // An asker with no registration is registered with its start.
+    let asker = |n: usize| {
+        let actor = crate::delivery::Actor {
+            pane_id: format!("w9:p{n}"),
+            name: format!("asker-{n}"),
+            kind: "codex".into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: crate::engine::tokens::session_digest(&format!("asker-{n}")),
+        };
+        crate::coordination::AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            session: format!("asker-{n}"),
+            instance: format!("terminal-asker-{n}"),
+            pane: actor.pane_id.clone(),
+            actor,
+            ..worker_record.clone()
+        }
+    };
+    let start = |n: usize| {
+        let record = asker(n);
+        client.submit(
+            Effect::CoreStart {
+                origin: record.actor.clone(),
+                key: mini_key(),
+                registers: Some(Box::new(record)),
+            },
+            WITHIN,
+        )
+    };
+    for n in 1..crate::delivery::ledger::CORE_STARTS {
+        start(n).unwrap();
+    }
+    assert_eq!(start(0).unwrap_err(), "capacity");
+    // An agent Hide holds no registration for asks no start.
+    assert_eq!(
+        client
+            .submit(
+                Effect::CoreStart {
+                    origin: asker(0).actor,
+                    key: mini_key(),
+                    registers: None,
+                },
+                WITHIN,
+            )
+            .unwrap_err(),
+        "sender_not_registered"
+    );
     assert_eq!(
         asked(wire("report", "result", &mac_id)),
         Outcome::Taken {
-            recipient: worker(&pair.mac)
+            recipient: agent(&pair.mac)
         }
     );
     let report = &letters(&pair.mac)[0];
@@ -439,7 +525,7 @@ fn a_machine_that_is_only_opened_reports_a_start_and_writes_nothing_first() {
     assert_eq!(
         pair.mini_to_mac(),
         [Outcome::Taken {
-            recipient: worker(&pair.mac)
+            recipient: agent(&pair.mac)
         }]
     );
 }
@@ -471,7 +557,8 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
         .submit(
             Effect::CoreStart {
                 origin: asker,
-                machine: MINI.into(),
+                key: mini_key(),
+                registers: None,
             },
             WITHIN,
         )
@@ -480,10 +567,12 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
         let guard = pair.mini.runtime.lock().unwrap();
         let origin = guard.core_actor(guard.peer_on(MAC).unwrap(), &worker(&pair.mac));
         let authority = crate::delivery::worker::Authority {
-            caller: origin.pane_id.clone(),
+            caller: crate::delivery::Actor::core_caller(&mac_key(), &origin.pane_id),
             context: guard.core_context(&origin),
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
         };
         (guard.delivery_client.clone().unwrap(), authority, origin)
     };
@@ -514,7 +603,7 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
     assert_eq!(
         pair.mini_to_mac(),
         [Outcome::Taken {
-            recipient: worker(&pair.mac)
+            recipient: agent(&pair.mac)
         }]
     );
     assert!(pair.mini_to_mac().is_empty(), "it is handed over once");
@@ -531,18 +620,11 @@ fn a_closed_missions_report_reaches_the_agent_that_asked_once_its_machine_is_bac
 }
 
 /// D-72: a letter the other core does not keep is answered with why, ends
-/// undelivered in its sender's ledger, and its sender is told once; the
-/// letter behind it goes through.
+/// in its sender's ledger with that reason, and its sender is told once by
+/// a cell about it; the letter behind it goes through.
 #[test]
-fn a_letter_the_other_core_refuses_ends_undelivered_with_its_reason() {
+fn a_letter_the_other_core_refuses_ends_with_its_reason_and_its_sender_is_told() {
     let pair = Pair::start();
-    {
-        let mut guard = pair.mac.runtime.lock().unwrap();
-        guard.install_worker_context(
-            Arc::downgrade(&pair.mac.runtime),
-            crate::handle::ChangeNotifier::noop(),
-        );
-    }
     let lost = pair
         .mac
         .agent(
@@ -562,6 +644,7 @@ fn a_letter_the_other_core_refuses_ends_undelivered_with_its_reason() {
             ),
         )
         .unwrap();
+    assert!(cells(&pair.mac).is_empty());
     assert_eq!(
         pair.mac_to_mini(),
         [
@@ -569,7 +652,7 @@ fn a_letter_the_other_core_refuses_ends_undelivered_with_its_reason() {
                 reason: "target_unavailable".into()
             },
             Outcome::Taken {
-                recipient: worker(&pair.mini)
+                recipient: agent(&pair.mini)
             },
         ]
     );
@@ -577,36 +660,121 @@ fn a_letter_the_other_core_refuses_ends_undelivered_with_its_reason() {
         pair.mac_to_mini().is_empty(),
         "a refused letter is not asked again"
     );
-    // The store's next pass ends it; any command brings one.
-    pair.mac
-        .agent("worker", Command::Inbox { bundle: false })
-        .unwrap();
     let ended = letter(&pair.mac, &lost_id);
-    assert_eq!(ended.state, State::Undelivered);
+    assert_eq!(ended.state, State::NoRecipient);
     assert!(!ended.waiting_answer);
+    assert_eq!(
+        ended.bell_failure.map(|failure| failure.code).as_deref(),
+        Some("target_unavailable")
+    );
     assert_eq!(
         letter(&pair.mac, kept["id"].as_str().unwrap()).state,
         State::Delivered
     );
     assert_eq!(letters(&pair.mini).len(), 1);
 
-    let notes = || -> Vec<crate::delivery::ledger::Letter> {
-        let intent = format!("letter-undelivered:{lost_id}");
-        letters(&pair.mac)
-            .into_iter()
-            .filter(|letter| letter.intent == intent)
-            .collect()
-    };
-    pair.mac.runtime.lock().unwrap().drive_core_refusals();
-    wait_for("the sender to be told", || !notes().is_empty());
-    let note = &notes()[0];
-    assert_eq!(note.sender.name, "hide:delivery");
-    assert_eq!(note.recipient.pane_id, "worker");
+    let told = cells(&pair.mac);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0].0, format!("letter:{lost_id}"));
     for part in [lost_id.as_str(), "target_unavailable", "not delivered"] {
-        assert!(note.body.contains(part), "{part}: {}", note.body);
+        assert!(told[0].1.contains(part), "{part}: {}", told[0].1);
     }
-    pair.mac.runtime.lock().unwrap().drive_core_refusals();
-    assert_eq!(notes().len(), 1, "told once");
+    // The answer coming once more moves nothing and tells no one again.
+    let again = pair.mac.runtime.lock().unwrap().core_letter_answered(
+        &mini_key(),
+        &lost_id,
+        Outcome::Refused {
+            reason: "capacity".into(),
+        },
+    );
+    assert!(again.is_none());
+    assert_eq!(cells(&pair.mac), told);
+}
+
+/// PRD letters-missions-simplify D-21: a letter between two machines names
+/// an agent's registration on each side. A pane of the other machine is no
+/// recipient, the other core takes a letter for a registration only, and a
+/// letter whose agent ended with no agent after it ends for its sender the
+/// same way however often it is asked.
+#[test]
+fn a_letter_between_machines_names_registrations_and_no_pane() {
+    let pair = Pair::start();
+    assert_eq!(
+        pair.mac
+            .agent(
+                "worker",
+                send(&format!("core:{MINI}:pane:worker"), "pane", "request")
+            )
+            .unwrap_err(),
+        "recipient_not_agent",
+        "refused where it is written"
+    );
+    assert!(letters(&pair.mac).is_empty());
+
+    // The other core takes a pane's id for no agent, whoever carried it,
+    // and a registration's id for its agent.
+    pair.paired(true, true, true);
+    let wire = |id: &str, to: &str| Letter {
+        id: id.into(),
+        from: agent(&pair.mini),
+        to: to.into(),
+        reply_to: None,
+        kind: "request".into(),
+        intent: format!("intent-{id}"),
+        body: "please look".into(),
+        now: false,
+    };
+    let asked = |letter: Letter| {
+        let prepared = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(&mini_key(), letter);
+        take(prepared, WITHIN).unwrap()
+    };
+    assert_eq!(
+        asked(wire("letter-1", "w1:p9")),
+        Outcome::Refused {
+            reason: "target_unavailable".into()
+        }
+    );
+    let other = pair.mac.ids["other"].clone();
+    let to_other = asked(wire("letter-2", &other));
+    let Outcome::Taken { recipient } = &to_other else {
+        panic!("{to_other:?}");
+    };
+    assert_eq!(recipient.id, other);
+    let kept = letters(&pair.mac);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].to.as_deref(), Some(other.as_str()));
+    assert_eq!(
+        kept[0].from, None,
+        "another machine's agent has no registration here"
+    );
+
+    // The same letter asked again is answered as it is kept, and once its
+    // agent ended with no agent after it, as ended.
+    assert_eq!(asked(wire("letter-2", &other)), to_other);
+    pair.mac
+        .agent(
+            "other",
+            Command::Agents {
+                command: crate::coordination::Command::End {
+                    id: other.clone(),
+                    actor: None,
+                    keep_pane: true,
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        asked(wire("letter-2", &other)),
+        Outcome::Refused {
+            reason: "no_recipient".into()
+        }
+    );
+    assert_eq!(letters(&pair.mac).len(), 1, "kept once");
 }
 
 /// B66: an agent of the machine that opens reads the other machine's
@@ -707,4 +875,326 @@ fn an_agent_reads_another_cores_agents_and_the_opened_machine_reads_none() {
         }),
         Err("machine_unavailable".into())
     );
+}
+
+/// A device id is what a machine says of itself, so a second connection may
+/// say the one a paired machine says. What was stored for one connection
+/// stays its own: the other is handed none of its letters, settles and
+/// answers none, its agents are other identities, and a `core:` name two
+/// connections claim names neither.
+#[test]
+fn two_connections_that_say_one_device_id_share_no_letter_answer_or_identity() {
+    let pair = Pair::start();
+    let there = agent_there(MINI, &pair.mini.ids["worker"]);
+    let sent = pair
+        .mac
+        .agent("worker", send(&there, "ask", "request"))
+        .unwrap();
+    let sent_id = sent["id"].as_str().unwrap().to_owned();
+
+    // A second connection that says the Mac mini's device id, paired both
+    // ways and connected.
+    let other_key = "c3".repeat(32);
+    let machine = |key: &str| {
+        json!({
+            "key": key, "device_id": MINI, "name": "Mac mini",
+            "opens": "active", "opened_by": "active",
+            "connected": true, "path": "direct", "reason": null, "update": null,
+        })
+    };
+    let event = serde_json::to_vec(&json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "peer_machines",
+        "payload": { "machines": [machine(&mini_key()), machine(&other_key)] },
+    }))
+    .unwrap();
+    pair.mac.runtime.lock().unwrap().dispatch_json(&event);
+    let outbox = |key: &str| outbox(&pair.mac, key).len();
+
+    // The letter kept for the first connection goes to it alone, and the
+    // other's "taken" or "refused" moves nothing of it.
+    assert_eq!((outbox(&other_key), outbox(&mini_key())), (0, 1));
+    for outcome in [
+        Outcome::Taken {
+            recipient: agent(&pair.mini),
+        },
+        Outcome::Refused {
+            reason: "capacity".into(),
+        },
+    ] {
+        let settle = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .core_letter_answered(&other_key, &sent_id, outcome);
+        if let Some(settle) = settle {
+            settle.run(WITHIN).unwrap();
+        }
+    }
+    assert_eq!(letter(&pair.mac, &sent_id).state, State::Pending);
+    assert_eq!(outbox(&mini_key()), 1, "it still waits to go");
+
+    // Only the connection it was written to answers it.
+    let wire = |id: &str, intent: &str, reply_to: Option<&str>| Letter {
+        id: id.into(),
+        from: agent(&pair.mini),
+        to: pair.mac.ids["worker"].clone(),
+        reply_to: reply_to.map(str::to_owned),
+        kind: if reply_to.is_some() {
+            "reply"
+        } else {
+            "request"
+        }
+        .into(),
+        intent: intent.into(),
+        body: "done".into(),
+        now: false,
+    };
+    let asked = |key: &str, letter: Letter| {
+        let prepared = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(key, letter);
+        take(prepared, WITHIN).unwrap()
+    };
+    assert_eq!(
+        asked(&other_key, wire("letter-5", "answer", Some(&sent_id))),
+        Outcome::Refused {
+            reason: "letter_unavailable".into()
+        }
+    );
+    assert!(matches!(
+        asked(&mini_key(), wire("letter-5", "answer", Some(&sent_id))),
+        Outcome::Taken { .. }
+    ));
+
+    // The same agent id on the two connections is two identities.
+    for (key, id, intent) in [
+        (mini_key(), "letter-6", "one"),
+        (other_key.clone(), "letter-7", "two"),
+    ] {
+        assert!(matches!(
+            asked(&key, wire(id, intent, None)),
+            Outcome::Taken { .. }
+        ));
+    }
+    let kept = letters(&pair.mac);
+    let from = |intent: &str| {
+        kept.iter()
+            .find(|letter| letter.intent == intent)
+            .unwrap()
+            .sender
+            .clone()
+    };
+    assert_eq!(from("one").pane_id, from("two").pane_id);
+    assert!(!from("one").same_identity(&from("two")));
+    assert!(from("one").core_of(&mini_key()) && from("two").core_of(&other_key));
+
+    // A name two connections claim names neither.
+    assert_eq!(
+        pair.mac
+            .agent("worker", send(&there, "again", "request"))
+            .unwrap_err(),
+        "device_ambiguous"
+    );
+}
+
+/// D-72: what another machine's agent asks is judged again where it
+/// applies. A grant taken back after a first letter, or a step of a start,
+/// was prepared refuses it there, while the other direction still stands.
+#[test]
+fn a_grant_taken_back_after_an_ask_was_prepared_refuses_it_where_it_applies() {
+    let pair = Pair::start();
+    // Each machine opens the other.
+    pair.paired(true, true, true);
+    let first = || Letter {
+        id: "letter-9".into(),
+        from: agent(&pair.mini),
+        to: pair.mac.ids["worker"].clone(),
+        reply_to: None,
+        kind: "request".into(),
+        intent: "first".into(),
+        body: "please look".into(),
+        now: false,
+    };
+    let prepare = || {
+        pair.mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(&mini_key(), first())
+    };
+    let prepared = prepare();
+    assert!(prepared.is_ok());
+    // A step of a start the Mac mini's agent asks for here: its own record
+    // as the origin of what it starts.
+    let (client, authority, origin) = {
+        let guard = pair.mac.runtime.lock().unwrap();
+        let origin = guard.core_actor(guard.peer_on(MINI).unwrap(), &worker(&pair.mini));
+        let authority = crate::delivery::worker::Authority {
+            caller: crate::delivery::Actor::core_caller(&mini_key(), &origin.pane_id),
+            context: guard.core_context(&origin),
+            also_reads: Vec::new(),
+            proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
+        };
+        (guard.delivery_client.clone().unwrap(), authority, origin)
+    };
+    let registers =
+        || crate::coordination::executor::register_code_owned(&client, &authority, &origin);
+
+    // The MacBook takes back the Mac mini's grant and still opens the Mac
+    // mini itself.
+    pair.paired(true, false, true);
+    assert_eq!(
+        take(prepared, WITHIN).unwrap(),
+        Outcome::Refused {
+            reason: "machine_not_permitted".into()
+        }
+    );
+    assert!(letters(&pair.mac).is_empty());
+    assert_eq!(registers().unwrap_err(), "machine_not_permitted");
+
+    // Granted again, the same asks apply.
+    pair.paired(true, true, true);
+    assert!(matches!(
+        take(prepare(), WITHIN).unwrap(),
+        Outcome::Taken { .. }
+    ));
+    registers().unwrap();
+}
+
+/// PRD device-connect-iroh D-71, D-72 over the state folders released
+/// builds wrote. What this build is the first to keep of another machine in
+/// the ledger is written by its own code beside what the release left: a
+/// letter that waits for an agent there, under that machine's connection id
+/// and the agent's address; a letter kept from there, under the id its own
+/// core gave it; and the start an agent asked of it. The next start is the
+/// same ledger: its conversions find nothing to do and write nothing, the
+/// store reads every record as it was written, the letter still goes out,
+/// the kept one is answered as kept and the start's report is still let in.
+#[test]
+fn what_a_ledger_keeps_of_another_machine_over_a_released_state_folder_is_the_same_at_the_next_start()
+ {
+    use crate::node_migration::upgrade_tests::{fixtures, second_start, started_at};
+    let carried = |pair: &Pair, letter: Letter| {
+        let prepared = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(&mini_key(), letter);
+        take(prepared, WITHIN).unwrap()
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let root = tempfile::tempdir().unwrap();
+        // Where the fixture's core keeps its state.
+        started_at(&folder, &root.path().join("state"));
+        let pair = Pair::of(Fixture::start_in(root), Fixture::start());
+        let released = letters(&pair.mac).len();
+        let mac_id = pair.mac.ids["worker"].clone();
+        let mini_id = pair.mini.ids["worker"].clone();
+
+        pair.mac
+            .agent(
+                "worker",
+                send(&agent_there(MINI, &mini_id), "waits", "request"),
+            )
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        let (client, origin) = {
+            let guard = pair.mac.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let record = ledger.agents.iter().find(|record| record.id == mac_id);
+            (
+                guard.delivery_client.clone().unwrap(),
+                record.unwrap().actor.clone(),
+            )
+        };
+        client
+            .submit(
+                Effect::CoreStart {
+                    origin,
+                    key: mini_key(),
+                    registers: None,
+                },
+                WITHIN,
+            )
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        let report = |id: &str, intent: &str| Letter {
+            id: id.into(),
+            from: agent(&pair.mini),
+            to: mac_id.clone(),
+            reply_to: None,
+            kind: "report".into(),
+            intent: intent.into(),
+            body: "the work is done".into(),
+            now: false,
+        };
+        let (first, second) = (report("letter-70", "result"), report("letter-71", "more"));
+        let taken = Outcome::Taken {
+            recipient: agent(&pair.mac),
+        };
+        assert_eq!(carried(&pair, first.clone()), taken, "{tag}");
+
+        let Pair { mac, mini, .. } = pair;
+        let before = (*mac.runtime.lock().unwrap().delivery_state().unwrap()).clone();
+        let [waiting, kept] = &before.letters[released..] else {
+            panic!("{tag}: {:?}", &before.letters[released..]);
+        };
+        assert!(waiting.recipient.core_of(&mini_key()), "{tag}");
+        assert_eq!(
+            waiting.recipient.core_address().map(|address| address.id),
+            Some(mini_id.as_str()),
+            "{tag}"
+        );
+        assert!(kept.sender.core_of(&mini_key()), "{tag}");
+        assert_eq!(kept.core_id.as_deref(), Some("letter-70"), "{tag}");
+        let starts: Vec<(&str, &str)> = before
+            .core_starts
+            .iter()
+            .map(|start| (start.origin.as_str(), start.key.as_str()))
+            .collect();
+        assert_eq!(starts, [(mac_id.as_str(), mini_key().as_str())], "{tag}");
+
+        // The next start, as `hided` runs it before the core reads the
+        // folder, and the ledger as the store then reads it.
+        let root = mac.stop();
+        let state = root.path().join("state");
+        assert_eq!(second_start(&state), Vec::<String>::new(), "{tag}");
+        let after = crate::delivery::store::load(&hide_kit::layout::delivery_store(&state))
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        assert_eq!(after.letters, before.letters, "{tag}");
+        assert_eq!(after.agents, before.agents, "{tag}");
+        assert_eq!(after.core_starts, before.core_starts, "{tag}");
+
+        // The core that starts over it is the same to the other machine.
+        let pair = Pair::of(Fixture::start_in(root), mini);
+        assert_eq!(pair.mac.ids["worker"], mac_id, "{tag}");
+        let leaving = outbox(&pair.mac, &mini_key());
+        assert_eq!(leaving.len(), 1, "{tag}: {leaving:?}");
+        assert_eq!(leaving[0].id, waiting.id, "{tag}");
+        assert_eq!(leaving[0].to, mini_id, "{tag}");
+        assert_eq!(leaving[0].from, agent(&pair.mac), "{tag}");
+        assert_eq!(
+            pair.mac_to_mini(),
+            [Outcome::Taken {
+                recipient: agent(&pair.mini)
+            }],
+            "{tag}"
+        );
+        assert_eq!(carried(&pair, first), taken, "{tag}");
+        assert_eq!(
+            letters(&pair.mac).len(),
+            before.letters.len(),
+            "{tag}: kept once"
+        );
+        assert_eq!(carried(&pair, second), taken, "{tag}");
+    }
 }

@@ -320,6 +320,27 @@ class Scenario:
                                "--body 'core-a asks dev-a'")
         return "dev-a -> core-a (progress), core-a -> dev-a (request)"
 
+    def paired_letter(self):
+        """A letter from core-a to an agent of a machine paired with the
+        core (PRD device-connect-iroh D-71): the ledger keeps it under that
+        machine's connection id, addressed to a registration there. The
+        scenario pairs no machine, so every release records the step as not
+        done until a generator starts a second Hide beside the core;
+        `hide-core`'s tests write these records over each released folder
+        until then (`docs/TESTING.md`, Upgrading a released state folder)."""
+        peers = ((self.daemon.snapshot() or {}).get("navigator") or {}).get("peers") or []
+        machine = next((peer for peer in peers if peer.get("opens") == "active" and peer.get("connected")), None)
+        if machine is None:
+            raise NotInRelease("the core opens no paired machine")
+        device = machine["device_id"]
+        listed = self.checked("core-a", f"hide agent list --machine {device}")
+        agent = next((row.get("id") for row in listed.get("items") or [] if row.get("id")), None)
+        if agent is None:
+            raise Stop(f"{device} lists no agent to write to")
+        self.checked("core-a", f"hide request send core:{device}:agent:{agent} --intent release-state-core-to-paired "
+                               "--kind request --body 'core-a asks the paired machine'")
+        return f"core-a -> core:{device}:agent:{agent} (request)"
+
     def memory(self):
         rest = self.daemon.snapshot()
         for device, path in ((True, DEVICE_REPO), (False, str(CORE_REPO))):
@@ -602,12 +623,38 @@ class Scenario:
         raise Stop(f"the dormant sleep was refused: {last}")
 
     def remains(self):
+        """A Remains card of the device project opened while dev-a's tab is
+        in front: a release with the 보기 slot keeps it in the slot
+        (`detail`), a later one as a card tab on that tab's desk (`trays`),
+        both naming the device's project and checkout."""
         workspace, checkout = self.checkout(self.daemon.snapshot(), True, DEVICE_REPO)
         self.show(self.agents["dev-a"]["pane"])
         self.send("detail_open", {"item": {"kind": "remains", "workspace_id": workspace["id"], "checkout_id": checkout["id"]}})
-        self.wait(lambda rest: "remains" in json.dumps(((rest.get("ui_state") or {}).get("detail") or {}).get("items")),
-                  "the Remains item in the slot")
-        return checkout["id"]
+
+        def kept(rest):
+            if "remains" in json.dumps(((rest.get("ui_state") or {}).get("detail") or {}).get("items")):
+                return "slot"
+            return "desk" if "remains" in json.dumps((rest.get("workspace_view") or {}).get("layout")) else None
+        return f"{checkout['id']} on the {self.wait(kept, 'the Remains card')}"
+
+    def pair(self):
+        """dev-a's tab drawn in pair view beside its desk: the tray keeps the
+        device pane it pairs (`trays[].pair`). A release before desks has no
+        pair view."""
+        pane = self.agents["dev-a"]["pane"]
+        self.show(pane)
+        seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+        self.send("pair_view", {"pane_id": pane})
+
+        def answered(rest):
+            error = (rest.get("status") or {}).get("last_error") or {}
+            if error != seen and error.get("kind") == "event.unknown_kind":
+                raise NotInRelease(error.get("message"))
+            if error != seen and str(error.get("kind")).startswith("pair_view."):
+                raise Stop(f"pair view was refused: {error}")
+            pairs = (rest.get("workspace_view") or {}).get("pairs") or []
+            return next((row["tab_id"] for row in pairs if row.get("pane_id") == pane), None)
+        return f"{pane} paired on tab {self.wait(answered, 'the pair view')}"
 
     def project_settings(self):
         """Project settings saved for a core and a device project, as the
@@ -738,13 +785,15 @@ class Scenario:
             self.step("views opened from two device sessions and the core", self.views)
             self.step("device pane move", self.pane_move)
             self.step("letters to and from a device agent", self.letters)
+            self.step("letter to an agent of a paired machine", self.paired_letter)
             self.step("project memory cards", self.memory)
             self.step("plan step spawned from a device session", self.plan_spawn)
             self.step("mission conducted on the device with its worker there", self.mission)
             self.step("decision View opened by a device agent and closed", self.decision_view)
             self.step("gate shown behind that decision", self.shown_gate)
             self.step("missions in each state a later build reads", self.mission_states)
-            self.step("remains item in the detail slot", self.remains)
+            self.step("remains card beside a device agent", self.remains)
+            self.step("pair view of a device agent's tab", self.pair)
             self.step("sleeping device agent", self.sleep)
             self.step("Pi on the core asleep with its pane closed", self.dormant)
             self.step("agent started from the start panel", self.start_panel)

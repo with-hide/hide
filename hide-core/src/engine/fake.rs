@@ -174,6 +174,8 @@ struct Shared {
     /// The definitions the core handed this engine, as a real engine keeps
     /// them; the built-in ones until it does.
     definitions: Mutex<Option<Arc<hide_agent_adapter::definition::Catalog>>>,
+    /// The resumes a test said this engine typed, for the core to take.
+    resumed: Mutex<Vec<super::ResumedPane>>,
 }
 
 /// The stand-in engine; [`FakeEngine::engine`] hands the core its
@@ -199,9 +201,18 @@ impl FakeEngine<'static> {
                 arrived: std::sync::Condvar::new(),
                 wake: Mutex::default(),
                 definitions: Mutex::default(),
+                resumed: Mutex::default(),
             }),
             gates: Vec::new(),
         })
+    }
+
+    /// Says the engine resumed the agent saved in `pane` there.
+    pub(crate) fn resumed(&self, pane: &str) {
+        lock(&self.shared.resumed).push(super::ResumedPane {
+            pane: pane.to_owned(),
+            saved: pane.to_owned(),
+        });
     }
 
     /// An engine that is not running: every call fails as a call to a
@@ -337,6 +348,10 @@ impl<'g> Engine for FakeEngine<'g> {
             });
         hide_agent_adapter::definition::find(definitions, kind)
             .and_then(|definition| definition.executables.first().cloned())
+    }
+
+    fn take_resumed(&self) -> Vec<super::ResumedPane> {
+        std::mem::take(&mut *lock(&self.shared.resumed))
     }
 
     fn hook_session(
@@ -824,8 +839,11 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("delivery_agent", json!({"target": target}))
     }
 
-    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
-        self.ask("prompt_agent", json!({"target": target, "text": text}))
+    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()> {
+        self.ask(
+            "prompt_agent",
+            json!({"target": target, "text": text, "by": format!("{by:?}")}),
+        )
     }
 
     fn create_worktree(

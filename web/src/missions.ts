@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -312,19 +312,31 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
   });
 }
 
-/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): the operator's turn, else its state. */
+/** The colour a mission's own chip wears on the sidebar row, the Overview and its Conductor's pane (B35): the operator's turn, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  return missionToneOf(mission.status, missionTurn(mission) !== null);
+  return missionToneOf(mission.status, missionTurn(mission) !== null, missionStalled(mission));
 }
 
-/** A mission chip's colour from its status and whether the operator's turn waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
-export function missionToneOf(status: Mission["status"], turn: boolean): CellTone {
+/**
+ * Whether no one moves a mission's work: a node stopped (`nodePace`) and none
+ * at work, so its chips turn from the working colour to the stopped one
+ * (operator decision 2026-11-20). A node waiting on CI or a review still
+ * counts as at work, and a mission between steps with nothing stopped is not
+ * stalled.
+ */
+export function missionStalled(mission: MissionBrief): boolean {
+  const cells = missionCells(mission);
+  return cells.includes("stopped") && !cells.includes("working");
+}
+
+/** A mission chip's colour from its status, whether the operator's turn waits and whether it stalled: the one rule every mission chip follows. */
+export function missionToneOf(status: Mission["status"], turn: boolean, stalled: boolean): CellTone {
   if (turn) return "hold";
   switch (status) {
     case "planning":
       return "waiting";
     case "running":
-      return "working";
+      return stalled ? "stopped" : "working";
     case "merge_wait":
       return "review";
     case "done":
@@ -504,7 +516,7 @@ export function nodePace(mission: Pick<Mission, "status">, node: Pick<MissionNod
   if (nodeLook(mission, node) !== "working") return null;
   const state = node.work?.state;
   if (state === "stopped" || state === "no_worker") return "stopped";
-  if (state === "waiting" || workerAsleep(node)) return "waiting";
+  if (state === "waiting" || state === "asleep" || workerAsleep(node)) return "waiting";
   return "working";
 }
 
@@ -621,6 +633,31 @@ export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], en
   const running = last.status !== "done" && last.status !== "dropped";
   const stop = running ? end : last.at_unix_ms;
   return { took: start ? Math.max(0, stop - start.at_unix_ms) : null, running };
+}
+
+/**
+ * Where a node's time went (mission-82), as `hide mission show` splits it:
+ * `work` from when it last went to work (its start, or back from a finish)
+ * until its worker's lines stood met, `review` from then until it finished,
+ * and `wait` from when it could have started until it did; a span still
+ * running counts to `end`. A part the record cannot say (no start yet, a
+ * book from before the stamps) is null, and so is a wait under a minute.
+ * Null when neither work nor review can be said of a node that started, so
+ * a wait alone never stands in for its total.
+ */
+export function nodeSpans(node: MissionNode, end: number): { work: number | null; review: number | null; wait: number | null } | null {
+  const started = node.started_at_unix_ms;
+  const from = node.worked_at_unix_ms ?? started;
+  const finished = node.finished_at_unix_ms;
+  const met = node.own_met_at_unix_ms ?? null;
+  const span = (since: number, to: number) => Math.max(0, to - since);
+  const work = from == null ? null : met != null ? span(from, met) : finished == null ? span(from, end) : null;
+  const review = met == null ? null : span(met, finished ?? end);
+  const ready = node.ready_at_unix_ms ?? null;
+  const waited = ready == null ? null : started != null ? span(ready, started) : node.status === "planned" ? span(ready, end) : null;
+  const wait = waited != null && waited >= 60_000 ? waited : null;
+  if (work == null && review == null && (started != null || wait == null)) return null;
+  return { work, review, wait };
 }
 
 /**
@@ -749,7 +786,7 @@ export function escalationWhy(escalation: WorkerEscalation, t: TFunction<"transl
 }
 
 /** The escalations a held letter to the parent raises. */
-const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked", "bell_exhausted", "undelivered"]);
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked"]);
 
 /**
  * A node worker's escalation as the mission shows it, the one rule 내 차례
@@ -828,7 +865,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 잠듦`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
@@ -837,6 +874,8 @@ export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">
       return t("mission.work.stopped", { why: t("mission.work.stop.noWorker") });
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "asleep":
+      return t("mission.worker.asleep");
     case "stopped":
       return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
   }
@@ -902,7 +941,7 @@ export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps
   return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan" })), now: null };
 }
 
-/** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
+/** The events the core sends for `missionId`, which it does only for the mission open as a card tab on a desk (D-22). */
 export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
   const events = rest?.mission_events;
   return events && events.mission === missionId ? events : null;
@@ -1009,7 +1048,7 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
   // A refused close says how many finished nodes have a line empty when the core counted them.
   if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
@@ -1104,19 +1143,18 @@ export function attentionWords(node: MissionNode, t: TFunction<"translation">): 
 }
 
 /**
- * A Conductor's hold on a node that has not started
- * (`hide mission node --hold`): the card's grey pause line and the list's
- * `⏸N`. None once the node started or left the plan, or for a mission that
- * ended; the core lifts an expired hold within a minute.
+ * What a node waits on that its Conductor set, as the core decides it
+ * (`Mission::wait_of`): its own hold or the mission's delay, the card's grey
+ * pause line `기다리는 중 · <why> · <time>`. None while nothing holds it; the
+ * core lifts an expired wait within a minute.
  */
-export function nodeHold(mission: Mission, node: MissionNode): MissionNodeHold | null {
-  if (mission.status === "done" || mission.status === "cancelled" || node.status !== "planned") return null;
-  return node.hold ?? null;
+export function nodeWait(node: MissionNode): MissionNodeWait | null {
+  return node.wait ?? null;
 }
 
-/** How many of a mission's nodes its Conductor holds back now (`nodeHold`). */
+/** How many of a mission's nodes its Conductor holds back on their own now (the list's `보류 N`); a mission's delay is its pill's to say. */
 export function heldNodes(mission: Mission): number {
-  return mission.nodes.filter((node) => nodeHold(mission, node) !== null).length;
+  return mission.nodes.filter((node) => node.wait != null && !node.wait.mission).length;
 }
 
 /**
@@ -1129,16 +1167,16 @@ export function heldNodes(mission: Mission): number {
  * nothing.
  */
 export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): { short: string; full: string[] } | null {
-  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
+  // An older core's review warning carries no rounds (a connected device of an earlier build): it says nothing rather than `0/0`.
+  const rounds = node.review_rounds;
+  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []).filter((warning) => warning.kind !== "review_fails" || rounds != null);
   const first = warnings[0];
   if (!first) return null;
   const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
   const words = (warning: MissionNodeWarning, form: "short" | "full") => {
     switch (warning.kind) {
       case "review_fails":
-        return t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 });
-      case "no_push":
-        return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
+        return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
       case "stopped":
         return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
     }

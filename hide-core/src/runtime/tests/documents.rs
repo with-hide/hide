@@ -522,7 +522,7 @@ fn a_diff_shown_in_a_devices_checkout_behind_brings_it_forward_with_its_device()
         Some(other_id.as_str())
     );
     let layout = runtime
-        .view_layout_of(&(DEVICE.to_owned(), other.clone()))
+        .front_tray_layout(&(DEVICE.to_owned(), other.clone()))
         .expect("the device checkout's View areas");
     let diff = layout
         .displays()
@@ -1678,7 +1678,11 @@ fn a_device_workspaces_displays_wait_for_its_helper_after_a_restart() {
         let mut store =
             WorkspaceViewStore::open(views_dir.join("views.json"), Default::default()).0;
         // The file's diff, and the file beside it in use.
-        let layout = &mut store.views.entry(DEVICE, &root).layout;
+        let layout = &mut store
+            .views
+            .entry(DEVICE, &root)
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout;
         let diff = layout.new_display(&f.path("a.txt"), DisplayKind::Diff, Some(false), false);
         layout.insert("a1", diff, 1).unwrap();
         let file = layout.new_display(&f.path("a.txt"), DisplayKind::File, None, false);
@@ -1821,8 +1825,10 @@ fn a_quit_mid_restore_keeps_the_stored_layout_byte_for_byte() {
     // and a.txt in the area beside it, which was in use.
     let mut views = crate::workspace_views::WorkspaceViews::default();
     let entry = views.entry(DEVICE, &f.root.to_string_lossy());
-    entry.show_documents();
-    let layout = &mut entry.layout;
+    entry.show_tray(crate::workspace_views::PENDING_TRAY);
+    let layout = &mut entry
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let diff = layout.new_display(&f.path("a.txt"), DisplayKind::Diff, Some(false), false);
     layout.insert("a1", diff, 1).unwrap();
     let preview = layout.new_display(&f.path("b.txt"), DisplayKind::File, None, true);
@@ -1904,7 +1910,10 @@ fn a_preview_open_landing_right_after_its_restore_read_replaces_that_preview() {
     let views_dir = f.runtime_dir("hide-document-views-");
     let file = views_dir.join("workspace-views.json");
     let mut views = crate::workspace_views::WorkspaceViews::default();
-    let layout = &mut views.entry(DEVICE, &f.root.to_string_lossy()).layout;
+    let layout = &mut views
+        .entry(DEVICE, &f.root.to_string_lossy())
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let restored = layout.new_display(&f.path("b.txt"), DisplayKind::File, None, true);
     layout.insert("a1", restored, 1).unwrap();
     crate::workspace_views::save(&file, &views).unwrap();
@@ -2038,7 +2047,7 @@ fn a_gui_file_read_opens_file_views_when_its_document_lands() {
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
         assert!(
-            view.open && view.documents,
+            view.open && view.tray.shown,
             "a successful GUI open must be visible"
         );
         assert_eq!(view.layout.display_count, 1);
@@ -2160,7 +2169,7 @@ fn a_coalesced_gui_read_serves_each_live_requesting_tab() {
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
         assert!(
-            view.open && view.documents,
+            view.open && view.tray.shown,
             "B's explicit GUI open must become visible (A closed: {close_a})"
         );
         assert_eq!(view.layout.display_count, 1);
@@ -2245,7 +2254,7 @@ fn a_gui_read_places_an_existing_dirty_buffer_in_its_requesting_tab() {
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert!(
-        view.open && view.documents,
+        view.open && view.tray.shown,
         "A's GUI placement must survive an existing buffer"
     );
     assert_eq!(view.layout.display_count, 1);
@@ -2447,7 +2456,7 @@ fn a_gui_read_survives_another_tabs_clean_buffer_retirement() {
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert!(
-        view.open && view.documents,
+        view.open && view.tray.shown,
         "A still owns its accepted GUI open"
     );
     assert_eq!(view.layout.display_count, 1);
@@ -2517,8 +2526,7 @@ fn the_same_path_on_two_devices_is_two_documents_in_two_views() {
             .views
             .get(device, &path)
             .map(|view| {
-                view.layout
-                    .displays()
+                view.views()
                     .map(|display| display.tab_id.clone())
                     .collect::<Vec<_>>()
             })
@@ -2559,7 +2567,10 @@ fn a_retried_view_shows_opening_while_its_read_is_in_flight() {
     let views_dir = f.runtime_dir("hide-document-views-");
     let file = views_dir.join("workspace-views.json");
     let mut views = crate::workspace_views::WorkspaceViews::default();
-    let layout = &mut views.entry(DEVICE, &root).layout;
+    let layout = &mut views
+        .entry(DEVICE, &root)
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let restored = layout.new_display(&f.path("gone.txt"), DisplayKind::File, None, false);
     let restored_id = restored.id.clone();
     layout.insert("a1", restored, 1).unwrap();

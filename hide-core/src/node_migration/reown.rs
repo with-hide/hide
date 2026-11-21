@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
     MISSIONS, MISSIONS_DIR, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
-    WORKSPACE_VIEWS, mission_files, read_json, read_marker, write,
+    WORKSPACE_VIEWS, mission_files, read_marker, read_store, store_path, write, write_store,
 };
 use crate::node::NodeId;
 
@@ -234,14 +234,14 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         MISSIONS,
     ]
     .into_iter()
-    .map(|file| (file, file.to_owned(), staging.join(file)));
+    .map(|file| (file, file.to_owned(), store_path(staging, file)));
     // Each mission's file is keyed as the book it is one mission of.
     let missions = mission_files(staging)
         .map_err(|reason| refuse(&staging.join(MISSIONS_DIR), reason))?
         .into_iter()
         .map(|(name, path)| (MISSIONS, name, path));
     for (file, name, path) in stores.chain(missions) {
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some(mut value) = read_store(&path).map_err(|reason| refuse(&path, reason))? else {
             continue;
         };
         let before = value.clone();
@@ -263,9 +263,7 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
             ));
         }
         if value != before {
-            let bytes =
-                serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
-            write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+            write_store(&path, &value).map_err(|reason| refuse(&path, reason))?;
             outcome.files.push(name);
         }
     }
@@ -730,6 +728,7 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
                 }
             }
         }
+        map_trays(view, map);
         super::each_opener(view, &mut |device| match device
             .as_str()
             .map(|id| map(Moves::Device, id))
@@ -740,6 +739,49 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
             }
             _ => false,
         });
+    }
+}
+
+/// Each card's project, checkout and session machine, on a tray or not
+/// (PRD lane-desk-pair-view D-06, D-13); a tray's tab is a `KEYS` row.
+fn map_trays(view: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+    fn set(value: Option<&mut Value>, kind: Moves, map: &dyn Fn(Moves, &str) -> Mapped) {
+        if let Some(value) = value
+            && let Some(Mapped::To(id)) = value.as_str().map(|text| map(kind, text))
+        {
+            *value = Value::String(id);
+        }
+    }
+    fn cards(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(card) = fields.get_mut("card") {
+                    set(card.get_mut("workspace_id"), Moves::Registration, map);
+                    set(card.get_mut("checkout_id"), Moves::Checkout, map);
+                    set(
+                        card.get_mut("session")
+                            .and_then(|session| session.get_mut("device_id")),
+                        Moves::Device,
+                        map,
+                    );
+                }
+                for (key, entry) in fields.iter_mut() {
+                    if key != "card" {
+                        cards(entry, map);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| cards(item, map)),
+            _ => {}
+        }
+    }
+    for tray in each(view, "trays") {
+        if let Some(layout) = tray.get_mut("layout") {
+            cards(layout, map);
+        }
+    }
+    if let Some(shelf) = view.get_mut("shelf") {
+        cards(shelf, map);
     }
 }
 
@@ -1479,7 +1521,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path();
         let write = |name: &str, value: Value| {
-            std::fs::write(state.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+            super::super::write_store(&super::super::store_path(state, name), &value).unwrap();
         };
         let panes = before("pane");
         let devices = before("device");
@@ -1593,6 +1635,19 @@ mod tests {
                     }))
                     .collect(),
             );
+            // Slot cards still moving to their panes' desks.
+            core["moving_cards"] = Value::Array(
+                (0..3)
+                    .map(|index| json!({
+                        "pane": panes[index],
+                        "cards": [
+                            {"kind": "remains", "workspace_id": registrations[index], "checkout_id": checkouts[index]},
+                            {"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
+                        ],
+                        "shown": false,
+                    }))
+                    .collect(),
+            );
             core["agent_permissions"] = permissions;
             core["device_agent_permissions"] = device_permissions;
             core
@@ -1629,13 +1684,21 @@ mod tests {
             json!({"schema_version": 3, "workspaces": [
                 {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "pane_moves": pane_move(0),
                  "tab_views": {tabs[0].clone(): "d1"},
+                 "trays": [{"tab": tabs[0].clone(),
+                     "layout": {"root": {"area": {"id": "a9", "displays": [
+                         {"id": "d9", "kind": "card", "opener": {"device_id": ALIAS, "terminal_id": "t2"},
+                          "card": {"kind": "record", "session": {"device_id": ALIAS, "agent": "claude", "session_id": "s1"}}}]}}}}],
                  "view_layout": {"root": {"split": {"id": "s1", "first": {"area": {"id": "a1", "displays": [{"id": "d1", "opener": {"device_id": M, "terminal_id": "t1"}}]}},
                      "second": {"area": {"id": "a2", "displays": [{"id": "d2", "opener": {"device_id": ALIAS, "terminal_id": "t2"}}, {"id": "d3", "opener": {"device_id": X, "terminal_id": "t3"}}]}}}}},
                  "feedback": {"comments": feedback_comments, "waiting": feedback_waiting}},
                 {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "pane_moves": pane_move(1),
-                 "tab_views": {tabs[1].clone(): "d2"}, "view_layout": {}},
+                 "tab_views": {tabs[1].clone(): "d2"}, "view_layout": {},
+                 "trays": [{"tab": tabs[1].clone(), "layout": {}}],
+                 "shelf": {"root": {"area": {"id": "shelf", "displays": [
+                     {"id": "d8", "kind": "card", "card": {"kind": "remains", "workspace_id": registrations[1], "checkout_id": checkouts[1]}}]}}}},
                 {"device_id": X, "path": X_ROOT, "agent_layout": layout(&tabs[2]), "pane_moves": pane_move(2),
-                 "tab_views": {tabs[2].clone(): "d3"}, "view_layout": {}},
+                 "tab_views": {tabs[2].clone(): "d3"}, "view_layout": {},
+                 "trays": [{"tab": tabs[2].clone(), "layout": {}}]},
             ]}),
         );
         write(
@@ -1649,6 +1712,7 @@ mod tests {
         let mut ledger = json!({
                 "version": 1, "next_id": 9,
                 "letters": (0..3).map(|index| json!({
+                    "id": format!("letter-{}", index + 4),
                     "sender": actor(index), "recipient": actor((index + 1) % 3),
                     "watch_warning": {"target": actor(index)}, "body": "from mini to studio",
                 })).collect::<Vec<_>>(),
@@ -1659,18 +1723,14 @@ mod tests {
                     {"id": "agent-3", "machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
                 ],
                 "spawns": [
-                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
-                    {"parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
-                    {"parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
+                    {"id": "spawn-7", "parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
+                    {"id": "spawn-8", "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
+                    {"id": "spawn-9", "parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
                 "identity_waits": ([M, ALIAS, X].iter().enumerate().map(|(index, machine)| json!({
                     "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
                     "name": format!("fork-{index}"), "kind": "codex", "owed": {"for": "fork", "origin": "agent-1"},
                 }))).collect::<Vec<_>>(),
-                "node_clocks": {
-                    ALIAS: {"connected_ms": 600_000, "since": null},
-                    X: {"connected_ms": 60_000, "since": null},
-                },
         });
         // Each machine's session is the main of a plan step's spawn.
         for (index, spawn) in ledger["spawns"]
@@ -1736,8 +1796,13 @@ mod tests {
         dir
     }
 
+    /// The store at `path` as its rewrites read it: `delivery-ledger.json`
+    /// names the delivery ledger, which its store holds.
     fn read(path: &Path) -> Value {
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        let name = path.file_name().unwrap().to_str().unwrap();
+        super::super::read_store(&super::super::store_path(path.parent().unwrap(), name))
+            .unwrap()
+            .unwrap()
     }
 
     fn rows(state: &Path, file: &str) -> Vec<(&'static str, Moves)> {
@@ -1883,6 +1948,14 @@ mod tests {
         // A View's opener on the mini names it by the new owner's node id,
         // wherever in a layout it sits (PRD view-opener-feedback B41).
         let mac_views = &views["workspaces"][0];
+        // A tray names its tab and its cards' machines as the new owner does
+        // (PRD lane-desk-pair-view D-06).
+        let moved = |kind: &str| shapes(kind).into_iter().next().unwrap().1;
+        let tray = &mac_views["trays"][0];
+        assert_eq!(tray["tab"], json!(moved("tab")));
+        let card = &tray["layout"]["root"]["area"]["displays"][0];
+        assert_eq!(card["opener"]["device_id"], json!(C));
+        assert_eq!(card["card"]["session"]["device_id"], json!(C));
         let split = &mac_views["view_layout"]["root"]["split"];
         assert_eq!(
             split["first"]["area"]["displays"][0]["opener"]["device_id"],
@@ -2329,9 +2402,9 @@ mod tests {
 
     /// A promotion task of a Project's card, as the ledger keeps it: the
     /// intent carries the digest of the Project's id.
-    fn promotion_spawn(project_id: &str, target: &str) -> Value {
+    fn promotion_spawn(id: &str, project_id: &str, target: &str) -> Value {
         json!({
-            "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
+            "id": id, "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
             "intent": format!(
                 "{}{target}-a1-x",
                 crate::runtime::memory_promotion::intent_prefix(project_id)
@@ -2354,14 +2427,11 @@ mod tests {
         let moving = device_digest(ALIAS, C_ROOT);
         let mut ledger = read(&state.join(DELIVERY_LEDGER));
         let spawns = ledger["spawns"].as_array_mut().unwrap();
-        spawns.push(promotion_spawn(&leftover, "m1"));
-        spawns.push(promotion_spawn(&moving, "m1"));
-        spawns.push(promotion_spawn(&leftover, "m9"));
-        std::fs::write(
-            state.join(DELIVERY_LEDGER),
-            serde_json::to_vec(&ledger).unwrap(),
-        )
-        .unwrap();
+        spawns.push(promotion_spawn("spawn-10", &leftover, "m1"));
+        spawns.push(promotion_spawn("spawn-11", &moving, "m1"));
+        spawns.push(promotion_spawn("spawn-12", &leftover, "m9"));
+        super::super::write_store(&super::super::store_path(state, DELIVERY_LEDGER), &ledger)
+            .unwrap();
 
         reown(state, &forward(), &forward_ids()).unwrap();
         let ledger = read(&state.join(DELIVERY_LEDGER));
@@ -2575,8 +2645,10 @@ mod tests {
                 crate::workspace_views::save(&written, &views).unwrap();
             }
             DELIVERY_LEDGER => {
-                let ledger = crate::delivery::ledger::load(&path).unwrap();
-                crate::delivery::ledger::save(&written, &ledger).unwrap();
+                let ledger =
+                    crate::delivery::store::load(&super::super::store_path(state, file)).unwrap();
+                crate::delivery::store::save(&super::super::store_path(out.path(), file), &ledger)
+                    .unwrap();
             }
             LOCAL_ISSUES => {
                 let store = crate::local_issues::load(&path).unwrap();
@@ -2622,8 +2694,15 @@ mod tests {
             )
             .unwrap(),
             DELIVERY_LEDGER => {
-                crate::delivery::ledger::save(path, &crate::delivery::ledger::Ledger::default())
-                    .unwrap()
+                // The ledger's own writer, then its fields in its store.
+                let mut value =
+                    serde_json::to_value(crate::delivery::ledger::Ledger::default()).unwrap();
+                for (key, field) in fields.as_object().unwrap() {
+                    value[key] = field.clone();
+                }
+                let store = super::super::store_path(path.parent().unwrap(), file);
+                super::super::write_store(&store, &value).unwrap();
+                return;
             }
             LOCAL_ISSUES => {
                 crate::local_issues::save(path, &crate::local_issues::LocalIssueStore::default())
@@ -2682,12 +2761,21 @@ mod tests {
                 "active_area": "a1", "next_id": 2, "canvases": {"a1": tab},
             })
         };
+        // Each Workspace's desk of its Agent tab, as the core's own writer
+        // saves it.
+        let trays = |tab: &str| {
+            let mut views = crate::workspace_views::WorkspaceViews::default();
+            let view = views.entry(M, M_ROOT);
+            let tray = view.tray_entry(tab);
+            tray.shown = true;
+            serde_json::to_value(&view.trays).unwrap()
+        };
         store_with(
             WORKSPACE_VIEWS,
             &state.join(WORKSPACE_VIEWS),
             json!({"workspaces": [
-                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0])},
-                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1])},
+                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "trays": trays(&tabs[0])},
+                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "trays": trays(&tabs[1])},
             ]}),
         );
         // The ledger's own rule: an agent's actor is on its machine and names
@@ -2735,6 +2823,52 @@ mod tests {
         )
         .unwrap();
         dir
+    }
+
+    /// A desk follows its Agent tab to the id the new owner gives it, as the
+    /// new core's own reader loads it, and back again (PRD
+    /// lane-desk-pair-view D-06): a desk left on the old
+    /// tab id would be a tab no engine has, and the operator's Views on it
+    /// would be shown nowhere.
+    #[test]
+    fn a_desk_follows_its_tab_to_the_new_owners_id() {
+        let dir = reader_folder();
+        let state = dir.path();
+        let tabs: BTreeMap<String, String> = shapes("tab").into_iter().collect();
+        let desks = |state: &Path| -> Vec<(String, String, String)> {
+            let (views, _) = crate::workspace_views::load(&state.join(WORKSPACE_VIEWS), 0);
+            let mut desks: Vec<_> = views
+                .workspaces
+                .iter()
+                .flat_map(|view| {
+                    view.trays
+                        .iter()
+                        .map(|tray| (view.device_id.clone(), view.path.clone(), tray.tab.clone()))
+                })
+                .collect();
+            desks.sort();
+            desks
+        };
+        let start = desks(state);
+        let [mac, mini] = [0, 1].map(|index| before("tab")[index].clone());
+        assert_eq!(
+            start,
+            vec![
+                (M.into(), M_ROOT.into(), mac.clone()),
+                (ALIAS.into(), C_ROOT.into(), mini.clone()),
+            ]
+        );
+
+        reown(state, &forward(), &forward_ids()).unwrap();
+        let mut expected = vec![
+            (M.to_owned(), M_ROOT.to_owned(), tabs[&mac].clone()),
+            (C.to_owned(), C_ROOT.to_owned(), tabs[&mini].clone()),
+        ];
+        expected.sort();
+        assert_eq!(desks(state), expected);
+
+        reown(state, &back(), &back_ids()).unwrap();
+        assert_eq!(desks(state), start);
     }
 
     /// A key a move writes that its store's type does not model is gone at
@@ -2925,7 +3059,8 @@ mod tests {
         )
         .unwrap();
         // The fixture is a ledger the MacBook's core loads.
-        crate::delivery::ledger::load(&path).unwrap();
+        crate::delivery::store::load(&super::super::store_path(dir.path(), DELIVERY_LEDGER))
+            .unwrap();
         dir
     }
 
@@ -2968,10 +3103,11 @@ mod tests {
         let dir = ledger_folder();
         let state = dir.path();
         let path = state.join(DELIVERY_LEDGER);
-        let original = crate::delivery::ledger::load(&path).unwrap();
+        let store = super::super::store_path(state, DELIVERY_LEDGER);
+        let original = crate::delivery::store::load(&store).unwrap();
 
         reown(state, &forward(), &IdTable::default()).unwrap();
-        crate::delivery::ledger::load(&path).expect("the mini's core loads the moved ledger");
+        crate::delivery::store::load(&store).expect("the mini's core loads the moved ledger");
         let moved = read(&path);
         // Children that were on the mini are on the core's own machine now,
         // those on the MacBook are on a device under its node id.
@@ -3009,7 +3145,7 @@ mod tests {
         assert_eq!(devices("watches", "target"), [json!(C)]);
 
         reown(state, &back(), &IdTable::default()).unwrap();
-        assert_eq!(crate::delivery::ledger::load(&path).unwrap(), original);
+        assert_eq!(crate::delivery::store::load(&store).unwrap(), original);
     }
 
     /// The machine taking the core keeps the name the operator registered it

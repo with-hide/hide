@@ -251,6 +251,7 @@ impl Writer {
             unsettled |= self.attempted_waits.remove(&id);
         }
         let waits_version = waits_on(ledger, &self.device);
+        let placed = placements(ledger);
         if !changed
             && !names_changed
             && !self.pending_names
@@ -258,14 +259,14 @@ impl Writer {
             && !unsettled
             && !self.pending_retry
             && self.acknowledged.is_empty()
-            && self.observed_registrations == Some(placements(ledger))
+            && self.observed_registrations == Some(placed)
             && self.observed_marks == Some(wanted_marks(marks))
             && self.observed_waits == Some(waits_version)
         {
             return;
         }
         self.pending_retry = false;
-        self.observed_registrations = Some(placements(ledger));
+        self.observed_registrations = Some(placed);
         self.observed_marks = Some(wanted_marks(marks));
         self.observed_waits = Some(waits_version);
         let (steps, deferred) = super::identity_wait::plan(
@@ -376,12 +377,28 @@ impl Drop for Writer {
         }
     }
 }
-/// How many registrations the ledger holds and where each one's pane is.
+/// How many registrations the ledger holds and every fact of each that its
+/// pane's tokens are written from (`lineage_patches`): where it is, its
+/// session, and who it is related to. A handover that gives an agent already
+/// registered in the pane its predecessor's parent and children moves no
+/// placement, only these (`coordination::hand_over`, PRD
+/// letters-missions-simplify D-24).
 fn placements(ledger: &Ledger) -> (usize, u64) {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for record in &ledger.agents {
-        (&record.id, &record.pane).hash(&mut hasher);
+        (
+            &record.id,
+            &record.pane,
+            &record.machine,
+            &record.host_scope,
+            &record.native_machine,
+            &record.actor.session,
+            &record.parent,
+            &record.origin,
+            record.forked,
+        )
+            .hash(&mut hasher);
     }
     (ledger.agents.len(), hasher.finish())
 }
@@ -642,6 +659,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         }
     }
     #[test]
@@ -1265,6 +1283,86 @@ mod tests {
             patch[0].tokens["parent_pane"],
             Value::String("w1:p1".into())
         );
+    }
+    /// PRD letters-missions-simplify D-24: the agent after a parent, or after
+    /// a fork's source, was registered in its pane before the handover, so
+    /// the handover moves no registration and no pane, only who the child or
+    /// the fork is related to; the pane, whose agents did not move, still has
+    /// its tokens written for the successor's session.
+    #[test]
+    fn a_handover_to_an_agent_already_registered_rewrites_its_dependents_tokens() {
+        for (forked, key) in [(false, "parent_session"), (true, "fork_source_session")] {
+            let (mut writer, batches, done, ledger, missing) = writer_fixture();
+            let mut registered = (*ledger).clone();
+            if forked {
+                let source = registered.agents[0].clone();
+                registered.agents[1] = fork("agent-2", "w2:p1", "child", &source);
+            }
+            registered
+                .agents
+                .push(record("agent-3", "w1:p1", "next-parent", None));
+            registered.next_id = 4;
+            let ledger = Arc::new(registered);
+            let observed = Instant::now();
+            writer.observe(
+                &ledger,
+                &missing,
+                &|_| true,
+                &BTreeMap::new(),
+                true,
+                observed,
+            );
+            let first = batches.try_recv().unwrap();
+            done.try_send(completion(&first, true, observed)).unwrap();
+            let mut matched = missing.clone();
+            matched[0].tokens = first.patches[0].tokens.clone();
+            writer.observe(
+                &ledger,
+                &matched,
+                &|_| true,
+                &BTreeMap::new(),
+                true,
+                observed,
+            );
+            writer.observe(
+                &ledger,
+                &matched,
+                &|_| true,
+                &BTreeMap::new(),
+                false,
+                observed,
+            );
+            assert!(batches.try_recv().is_err(), "settled");
+
+            let mut handed = (*ledger).clone();
+            for record in &mut handed.agents {
+                match record.id.as_str() {
+                    "agent-1" => {
+                        record.ended = true;
+                        record.successor = Some("agent-3".into());
+                    }
+                    "agent-2" if forked => record.origin = Some("agent-3".into()),
+                    "agent-2" => record.parent = Some("agent-3".into()),
+                    _ => {}
+                }
+            }
+            writer.observe(
+                &Arc::new(handed),
+                &matched,
+                &|_| true,
+                &BTreeMap::new(),
+                false,
+                observed,
+            );
+            let patch = batches.try_recv().unwrap().patches;
+            assert_eq!(patch.len(), 1, "{key}");
+            assert_eq!(patch[0].pane, "w2:p1");
+            assert_eq!(
+                patch[0].tokens[key],
+                Value::String(crate::engine::tokens::session_digest("next-parent").unwrap()),
+                "{key}"
+            );
+        }
     }
     #[test]
     fn a_registered_child_after_unregistered_native_prefix_receives_all_four_tokens() {

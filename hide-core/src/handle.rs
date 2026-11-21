@@ -415,7 +415,7 @@ impl Core {
                 None
             }
         };
-        let delivery_path = hide_kit::layout::delivery_ledger(
+        let delivery_path = hide_kit::layout::delivery_store(
             std::path::Path::new(&options.app_state_path)
                 .parent()
                 .unwrap_or(std::path::Path::new(".")),
@@ -539,6 +539,9 @@ impl Core {
             let desk_restored = desk.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
+            let (automations, automations_restored, zone) = crate::runtime::automations::restore(
+                hide_kit::layout::automations_store(directory),
+            );
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
@@ -549,6 +552,7 @@ impl Core {
             }
             guard.install_desk_store(desk, desk_restored);
             guard.install_access_store(access, access_restored);
+            guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -774,9 +778,9 @@ impl Core {
 
     /// The letters this core's agents wrote that wait to go to the core of
     /// machine `key` (`Runtime::core_outbox`).
-    pub fn core_outbox(&self, key: &str) -> Vec<crate::core_calls::Letter> {
+    pub fn core_outbox(&self, key: &str) -> crate::core_calls::Outbox {
         if !check_owner_thread(self, "core_calls.outbox") {
-            return Vec::new();
+            return crate::core_calls::Outbox::default();
         }
         lock_recover(&self.runtime).core_outbox(key)
     }
@@ -839,6 +843,27 @@ impl Core {
             notify_change(self);
         }
         answer
+    }
+
+    /// One call on the automations (PRD automations B10): the CLI's
+    /// `hide automation`, a form's preview, or a phone's run and pause.
+    /// One change under one short lock; the book is saved by its own thread
+    /// and the screens are told when the section moved.
+    pub fn automation(&self, call: crate::automations::Call) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "automation.call") {
+            return Err("automations_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime).automation_call(call);
+        if changed {
+            notify_change(self);
+        }
+        answer
+    }
+
+    /// Whether any automation is on, which hided reads every second for its
+    /// idle exit (PRD automations D-19) without taking the runtime lock.
+    pub fn automations_on(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        lock_recover(&self.runtime).automations_on()
     }
 
     /// Runs a Conductor's `hide mission` command (PRD
@@ -1001,14 +1026,16 @@ impl Core {
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
             match engine.hook_session(&pane, &report.runtime, session, lineage) {
-                Ok(false) => {}
-                // An agent resumed after its turn was cut off is owed one
-                // letter (PRD engine-bundle-4-herdr-removal D-22).
-                Ok(true) => lock_recover(&self.runtime).owe_transition_letter(
-                    caller,
-                    session,
-                    crate::links::now_ms(),
-                ),
+                // One the engine did not heal was never cut (PRD
+                // letters-missions-simplify D-19, B17).
+                Ok(healed) => {
+                    // A resume the engine said is taken and settled first,
+                    // in the same step, so this report never meets one
+                    // taken and not settled.
+                    let mut runtime = lock_recover(&self.runtime);
+                    runtime.take_heal(device, engine.as_ref(), crate::links::now_ms());
+                    runtime.hook_after_heal(device, caller, healed);
+                }
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "agent_hooks", "kind": "hook_session.refused",
                     "pane": caller, "device": device, "agent": report.runtime,
@@ -1113,6 +1140,26 @@ impl Core {
             return Err(crate::agent_profiles::UNANSWERED.into());
         }
         lock_recover(&self.runtime).prepare_agent_profile_command(device, command)
+    }
+
+    /// `hide skill` / `hide mcp` for a caller in `pane_id` on `device`: a
+    /// read answered at once, or a change queued, which the daemon then
+    /// waits on off this thread (`store_command::Prepared::run`). A refusal
+    /// is a delivery refusal string (`coordination::split_refusal`).
+    pub fn prepare_store(
+        &self,
+        device: &str,
+        pane_id: &str,
+        command: crate::store_command::StoreCommand,
+    ) -> Result<crate::store_command::Prepared, String> {
+        if !check_owner_thread(self, "store.prepare") {
+            return Err(crate::store_command::UNAVAILABLE.into());
+        }
+        let mut runtime = lock_recover(&self.runtime);
+        let prepared = runtime.prepare_store_command(device, pane_id, command);
+        drop(runtime);
+        self.notifier.notify();
+        prepared
     }
 
     /// A read of the operator's agent definition folder in `home`, made off

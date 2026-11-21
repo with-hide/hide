@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::coordination::{AgentRecord, Command};
-use crate::delivery::{Actor, ledger, worker::Worker};
+use crate::delivery::{Actor, ledger, store, worker::Worker};
 use crate::device_catalog::Fact;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
@@ -25,14 +25,27 @@ const DEVICE: &str = "mini";
 const CHECKOUT: &str = "/srv/repo.worktrees/topic";
 const CALLER: &str = "w2:p0";
 
-/// The device's node: its panes start the engine's own shell.
-struct Node;
+/// The device's node: its panes start the engine's own shell. It reads
+/// each folder as there, or as `folders` says in turn, the last one
+/// standing.
+#[derive(Default)]
+struct Node {
+    folders: Arc<Mutex<std::collections::VecDeque<bool>>>,
+}
 
 impl NodeLink for Node {
     fn call(&self, call: Call, _timeout: Duration) -> Result<LinkAnswer, LinkError> {
         Ok(LinkAnswer::Parsed(match call {
             Call::ShellIntegration => {
                 json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
+            }
+            Call::Directory { path } => {
+                let mut folders = self.folders.lock().unwrap();
+                let there = match folders.len() {
+                    0 | 1 => folders.front().copied(),
+                    _ => folders.pop_front(),
+                };
+                json!(there.unwrap_or(true).then_some(path))
             }
             // Asked before every start: the program takes its arguments.
             Call::AgentInstalled { .. } => json!("program"),
@@ -59,6 +72,24 @@ impl NodeLink for Node {
                     "this node answers only the spawn's reads".to_owned(),
                 ));
             }
+            // Where a branch a spawn makes starts: the repository is on
+            // `main` and has no fetched `origin/main`, so the start is left
+            // to the engine.
+            Call::Git {
+                command: hide_node_link::git::GitCommand::CurrentBranch,
+                ..
+            } => json!("main"),
+            Call::Git {
+                command: hide_node_link::git::GitCommand::RefCommit { .. },
+                ..
+            } => {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::NotFound,
+                    "no such ref",
+                )));
+            }
+            // Codex's trust of the worktree a spawn made.
+            Call::AgentTrust { trusted: true, .. } => Value::Null,
             other => panic!("unexpected call {other:?}"),
         }))
     }
@@ -78,6 +109,9 @@ struct Device {
     rename_refused: bool,
     /// Whether the caller's worktree is no longer listed.
     worktree_gone: bool,
+    /// Whether the branch a spawn asks for has no worktree yet, so the
+    /// spawn makes it.
+    unmade: bool,
     /// How many more terminal reads fail, as a reply lost on the way.
     lost_reads: usize,
     /// The workspaces carrying an owner mark, as the engine lists them.
@@ -98,6 +132,17 @@ fn device_engine(device: Arc<Mutex<Device>>) -> Fake {
             "worktree_path" if device.worktree_gone => {
                 refused("internal_error", "the repository is gone")
             }
+            "worktree_path" if device.unmade => reply(None::<String>),
+            // The engine opens the worktree it makes in a workspace of its
+            // own, whose first tab the spawn replaces with its launch.
+            "create_worktree" => reply(crate::engine::CreatedWorktree {
+                tab_label: "repo".into(),
+                workspace_id: "w3".into(),
+                tab_id: "w3:t1".into(),
+                pane_id: "w3:p0".into(),
+                path: format!("/srv/{}", params["branch"].as_str().unwrap()),
+                branch: params["branch"].as_str().map(str::to_owned),
+            }),
             // Another branch is another checkout of the repository.
             "worktree_path" if params["branch"] != "topic" => {
                 reply(Some(format!("/srv/{}", params["branch"].as_str().unwrap())))
@@ -200,6 +245,8 @@ pub(super) struct Spawner {
     path: PathBuf,
     _worker: Worker,
     pub(super) client: crate::delivery::worker::Client,
+    /// How the machine's node reads the spawn's folder, in turn.
+    folders: Arc<Mutex<std::collections::VecDeque<bool>>>,
 }
 
 /// A registered caller agent in pane `w2:p0` of the connected device `mini`,
@@ -210,6 +257,7 @@ fn spawner() -> Spawner {
         .unwrap_or_else(|e| e.into_inner());
     let root = tempfile::tempdir().unwrap();
     let (runtime, _, _, path) = crate::runtime::delivery::tests::fixture(root.path());
+    let folders = Arc::default();
     let actor = Actor {
         pane_id: format!("remote:{DEVICE}:pane:{CALLER}"),
         name: "lead".into(),
@@ -262,7 +310,9 @@ fn spawner() -> Spawner {
             DEVICE.to_owned(),
             hosts::DeviceHost::new(
                 hosts::HostPhase::Ready {
-                    host: Arc::new(Node),
+                    host: Arc::new(Node {
+                        folders: Arc::clone(&folders),
+                    }),
                     platform: "macos aarch64".to_owned(),
                     helper_path: Some("/fake/hided".to_owned()),
                     windows_drives: None,
@@ -347,17 +397,18 @@ fn spawner() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },
         1,
     )
     .unwrap();
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -375,6 +426,7 @@ fn spawner() -> Spawner {
         path,
         _worker: worker,
         client,
+        folders,
     }
 }
 
@@ -417,6 +469,8 @@ impl Spawner {
             context,
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
         };
         crate::coordination::run(
             self.client.clone(),
@@ -446,7 +500,7 @@ impl Spawner {
     }
 
     pub(super) fn ledger(&self) -> ledger::Ledger {
-        ledger::load(&self.path).unwrap()
+        store::load(&self.path).unwrap()
     }
 
     /// What the engine says of the started agent from now on
@@ -613,6 +667,7 @@ pub(super) fn local_spawner() -> Spawner {
     let root = tempfile::tempdir().unwrap();
     let (runtime, mut actor, _, path) = crate::runtime::delivery::tests::fixture(root.path());
     actor.session = crate::engine::tokens::session_digest("native-parent");
+    let folders = Arc::default();
     let device = Arc::new(Mutex::new(Device {
         caller: "sender".into(),
         checkout: LOCAL_CHECKOUT.into(),
@@ -641,9 +696,13 @@ pub(super) fn local_spawner() -> Spawner {
             runtime: std::sync::Weak::new(),
             notifier: ChangeNotifier::noop(),
             engine: fake.engine(),
-            node: Arc::new(Node),
+            node: Arc::new(Node {
+                folders: Arc::clone(&folders),
+            }),
         });
-        guard.own_node = Arc::new(Node);
+        guard.own_node = Arc::new(Node {
+            folders: Arc::clone(&folders),
+        });
         guard.snapshot.pane_layouts = vec![crate::model::PaneLayoutSnapshot {
             workspace_id: "workspace".into(),
             tab_id: "t1".into(),
@@ -675,17 +734,18 @@ pub(super) fn local_spawner() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },
         1,
     )
     .unwrap();
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -703,6 +763,7 @@ pub(super) fn local_spawner() -> Spawner {
         path,
         _worker: worker,
         client,
+        folders,
     }
 }
 
@@ -728,6 +789,40 @@ fn a_local_beside_handoff_is_drawn_at_once_beside_its_caller() {
             .any(|operation| operation.created_pane_id.as_deref() == Some("w2:p1")),
         "the split is drawn before the engine's layout lists it"
     );
+}
+
+/// A start that makes its worktree on this machine asks for the catalog
+/// again: with no window the Git watch rests, so nothing else would list the
+/// new worktree and a mission made in it would not find its project
+/// (`Runtime::worktree_made_here`). One that opens a worktree already there
+/// changed nothing in Git and asks for nothing.
+#[test]
+fn a_start_that_makes_its_worktree_here_asks_for_the_catalog() {
+    let reads_asked = |unmade: bool| {
+        let spawner = local_spawner();
+        spawner.device.lock().unwrap().unmade = unmade;
+        let asked = || {
+            let runtime = spawner.runtime.lock().unwrap();
+            runtime.worktrees_request().generation
+        };
+        let before = asked();
+        let child = spawner
+            .spawn(
+                "own-tab",
+                Ask {
+                    parent: None,
+                    beside: false,
+                    branch: "fresh",
+                    ..BESIDE
+                },
+            )
+            .unwrap();
+        assert_eq!(child["project"], "/srv/fresh");
+        assert_eq!(spawner.count("create_worktree"), usize::from(unmade));
+        asked() - before
+    };
+    assert_eq!(reads_asked(false), 0);
+    assert_eq!(reads_asked(true), 1);
 }
 
 /// The split's label is cleared once the record names the pane, and running
@@ -815,6 +910,53 @@ impl Spawner {
             )?
         };
         prepared.run(Duration::from_secs(30))
+    }
+
+    /// The caller's folder, read as a plain folder, whose workspace the
+    /// engine lists under the folder's owner mark.
+    fn own_folder(&self) {
+        self.runtime.lock().unwrap().catalog_paths =
+            path_read(self.checkout, Some(hide_project::ProjectKind::Folder));
+        let mark = crate::checkout_owner::owner_mark(crate::node::TEST_NODE, self.checkout);
+        self.device.lock().unwrap().owners = vec![("w2".into(), Some(mark))];
+    }
+
+    /// The start of automation `a-1`'s run in the caller's folder, as the
+    /// automation asks it: Hide's own automation role, on a worker.
+    fn spawn_for_automation(&self, intent: &str) -> Result<Value, String> {
+        let (client, authority, actor) = {
+            let mut runtime = self.runtime.lock().unwrap();
+            runtime.install_delivery_client(self.client.clone());
+            runtime.hide_delivery(crate::runtime::automations::AUTOMATION_ROLE)?
+        };
+        crate::coordination::run(
+            client,
+            authority,
+            actor,
+            Command::Spawn {
+                pick: None,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                parent: None,
+                machine: None,
+                name: "worker".into(),
+                intent: intent.into(),
+                kind: "codex".into(),
+                repo: Some(self.checkout.to_owned()),
+                branch: None,
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: Some(crate::coordination::SpawnTask {
+                    kind: crate::coordination::TaskKind::Automation,
+                    target: Some("a-1".into()),
+                }),
+                brief: Some("the run's prompt".into()),
+                beside: false,
+                profile: None,
+            },
+        )
     }
 }
 
@@ -955,17 +1097,18 @@ fn caller_here_with_device() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },
         2,
     )
     .unwrap();
-    ledger::save(&spawner.path, &state).unwrap();
+    store::save(&spawner.path, &state).unwrap();
     {
         let mut runtime = spawner.runtime.lock().unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
-        runtime.publish_delivery(Arc::new(ledger::load(&spawner.path).unwrap()), false);
+        runtime.publish_delivery(Arc::new(store::load(&spawner.path).unwrap()), false);
     }
     spawner.actor = actor;
     spawner.checkout = LOCAL_CHECKOUT;
@@ -1030,6 +1173,62 @@ fn a_folder_spawn_beside_its_caller_splits_in_the_folder() {
     assert_eq!(spawner.count("split_beside"), 1);
     assert_eq!(spawner.count("worktree_path"), 0);
     assert!(spawner.ledger().spawns[0].folder);
+}
+
+/// An automation's run works unattended, so its folder is read as its
+/// machine has it now: the catalog read the folder as a plain folder, the
+/// folder is gone since, and the run's spawn is refused as gone with no pane
+/// made, where a pane would open in the home folder instead. The folder back,
+/// the same intent starts in it.
+#[test]
+fn an_automation_spawn_into_a_folder_gone_since_it_was_read_makes_no_pane() {
+    let spawner = local_spawner();
+    spawner.own_folder();
+    *spawner.folders.lock().unwrap() = [false].into();
+    assert_eq!(
+        spawner.spawn_for_automation("run"),
+        Err(crate::coordination::FOLDER_GONE.to_owned())
+    );
+    for method in [
+        "launch_tab",
+        "create_tab",
+        "create_workspace",
+        "start_agent",
+    ] {
+        assert_eq!(spawner.count(method), 0, "{method}");
+    }
+    assert!(
+        spawner.ledger().spawns.is_empty(),
+        "a refused start reserves nothing"
+    );
+    *spawner.folders.lock().unwrap() = [true].into();
+    let child = spawner.spawn_for_automation("run").unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(spawner.count("start_agent"), 1);
+}
+
+/// A folder there when the run's pane was made and gone when its start
+/// would be typed: the shell that pane runs may sit in the home folder, so
+/// nothing is typed, the unused pane closes, and the spawn is refused as
+/// gone. An ordinary spawn is not asked about its folder.
+#[test]
+fn an_automation_start_is_not_typed_once_its_folder_is_gone() {
+    let spawner = local_spawner();
+    spawner.own_folder();
+    *spawner.folders.lock().unwrap() = [true, false].into();
+    assert_eq!(
+        spawner.spawn_for_automation("run"),
+        Err(crate::coordination::FOLDER_GONE.to_owned())
+    );
+    assert_eq!(spawner.count("launch_tab"), 1);
+    assert_eq!(spawner.count("start_agent"), 0);
+    assert_eq!(spawner.count("close_pane"), 1);
+    // The folder gone for good, a spawn for no automation starts as before.
+    let child = spawner
+        .spawn_in_folder("ordinary", false, None, None)
+        .unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(spawner.count("start_agent"), 1);
 }
 
 /// with-hide/hide#2479: in a Git project `--repo` and `--branch` stay
