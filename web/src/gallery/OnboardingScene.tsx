@@ -278,7 +278,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
       setPrerelease: () => undefined,
       dismiss: () => undefined,
     },
-    whatsNew: { onState: none, refresh: () => undefined, save: () => undefined },
+    whatsNew: { onState: none, save: () => undefined },
   };
 }
 

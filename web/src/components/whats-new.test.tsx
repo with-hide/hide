@@ -19,7 +19,7 @@ const host = vi.hoisted(() => {
   (window as unknown as { hideHost: unknown }).hideHost = {
     kind: "electron",
     platform: "darwin",
-    whatsNew: { onState: (listener: (state: unknown) => void) => { host.listener = listener; return () => undefined; }, refresh: () => undefined, save: (update: unknown) => host.save(update) },
+    whatsNew: { onState: (listener: (state: unknown) => void) => { host.listener = listener; return () => undefined; }, save: (update: unknown) => host.save(update) },
   };
   return host;
 });
@@ -46,8 +46,8 @@ async function mount() {
   const save = vi.fn();
   host.save = save;
   useShellStore.setState({ rest: { ui_state: {} } as never });
-  const state = (over: Partial<WhatsNewState>): WhatsNewState => ({ appVersion: "1.2.11", launchedAt: Date.now(), feed: null, fetchedAt: null, fetching: false, failed: false, record: { shown: "1.2.10", seen: "1.2.10", opened: [] }, ...over });
-  // A launch starts with no file: the state an earlier test left is replaced first.
+  const state = (over: Partial<WhatsNewState>): WhatsNewState => ({ appVersion: "1.2.11", feed: { versions: [] }, record: { shown: "1.2.10", seen: "1.2.10", opened: [] }, ...over });
+  // The state an earlier test left is replaced first.
   host.listener?.(state({}));
   const actions = createActions(() => true);
   root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -57,15 +57,13 @@ async function mount() {
 
 const windows = () => document.querySelectorAll("[data-whats-new]").length;
 
-it("waits through a kept copy without the running version and opens once when the fetched file has it", async () => {
+it("opens once for the running version and nothing more on later states of the same launch", async () => {
   const { push, save } = await mount();
-  await push({ feed: { versions: [entry("1.2.10", ["ten"])] }, fetching: true });
-  expect(windows()).toBe(0);
   await push({ feed: { versions: [entry("1.2.11", ["eleven"]), entry("1.2.10", ["ten"])] } });
   expect(windows()).toBe(1);
   expect(document.querySelector("[data-whats-new]")?.getAttribute("data-whats-new")).toBe("1.2.11");
-  // Later states of the same launch (a history refresh, a save) open nothing more.
-  await push({ feed: { versions: [entry("1.2.11", ["eleven"]), entry("1.2.10", ["ten"])] }, fetching: true });
+  // Later states of the same launch (a save) open nothing more.
+  await push({ feed: { versions: [entry("1.2.11", ["eleven"]), entry("1.2.10", ["ten"])] } });
   expect(windows()).toBe(1);
   expect(save).not.toHaveBeenCalled();
   await act(async () => document.querySelector<HTMLButtonElement>("[data-whats-new-ok]")!.click());
@@ -74,13 +72,6 @@ it("waits through a kept copy without the running version and opens once when th
   // The host's answer to that save, before it lands in the record, opens nothing again.
   await push({ feed: { versions: [entry("1.2.11", ["eleven"]), entry("1.2.10", ["ten"])] } });
   expect(windows()).toBe(0);
-});
-
-it("opens nothing and records nothing when the file arrives more than 30 s after launch (B11)", async () => {
-  const { push, save } = await mount();
-  await push({ launchedAt: Date.now() - 31_000, feed: { versions: [entry("1.2.11", ["eleven"])] } });
-  expect(windows()).toBe(0);
-  expect(save).not.toHaveBeenCalled();
 });
 
 it("records a version with no main features as shown without opening anything (B6)", async () => {

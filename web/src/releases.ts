@@ -1,9 +1,8 @@
-// What each released version of the desktop app brought, as withhide.dev
-// publishes it (`site/public/app/releases.json`, docs/UI_BEHAVIOR.md, What's
-// new and Update history): the shape, its parse, the version order, and which
-// versions the window after an update offers. The desktop host parses the
-// file before it keeps a copy (`desktop/src/main/whatsNew.ts`); the shell
-// draws what the host hands it. Pure: no DOM, no Node, no network.
+// What each released version of the desktop app brought, as the app carries
+// it (`web/src/releases.json`, docs/UI_BEHAVIOR.md, What's new and Update
+// history): the shape, its parse, the version order, and which versions the
+// window after an update offers. The desktop host parses the file
+// (`desktop/src/main/whatsNew.ts`); the shell draws what the host hands it. Pure: no DOM, no Node, no network.
 
 import { INTERFACE_LANGUAGES, type InterfaceLanguage } from "./i18n/locale";
 
@@ -102,7 +101,7 @@ function entry(raw: unknown): ReleaseEntry | string {
 export type ParsedFeed = { feed: ReleaseFeed; dropped: { version: string | null; reason: string }[] };
 
 /**
- * The file as withhide.dev serves it. A file that is not this shape at all
+ * The releases file as the app carries it. A file that is not this shape at all
  * throws; a version that is wrong is dropped alone and named in `dropped`, so
  * one bad entry does not cost the others. Newest first, a version once, at
  * most `VERSION_LIMIT`.
@@ -140,13 +139,12 @@ export function announces(appVersion: string): boolean {
 
 /**
  * The versions the history lists for an app at `appVersion`: those up to it
- * (below it for an rc), plus `ready`, a downloaded version waiting for the
- * restart, when the file has it. A development build, whose version is no
- * release, lists them all.
+ * (below it for an rc). A development build, whose version is no release,
+ * lists them all.
  */
-export function historyVersions(feed: ReleaseFeed, appVersion: string, ready: string | null): ReleaseEntry[] {
+export function historyVersions(feed: ReleaseFeed, appVersion: string): ReleaseEntry[] {
   const app = parseVersion(appVersion);
-  return feed.versions.filter((row) => !app || compareVersions(parseVersion(row.version)!, app) <= 0 || row.version === ready);
+  return feed.versions.filter((row) => !app || compareVersions(parseVersion(row.version)!, app) <= 0);
 }
 
 /**

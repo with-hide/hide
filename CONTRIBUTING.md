@@ -183,7 +183,7 @@ What makes them want to try it is seeing the feature itself work and trying it r
 - Its scene, `web/src/components/whats-new-scenes/<name>.tsx`, listed in that folder's `index.ts` and in `RELEASE_DRAWINGS` (`web/src/releases.ts`): the feature's real screen at its real size, from its own parts and words, playing one short loop of example work from the first press to the result, with a still moment for the gallery and reduced motion.
 - Its practice chapter, `web/src/practice/chapters/<id>.ts`, which the window's `Try it` (`체험하기`) opens, with `since` set to the version it ships in.
 
-Both are app code, so they must be merged before the release candidate is cut; the release itself only writes the version's words in `site/public/app/releases.json` and names the scene and the chapter there.
+Both are app code, so they must be merged before the release candidate is cut; the release itself only writes the version's words in `web/src/releases.json` and names the scene and the chapter there.
 A feature merged without them ships with a practice card's move for its drawing and no `Try it`, and the release's draft says so.
 Check the scene in the gallery (`/gallery?scene=whats-new&version=<version>&state=dialog`) with the entry that names it, and put its capture in the pull request.
 

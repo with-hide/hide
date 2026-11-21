@@ -116,16 +116,12 @@ describe("historyVersions", () => {
   const feed = feedOf(version("1.2.10", ["a"]), version("1.2.11", ["b"]), version("1.2.12", []));
 
   it("lists versions up to the one in use, below it for a preview build (B7, B18)", () => {
-    expect(historyVersions(feed, "1.2.11", null).map((row) => row.version)).toEqual(["1.2.11", "1.2.10"]);
-    expect(historyVersions(feed, "1.2.11-rc.2", null).map((row) => row.version)).toEqual(["1.2.10"]);
-  });
-
-  it("adds a downloaded version waiting for the restart (B18)", () => {
-    expect(historyVersions(feed, "1.2.11", "1.2.12").map((row) => row.version)).toEqual(["1.2.12", "1.2.11", "1.2.10"]);
+    expect(historyVersions(feed, "1.2.11").map((row) => row.version)).toEqual(["1.2.11", "1.2.10"]);
+    expect(historyVersions(feed, "1.2.11-rc.2").map((row) => row.version)).toEqual(["1.2.10"]);
   });
 
   it("lists every version on a development build", () => {
-    expect(historyVersions(feed, "0.4.0-main.f77c2a43", null)).toHaveLength(3);
+    expect(historyVersions(feed, "0.4.0-main.f77c2a43")).toHaveLength(3);
   });
 });
 

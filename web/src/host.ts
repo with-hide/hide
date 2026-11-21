@@ -237,7 +237,7 @@ export type HostBridge = {
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;
-  /** What each released version brought, as the host fetched and keeps it (`desktop/src/main/whatsNew.ts`). */
+  /** What each released version brought, from the file built into the app (`desktop/src/main/whatsNew.ts`). */
   whatsNew: WhatsNewBridge;
 };
 
@@ -288,26 +288,18 @@ export type UpdatesBridge = {
 
 /**
  * The releases file as the desktop host holds it (`desktop/src/main/whatsNew.ts`):
- * the parsed copy, kept or fetched (null before any fetch landed), when it was
- * fetched, whether a fetch is running or the last one failed, and the record
- * of the last version whose window closed and the newest version opened in
- * the history. `launchedAt` is when this app process started, in ms.
+ * the parsed file built into the app, and the record of the last version
+ * whose window closed and the newest version opened in the history.
  */
 export type WhatsNewState = {
   appVersion: string;
-  launchedAt: number;
-  feed: ReleaseFeed | null;
-  fetchedAt: number | null;
-  fetching: boolean;
-  failed: boolean;
+  feed: ReleaseFeed;
   record: WhatsNewRecord | null;
 };
 
 export type WhatsNewBridge = {
   /** Delivers the state at once and on every change; returns the unsubscribe. */
   onState(listener: (state: WhatsNewState) => void): () => void;
-  /** Fetches again when the kept copy is an hour old (the history opening), or now with `always` (its Try again). */
-  refresh(always?: boolean): void;
   /** Moves the record forward: a version's window closed (`shown`), a version opened in the history (`opened`). */
   save(update: RecordUpdate): void;
 };

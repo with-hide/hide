@@ -17,7 +17,7 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_REFRESH_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
@@ -64,7 +64,7 @@ import type { FirewallAnswer, FirewallState } from "../../../web/src/host";
 import { allowFirewall, firewallState } from "./firewall";
 import { NOTIFICATION_SETTINGS_URL, NotificationPermissionReader } from "./notificationPermission";
 import { fromPage, toPage, WirePathError } from "./wirePath";
-import { fetchReleasesFile, RELEASES_URL, WhatsNew, whatsNewIo } from "./whatsNew";
+import { WhatsNew, whatsNewIo } from "./whatsNew";
 import { AppUpdates, fetchReleases, macosLocation, readPackageType, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
 
 declare const __HIDE_BACKGROUND__: string;
@@ -629,28 +629,23 @@ export class DesktopHost {
 
   /**
    * What each released version brought (docs/UI_BEHAVIOR.md, What's new and
-   * Update history): fetched at launch, kept in the profile, and the record of
-   * which version's window closed and which one the history opened. Only this
-   * window's page on the daemon origin is heard or told.
+   * Update history): the file built into the app, and the record of which
+   * version's window closed and which one the history opened, kept in the
+   * profile. Only this window's page on the daemon origin is heard or told.
    */
   private startWhatsNew(): void {
-    const url = this.env.releasesFeedUrl ?? RELEASES_URL;
-    if (this.env.releasesFeedUrl) this.log.event("whats_new.feed_override", { url });
-    const whatsNew = new WhatsNew(app.getVersion(), whatsNewIo(app.getPath("userData"), () => fetchReleasesFile(url, (target, init) => net.fetch(target, init))), this.log);
+    if (this.env.releasesFile) this.log.event("whats_new.file_override", { file: this.env.releasesFile });
+    const whatsNew = new WhatsNew(app.getVersion(), whatsNewIo(app.getPath("userData"), this.env.releasesFile), this.log);
     whatsNew.onChange((state) => {
       const window = this.window;
       if (window && !window.isDestroyed() && this.isDaemonUrl(window.webContents.getURL())) window.webContents.send(WHATS_NEW_STATE_CHANNEL, state);
     });
     ipcMain.handle(WHATS_NEW_STATE_GET_CHANNEL, (event: IpcMainInvokeEvent) => (this.fromShell(event) ? whatsNew.state() : null));
-    ipcMain.on(WHATS_NEW_REFRESH_CHANNEL, (event: IpcMainEvent, always: unknown) => {
-      if (this.fromShell(event)) void whatsNew.refresh(always === true);
-    });
     ipcMain.on(WHATS_NEW_SAVE_CHANNEL, (event: IpcMainEvent, update: unknown) => {
       if (!this.fromShell(event) || typeof update !== "object" || update === null) return;
       const { shown, seen, opened } = update as { shown?: unknown; seen?: unknown; opened?: unknown };
       whatsNew.save({ shown, seen, opened });
     });
-    void whatsNew.start();
   }
 
   /** The last window closed: true when a ready macOS update should be installed by quitting now. */

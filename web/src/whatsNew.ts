@@ -48,10 +48,9 @@ export function updateHistoryAvailable(): boolean {
   return hostBridge()?.whatsNew !== undefined;
 }
 
-/** Opens the update history at `version` (the version in use when null), fetching again when the kept copy is an hour old. */
+/** Opens the update history at `version` (the version in use when null). */
 export function openUpdateHistory(version: string | null = null): void {
   history = { open: true, version };
-  hostBridge()?.whatsNew.refresh();
   notify();
 }
 
@@ -66,24 +65,19 @@ export function closeUpdateHistory(): void {
   notify();
 }
 
-/** Fetches again now, whatever the age of the kept copy (the history's Try again). */
-export function retryUpdateHistory(): void {
-  hostBridge()?.whatsNew.refresh(true);
-}
-
 /** Moves the host's record forward: a version's window closed, or a version opened in the history. */
 export function saveWhatsNew(update: RecordUpdate): void {
   hostBridge()?.whatsNew.save(update);
 }
 
-/** Whether the kept file has `version`, so a link can open the history there instead of GitHub. */
+/** Whether the file has `version`, so a link can open the history there instead of GitHub. */
 export function releaseKnown(state: WhatsNewState | null, version: string): boolean {
   return state?.feed?.versions.some((row) => row.version === version) ?? false;
 }
 
 /**
  * What a "What's new" link does for `version`: the update history at that
- * version when the kept file has it, else the release page on GitHub (B18).
+ * version when the file has it, else the release page on GitHub (B18).
  */
 export function useReleaseNotes(openLink: (url: string, external: boolean) => void): (version: string) => void {
   const state = useWhatsNewState();
