@@ -2043,10 +2043,7 @@ mod tests {
             other => panic!("unexpected {other}"),
         });
         assert!(execute(server.engine().as_ref(), &intent(Edge::Left, "w1:t2"), true).is_err());
-        assert_eq!(
-            server.methods(),
-            ["move_pane_beside"]
-        );
+        assert_eq!(server.methods(), ["move_pane_beside"]);
     }
 
     #[test]

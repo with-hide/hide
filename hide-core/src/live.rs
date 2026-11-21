@@ -1545,10 +1545,7 @@ mod tests {
             direction: PaneResizeDirection::Right,
             amount: 0.05,
         };
-        for (action, unchanged) in [
-            (resize("w1:p1"), true),
-            (resize("w1:p2"), false),
-        ] {
+        for (action, unchanged) in [(resize("w1:p1"), true), (resize("w1:p2"), false)] {
             let outcome =
                 execute_pane_control(engine.engine().as_ref(), &action).expect("control request");
             assert_eq!(

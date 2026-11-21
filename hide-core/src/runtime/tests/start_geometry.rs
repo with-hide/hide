@@ -38,7 +38,7 @@ fn setup() -> (Runtime, Fake, u64) {
 /// Queues a resize of the tab's pane, across the tab or down it by turns,
 /// so no resize folds into the one waiting before it.
 fn resize(runtime: &mut Runtime) -> String {
-    let direction = if runtime.pane_operations.len() % 2 == 0 {
+    let direction = if runtime.pane_operations.len().is_multiple_of(2) {
         PaneResizeDirection::Right
     } else {
         PaneResizeDirection::Down

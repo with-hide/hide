@@ -578,7 +578,10 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_the_engine_confir
     resize(&mut runtime, LEFT);
     resize(&mut runtime, RIGHT);
     runtime.ingest_session(Ok(session(Some(0.5))));
-    assert!(!near(drawn_ratio(&runtime), 0.5), "drawn ahead of the engine");
+    assert!(
+        !near(drawn_ratio(&runtime), 0.5),
+        "drawn ahead of the engine"
+    );
     dispatch(
         &mut runtime,
         "terminal_resize",
@@ -818,8 +821,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
     for operation in runtime.close_operations.values_mut() {
         operation.phase = "awaiting_topology".to_owned();
     }
-    let (_, records) =
-        crate::diagnostics::capture(|| runtime.ingest_session(Ok(session(None))));
+    let (_, records) = crate::diagnostics::capture(|| runtime.ingest_session(Ok(session(None))));
     assert!(queued_closes(&runtime).is_empty());
     let last = runtime
         .close_operations

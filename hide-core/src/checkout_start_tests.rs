@@ -312,12 +312,7 @@ impl Fixture {
             .unwrap()
             .calls
             .iter()
-            .filter(|method| {
-                matches!(
-                    method.as_str(),
-                    "launch_checkout_tab" | "move_pane_beside"
-                )
-            })
+            .filter(|method| matches!(method.as_str(), "launch_checkout_tab" | "move_pane_beside"))
             .cloned()
             .collect()
     }

@@ -99,7 +99,10 @@ fn answer(
 
 /// `payload` with a second pane, `<tab>:q`, split to the right of `<tab>:p` in
 /// `tab_id`.
-pub(super) fn with_second_pane(mut payload: SessionSnapshotPayload, tab_id: &str) -> SessionSnapshotPayload {
+pub(super) fn with_second_pane(
+    mut payload: SessionSnapshotPayload,
+    tab_id: &str,
+) -> SessionSnapshotPayload {
     let first = format!("{tab_id}:p");
     let second = format!("{tab_id}:q");
     let pane = payload
