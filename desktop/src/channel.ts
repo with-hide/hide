@@ -132,3 +132,25 @@ export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";
 /** System use, observed by the main host and replayed to its own shell. */
 export const COMPUTER_USE_CHANNEL = "hide:computer-use";
 export const COMPUTER_USE_GET_CHANNEL = "hide:computer-use-get";
+
+/**
+ * Another machine's own Hide screen in this window (PRD device-connect-iroh
+ * D-67): the shell says which machine's screen shows where, or none
+ * (renderer -> main), and hears how its page loaded (main -> renderer).
+ */
+export const REMOTE_SHOW_CHANNEL = "hide:remote-show";
+export const REMOTE_STATE_CHANNEL = "hide:remote-state";
+
+/**
+ * The remote screen's own bridge, version 1, between its sandboxed page and
+ * the main process and nothing else: its one screen socket (open, send,
+ * close, and its events back), a clipboard write, the app menu's commands
+ * and whether its tile shows.
+ */
+export const REMOTE_SOCKET_OPEN_CHANNEL = "hide-remote:socket-open";
+export const REMOTE_SOCKET_SEND_CHANNEL = "hide-remote:socket-send";
+export const REMOTE_SOCKET_CLOSE_CHANNEL = "hide-remote:socket-close";
+export const REMOTE_SOCKET_EVENT_CHANNEL = "hide-remote:socket-event";
+export const REMOTE_CLIPBOARD_CHANNEL = "hide-remote:clipboard";
+export const REMOTE_MENU_CHANNEL = "hide-remote:menu";
+export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";

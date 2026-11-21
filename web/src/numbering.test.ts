@@ -4,7 +4,8 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
 import type { TreeRow } from "./agentRow";
 import { numberedTarget } from "./keyboard";
-import { agentListOrder, numberedAgents, numberedDevices, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
+import { computerTiles, numberedComputers } from "./computers";
+import { agentListOrder, numberedAgents, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
 import type { AgentLayout } from "./agentLayout";
 import type { TaskCardScope } from "./agentScope";
 
@@ -72,11 +73,11 @@ describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
       { id: "box", kind: "remote", label: "build-box" },
     ];
     const rest = { navigator: { focused_device_id: "local", devices } } as unknown as SnapshotRest;
-    expect([...numberedDevices(rest.navigator!.devices)]).toEqual([[1, "local"], [2, "mini"], [3, "box"]]);
+    expect([...numberedComputers(computerTiles(rest))]).toEqual([[1, "local"], [2, "mini"], [3, "box"]]);
     expect(numberedTarget("devices", 2, { rest, agents: [] })).toBe("mini");
     expect(numberedTarget("devices", 4, { rest, agents: [] })).toBeNull();
     // Before the core names its machine, no tile has an id to select.
-    expect([...numberedDevices(undefined)]).toEqual([]);
+    expect([...numberedComputers(computerTiles(undefined))]).toEqual([]);
   });
 
   it("numbers the Agents list's drawn rows top to bottom, folded children left out", () => {

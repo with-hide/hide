@@ -24,7 +24,8 @@ import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFI
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
 import { remoteCommands } from "./remoteView";
 import { useSetupWalk } from "./FirstRunWizard";
-import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
+import { numberedTabs, sidebarNumbers } from "./numbering";
+import { computerTiles, numberedComputers } from "./computers";
 import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
 import { adjacentPane } from "./paneNavigation";
@@ -109,7 +110,7 @@ export function numberedTarget(family: NumberedFamily, number: Digit, state: { r
     const frame = areaFrame("agent");
     return frame ? numberedTabs(frame.layout).get(number) ?? null : null;
   }
-  if (family === "devices") return numberedDevices(state.rest?.navigator?.devices).get(number) ?? null;
+  if (family === "devices") return numberedComputers(computerTiles(state.rest)).get(number) ?? null;
   return sidebarNumbers(state, useUiStore.getState()).get(number) ?? null;
 }
 
@@ -247,7 +248,7 @@ export function installKeyboard(actions: Actions): () => void {
       const target = numberedTarget(numbered.family, numbered.number, useShellStore.getState());
       if (!target) return;
       if (numbered.family === "tabs") actions.selectAgentTab(target);
-      else if (numbered.family === "devices") actions.focusDevice(target);
+      else if (numbered.family === "devices") actions.selectComputer(target);
       else actions.openListedAgent(target);
       return;
     }

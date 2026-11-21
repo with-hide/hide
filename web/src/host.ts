@@ -180,6 +180,8 @@ export type HostBridge = {
   openPath(path: string): void;
   /** Outside files shown in Hide; absent from an older host. */
   external?: ExternalBridge;
+  /** Another machine's own Hide screen in this window (PRD device-connect-iroh D-67); absent on an older host. */
+  remoteScreens?: RemoteScreensBridge;
   /**
    * Shows a system notification about one Factory item (PRD factory-observer
    * D-50) or agent (PRD first-run-onboarding D-10) while the app runs; a
@@ -345,6 +347,25 @@ declare global {
     hideHost?: HostBridge;
   }
 }
+
+/**
+ * Another machine's Hide screen, which the desktop host draws in a sandboxed
+ * view of its own over the window (PRD device-connect-iroh D-67, B20): the
+ * shell says which machine and where, and hears how its page loaded.
+ */
+export type RemoteScreensBridge = {
+  /**
+   * Shows that machine's screen over `rect` of the window, in the shell's CSS
+   * pixels, or none. Its socket to that machine lives only while it shows
+   * (B63); a screen whose page could not load loads again when shown.
+   */
+  show(view: { device: string; rect: BrowserRect } | null): void;
+  /** How the shown screen's page loaded; returns the unsubscribe. */
+  onState(listener: (state: RemoteScreenState) => void): () => void;
+};
+
+/** `failed` carries the reason this computer's daemon gave (`not_connected`, `paused`, `paused_there`, `no_grant`, ...). */
+export type RemoteScreenState = { device: string; state: "opening" | "shown" | "failed"; reason?: string };
 
 export function hostBridge(): HostBridge | null {
   return typeof window !== "undefined" && window.hideHost?.kind === "electron" ? window.hideHost : null;

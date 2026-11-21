@@ -39,6 +39,7 @@ export const HIDDEN_CLOSE = 4012;
 
 /** The bridge of another machine's view, or null in a window of this machine. */
 export function remoteBridge(): RemoteBridge | null {
+  if (typeof window === "undefined") return null;
   const bridge = (window as unknown as { hideRemote?: RemoteBridge }).hideRemote;
   return bridge?.bridge === 1 ? bridge : null;
 }

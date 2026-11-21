@@ -190,7 +190,7 @@ const OVERLAY_SELECTOR = [
   '[data-slot$="-overlay"]',
 ].join(",");
 
-function overlayRects(): { rects: BrowserRect[]; moving: boolean } {
+export function overlayRects(): { rects: BrowserRect[]; moving: boolean } {
   const rects: BrowserRect[] = [];
   let moving = false;
   for (const element of document.querySelectorAll<HTMLElement>(OVERLAY_SELECTOR)) {

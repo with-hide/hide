@@ -44,6 +44,8 @@ const common = {
 };
 await build({ ...common, entryPoints: [path.join(root, "src/main/index.ts")], outfile: path.join(dist, "main.js"), define: { __HIDE_BACKGROUND__: JSON.stringify(background), __HIDE_WARNING__: JSON.stringify(warning) } });
 await build({ ...common, entryPoints: [path.join(root, "src/preload/index.ts")], outfile: path.join(dist, "preload.js") });
+// Another machine's Hide screen gets a preload of its own, which carries its bridge and nothing of the shell's.
+await build({ ...common, entryPoints: [path.join(root, "src/preload/remote.ts")], outfile: path.join(dist, "remote-preload.js") });
 
 copyTree(path.join(root, "static"), path.join(dist, "static"));
 // JSON is embedded in the local script: file: needs neither fetch nor a relaxed CSP.

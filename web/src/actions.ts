@@ -15,6 +15,7 @@ import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
 import type { ThemeChoice } from "./theme";
 import { hostBridge, type HostKind } from "./host";
+import { computerTiles } from "./computers";
 import {
   closeWithSaveOutcome,
   deleteBuffer,
@@ -1815,6 +1816,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
+      // The window shows its own screen again (PRD device-connect-iroh B17).
+      ui().setRemoteScreen(null);
       const screen = ui().screen;
       // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
       if (screen?.kind === "missions") {
@@ -1838,7 +1841,28 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * This machine comes to the front under it, so the cell gone (a
      * disconnect, a leave, View only) leaves the window on This Mac (B44).
      */
+    /**
+     * A computer tile or ⌥⌘n (PRD device-connect-iroh D-37, B17, B47): a
+     * paired machine's own Hide screen where the desktop app can draw it,
+     * else that device's part of this one. A paired machine with no device
+     * here and no desktop to draw it is reached through Settings › Devices,
+     * where its row is.
+     */
+    selectComputer(id: string) {
+      const tile = computerTiles(rest()).find((row) => row.id === id);
+      if (tile?.screen && hostBridge()?.remoteScreens) {
+        ui().setRemoteScreen(tile.screen.device_id);
+        return;
+      }
+      if (tile?.screen && tile.screen.device_id === id && !rest()?.navigator?.devices?.some((device) => device.id === id)) {
+        this.openSettings("devices");
+        return;
+      }
+      this.focusDevice(id);
+    },
+
     focusTool(connection: string) {
+      ui().setRemoteScreen(null);
       const screen = ui().screen;
       if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
       // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
