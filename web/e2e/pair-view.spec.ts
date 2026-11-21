@@ -276,9 +276,9 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await page.locator('[data-desk-pair="off"]').click();
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
-    // D-42: the desk's ◧ is a way in only; pair view draws none, nor the desk's ✕ (D-46).
+    // D-42: the desk's ◧ is a way in only; pair view draws none. The desk's ✕ stays and folds the desk as ⌘E does (D-57).
     await expect(page.locator("[data-desk-pair]")).toHaveCount(0);
-    await expect(page.locator("[data-lane-documents-close]")).toHaveCount(0);
+    await expect(page.locator("[data-lane-documents-close]")).toHaveCount(1);
     await expect(band(page)).toBeVisible();
 
     // D-45: a tab switch keeps pair view, the new tab's agent on the left and its View on its desk; the band hides the tab row,
