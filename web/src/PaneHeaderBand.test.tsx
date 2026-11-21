@@ -726,11 +726,12 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
   }
 });
 
-// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting end the
-// pane's second row as plain words, `질문 N` (`Questions N`), whose press opens
-// the turn card that lists them; the head draws them only while the row is
-// off, and a pane with none draws nothing in either place.
-it("counts a pane's waiting questions at the end of its second row, on the head only when the row is off, and draws nothing without them", async () => {
+// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting lead
+// the pane's second row as a mark, the question bubble and their count, named
+// `질문 N` (`Questions N`), whose press opens the turn card that lists them; with
+// nothing else on the row the oldest question's words follow it; the head draws
+// the mark only while the row is off, and a pane with none draws nothing in either place.
+it("counts a pane's waiting questions at the start of its second row, on the head only when the row is off, and draws nothing without them", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
@@ -751,17 +752,24 @@ it("counts a pane's waiting questions at the end of its second row, on the head 
     // With the row off the head holds them and no row is drawn.
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
     await draw();
-    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.getAttribute("aria-label")).toBe("Questions 2");
     expect(container.querySelector("[data-pane-header-band]")).toBeNull();
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
     await draw();
     expect(container.querySelector("[data-head]")?.childElementCount).toBe(0);
     const mark = container.querySelector<HTMLButtonElement>('[data-pane-header-band="open_asks"] [data-pane-open-asks=solo]')!;
-    expect(mark.textContent).toBe("Questions 2");
+    expect([mark.textContent, mark.getAttribute("aria-label")]).toEqual(["2", "Questions 2"]);
+    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("2Decide the closed tab defect");
+    // Beside a request and its progress the mark leads the row, and the question's own words stay in the card.
+    await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, request: { text: "Proceed as proposed", images: 0 }, progress: "Reading the tab code" } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("2Proceed as proposed→Reading the tab code");
+    await draw();
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
     expect(container.querySelector("[data-quiet-row] [data-pane-header-band]")).toBeNull();
-    await act(async () => mark.click());
-    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    // The row was drawn again above, so the mark is read again before the press.
+    const pressed = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    await act(async () => pressed.click());
+    expect(pressed.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector("[data-pane-turn-card=solo] [data-turn-card-asks]")?.querySelectorAll("[data-record-ask]")).toHaveLength(2);
   } finally {
     await act(async () => root.unmount());
