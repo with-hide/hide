@@ -747,7 +747,7 @@ fn words(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
-/// A core move's command answers its status and both outputs, its words
+/// A command answers its status and both outputs, its words
 /// arrive whole, and the script takes the next step after it; output past
 /// the cap is refused with the connection still in step.
 #[test]
@@ -791,83 +791,6 @@ fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
         127
     );
     assert!(run(&mut pipe, &words(&["a\nb"]), 1024, soon()).is_err());
-    assert_eq!(
-        run(&mut pipe, &words(&["true"]), 16, soon())
-            .unwrap()
-            .status,
-        0
-    );
-}
-
-/// A copied file lands whole under a private folder, a damaged one leaves
-/// the file already there alone, and the same file reads back with the
-/// digest the machine states for it.
-#[test]
-fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
-    use sha2::{Digest, Sha256};
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    let device = Device::new();
-    let mut pipe = device.connect("");
-    probe(&mut pipe, soon()).unwrap();
-    let bytes: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
-    let digest: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let remote = device.home().join("moved/deep/file");
-    let spelled = remote.to_str().unwrap();
-    let sent = AtomicU64::new(0);
-    put_file(
-        &mut pipe,
-        spelled,
-        &digest,
-        bytes.len() as u64,
-        &mut bytes.as_slice(),
-        &|chunk| {
-            sent.fetch_add(chunk, Ordering::SeqCst);
-        },
-    )
-    .unwrap();
-    assert_eq!(sent.load(Ordering::SeqCst), bytes.len() as u64);
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert_eq!(mode(&device.home().join("moved")), 0o700);
-    assert_eq!(mode(&remote) & 0o077, 0);
-
-    assert!(matches!(
-        put_file(
-            &mut pipe,
-            spelled,
-            &"0".repeat(64),
-            5,
-            &mut &b"other"[..],
-            &|_| {}
-        ),
-        Err(StepError::Refused(_))
-    ));
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read_dir(remote.parent().unwrap()).unwrap().count(),
-        1
-    );
-
-    let mut back = Vec::new();
-    let (size, stated) = get_file(&mut pipe, spelled, &mut back, &|_| {}).unwrap();
-    assert_eq!(
-        (size, stated.as_str()),
-        (bytes.len() as u64, digest.as_str())
-    );
-    assert_eq!(back, bytes);
-    assert!(matches!(
-        get_file(&mut pipe, "/no/such/file", &mut Vec::new(), &|_| {}),
-        Err(StepError::Refused(_))
-    ));
-    for refused in ["relative/file", "/a/../b"] {
-        assert!(matches!(
-            put_file(&mut pipe, refused, &digest, 0, &mut &b""[..], &|_| {}),
-            Err(StepError::Refused(_))
-        ));
-    }
     assert_eq!(
         run(&mut pipe, &words(&["true"]), 16, soon())
             .unwrap()
@@ -932,14 +855,8 @@ fn a_command_writing_past_its_cap_is_refused_while_it_writes() {
     );
     // The script removes a run's files after it answers; the next answer
     // comes after that removal.
-    let missing = device.home().join("missing");
     assert!(matches!(
-        get_file(
-            &mut pipe,
-            missing.to_str().unwrap(),
-            &mut Vec::new(),
-            &|_| {}
-        ),
+        attach(&mut pipe, "/no/such/hided", None),
         Err(StepError::Refused(_))
     ));
     assert!(device.tmp_is_empty());

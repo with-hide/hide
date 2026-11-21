@@ -1,8 +1,7 @@
 //! The connection a node keeps to its core on another machine (PRD
 //! core-host-node-remote-core D-04, D-07), through the system `ssh` (PRD
 //! system-ssh-device-link B33): one owned `ssh` signed in once, whose start
-//! script installs a build, runs a command there and copies its files, and
-//! then runs the
+//! script installs a build and runs a command there, and then runs the
 //! core machine's attach role in its own place, whose input and output
 //! carry the node's link and its screens' streams (`hide_peer::mux`).
 //!
@@ -11,7 +10,6 @@
 
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -21,7 +19,6 @@ use hide_node_link::device::{Cancel, NoSignIn, SignIn, SshProblem, Wake};
 use super::lock_recover;
 use super::openssh;
 use super::session::{AttachChannel, Ran, Session, SessionError, SshTarget};
-use super::transfer::FileCopy;
 
 /// A probe of the SSH greeting, bounded as a whole by `within`, each
 /// resolved address tried in turn with an even share of the time left. The
@@ -208,33 +205,6 @@ impl Upstream {
     /// Runs `argv` on the machine with no input; see [`Session::run`].
     pub fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, SessionError> {
         self.with_session(|session| session.run(argv, cap, within))
-    }
-
-    /// Copies `files` to the machine, one after another, each whole
-    /// ([`Session::upload`]). The first failure stops the copy; the files
-    /// already placed stay.
-    pub fn upload(
-        &self,
-        files: &[FileCopy],
-        sent: &(dyn Fn(u64) + Sync),
-    ) -> Result<(), SessionError> {
-        self.with_session(|session| files.iter().try_for_each(|file| session.upload(file, sent)))
-    }
-
-    /// Copies `files` from the machine into their places below `into`, one
-    /// after another, each whole ([`Session::download`]). The first failure
-    /// stops the copy; the files already placed stay.
-    pub fn download(
-        &self,
-        into: &Path,
-        files: &[FileCopy],
-        received: &(dyn Fn(u64) + Sync),
-    ) -> Result<(), SessionError> {
-        self.with_session(|session| {
-            files
-                .iter()
-                .try_for_each(|file| session.download(into, file, received))
-        })
     }
 
     /// Puts this build's programs in their version folder under

@@ -15,7 +15,6 @@
 use super::host::bootstrap::{self, Facts, Pipe, ProbeError, StepError, Stop};
 use super::host::{ATTEMPT_ENDED as ENDED, ChildLink, ChildOutput, HelperPackages};
 use super::openssh::{self, Resolved, SignInLine, SshProgram, Version};
-use super::transfer::FileCopy;
 use super::*;
 use hide_node_link::device::{
     Cancel, EstablishError, NoSignIn, Refusal, SignIn, SignInWait, SshFailure, SshProblem, Wake,
@@ -418,7 +417,8 @@ pub enum SessionError {
     Lost(String),
     /// The machine refused the step, or is not one this build can serve.
     Refused(String),
-    /// A file on this machine could not be read or written.
+    /// This machine could not carry the step: the attach role's stream
+    /// could not be made here.
     Local(String),
 }
 
@@ -473,7 +473,6 @@ impl From<StepError> for SessionError {
         match error {
             StepError::Lost(reason) => Self::Lost(reason),
             StepError::Refused(reason) => Self::Refused(reason),
-            StepError::Local(reason) => Self::Local(reason),
         }
     }
 }
@@ -687,32 +686,6 @@ impl Session {
         self.usable()?;
         let ran = bootstrap::run(&mut self.pipe, argv, cap, Instant::now() + within);
         self.checked(ran)
-    }
-
-    /// Copies `file` to the machine, streamed and renamed into place whole
-    /// ([`super::transfer::upload`]); `sent` hears the bytes as they go.
-    pub fn upload(
-        &mut self,
-        file: &FileCopy,
-        sent: &(dyn Fn(u64) + Sync),
-    ) -> Result<(), SessionError> {
-        self.usable()?;
-        let copied = super::transfer::upload(&mut self.pipe, file, sent);
-        self.checked(copied)
-    }
-
-    /// Copies `file` from the machine into its place below `into` here,
-    /// whole ([`super::transfer::download`]); `received` hears the bytes as
-    /// they arrive.
-    pub fn download(
-        &mut self,
-        into: &Path,
-        file: &FileCopy,
-        received: &(dyn Fn(u64) + Sync),
-    ) -> Result<(), SessionError> {
-        self.usable()?;
-        let copied = super::transfer::download(&mut self.pipe, into, file, received);
-        self.checked(copied)
     }
 
     /// Starts `program attach` on the machine in place of the start script

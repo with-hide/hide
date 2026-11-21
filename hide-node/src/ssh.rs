@@ -2,8 +2,8 @@
 //!
 //! Every other machine Hide reaches over SSH is reached with the system
 //! `ssh`, one owned process per connection (PRD system-ssh-device-link D-01,
-//! D-02, B33): a device's link (`device.rs`), and a node's connection to its
-//! core on another machine and a core move's (`session.rs`, `upstream.rs`).
+//! D-02, B33): a device's link (`device.rs`), and the connection to a core
+//! on another machine (`session.rs`, `upstream.rs`).
 //! OpenSSH reads the account's configuration, keys, agent and known hosts
 //! exactly as a terminal does; nothing here implements SSH.
 
@@ -27,7 +27,6 @@ pub mod host;
 pub mod hosts;
 pub mod openssh;
 pub mod session;
-pub mod transfer;
 pub mod upstream;
 
 pub use device::{Connector, DEVICE_HOME_VARIABLE, SshDevice, parse_device_home};

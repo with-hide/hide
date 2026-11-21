@@ -975,63 +975,6 @@ fn a_command_that_ends_leaves_nothing_it_started_running() {
     );
 }
 
-/// A copied file lands whole and private, a damaged one leaves the file
-/// already there alone, and the same file reads back with the digest the
-/// machine states for it.
-#[test]
-fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
-    let device = Device::new();
-    let mut pipe = device.connect();
-    device.probe(&mut pipe);
-    let bytes: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
-    let remote = device.home().join(r"moved\deep\file");
-    let spelled = Device::wire(&remote);
-    put_file(
-        &mut pipe,
-        &spelled,
-        &digest(&bytes),
-        bytes.len() as u64,
-        &mut bytes.as_slice(),
-        &|_| {},
-    )
-    .unwrap();
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert!(hide_platform::fs::private::is_private(&device.home().join("moved")).unwrap());
-    assert!(hide_platform::fs::private::is_private(&remote).unwrap());
-
-    assert!(matches!(
-        put_file(
-            &mut pipe,
-            &spelled,
-            &"0".repeat(64),
-            5,
-            &mut &b"other"[..],
-            &|_| {}
-        ),
-        Err(StepError::Refused(_))
-    ));
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read_dir(remote.parent().unwrap()).unwrap().count(),
-        1
-    );
-
-    let mut back = Vec::new();
-    let (size, stated) = get_file(&mut pipe, &spelled, &mut back, &|_| {}).unwrap();
-    assert_eq!((size, stated), (bytes.len() as u64, digest(&bytes)));
-    assert_eq!(back, bytes);
-    assert!(matches!(
-        get_file(&mut pipe, "C:/no/such/file", &mut Vec::new(), &|_| {}),
-        Err(StepError::Refused(_))
-    ));
-    assert_eq!(
-        run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())
-            .unwrap()
-            .status,
-        0
-    );
-}
-
 /// The attach step hands the connection's pipes to the core's program, with
 /// its state folder in this system's spelling when one is named.
 #[test]

@@ -1,8 +1,7 @@
 //! What puts a core on a machine and starts it there, whoever asks: the
 //! login item or fixture process that runs it (`starter`), the flags of
-//! the commands run on that machine (`flags`), what the machine says about
-//! itself first (`checks`), and the one owned `ssh` those commands and
-//! their files go over (`remote`). A core's update over SSH
+//! the commands run on that machine (`flags`), and what the machine says
+//! about itself first (`checks`). A core's update over SSH
 //! (`core_update`) drives these. The start of a Hide on a helper device's
 //! machine (PRD device-connect-iroh D-45, D-46) installs nothing through
 //! here: the device helper's kit already holds the build, `pairing_ssh`
@@ -12,7 +11,6 @@
 
 pub mod checks;
 pub mod flags;
-pub mod remote;
 pub mod starter;
 
 /// The longest intent id.
