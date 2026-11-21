@@ -993,9 +993,11 @@ def runner_jobs(block):
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-clis")):
-        # A lane whose macOS leg follows the plan names both lists; the most is the longer.
+        # A lane whose macOS or Windows leg follows the plan; the most is every leg.
         systems = re.search(r"\n      systems: (.*)", block).group(1)
-        return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
+        if systems.startswith("${{"):
+            return len(json.loads(evaluate(systems[3:-2], "true", "true")))
+        return len(json.loads(systems.strip("'")))
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
     if "uses: ./.github/workflows/repeat.yml" in block:
@@ -1007,7 +1009,8 @@ def runner_jobs(block):
         return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
         # Stand-ins run on each system but Windows; Windows has its forms job.
-        systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
+        systems = re.search(r"\n      systems: (.*)", block).group(1)
+        systems = json.loads(evaluate(systems[3:-2], "true", "true") if systems.startswith("${{") else systems.strip("'"))
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
@@ -1166,16 +1169,18 @@ class Workflows(unittest.TestCase):
 
 
 def pr_plan(*paths, status="M"):
-    """A pull request's plan, with its macOS jobs decided as `plan` decides them."""
+    """A pull request's plan, with its macOS and Windows jobs decided as `plan` decides them."""
     entries = [(status, path) for path in paths]
-    return ci.pull_request_macos(ci.select(entries, CRATES, ROOT), entries, ROOT)
+    return ci.pull_request_systems(ci.select(entries, CRATES, ROOT), entries, CRATES, ROOT)
 
 
-def evaluate(expression, macos):
-    """A `pr.yml` expression evaluated for the plan's `macos` output, the way the
-    concurrency test evaluates its condition."""
-    code = expression.replace("needs.plan.outputs.macos", repr(macos)).replace("&&", " and ").replace("||", " or ")
-    return eval(code, {"__builtins__": {}})
+def evaluate(expression, macos, windows="true"):
+    """A `pr.yml` expression evaluated for the plan's `macos` and `windows`
+    outputs, the way the concurrency test evaluates its condition; `format`
+    is GitHub's, whose `{0}` placeholders are Python's."""
+    code = (expression.replace("needs.plan.outputs.macos", repr(macos)).replace("needs.plan.outputs.windows", repr(windows))
+            .replace("&&", " and ").replace("||", " or "))
+    return eval(code, {"__builtins__": {}, "format": lambda text, *values: text.format(*values)})
 
 
 class MacosOnPullRequests(unittest.TestCase):
@@ -1216,9 +1221,9 @@ class MacosOnPullRequests(unittest.TestCase):
         self.assertIn("omp-contract", pr_plan("hide-ai/src/omp.rs")["lanes"])
         self.assertIn("vt", pr_plan("hide-holder/src/lib.rs")["lanes"])
         self.assertTrue({"os-contract", "windows-check"} <= set(pr_plan("hide-platform/src/wsl.rs")["lanes"]))
-        # A CI definition outside the macOS jobs still exercises every other lane.
+        # A CI definition outside the macOS and Windows jobs still exercises every other lane.
         self.assertEqual(pr_plan(".github/workflows/agent-canary.yml")["lanes"],
-                         [lane for lane in ALL if lane not in ci.MACOS_ONLY_LANES])
+                         [lane for lane in ALL if lane not in ci.MACOS_ONLY_LANES + ci.WINDOWS_ONLY_LANES])
 
     def test_a_pull_request_that_changes_a_macos_path_plans_its_macos_jobs(self):
         cases = (
@@ -1507,8 +1512,9 @@ class ReuseGreenRun(unittest.TestCase):
 
     def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
         # A changed unit test also plans the lane that repeats it; the run
-        # that reuses a green one rechecks it, so it plans that lane too.
-        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check", "repeat"]),
+        # that reuses a green one rechecks it, so it plans that lane too. One
+        # with no Windows code reruns on Linux alone; the Windows one on Windows too.
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "repeat"]),
                             ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check", "repeat"])):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
@@ -1529,7 +1535,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
         self.pr.check_out_merge()
         first = self.pr.plan(lambda: self.green)
-        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check", "repeat"])
+        self.assertEqual(first["lanes"], ["policy", "checks", "repeat"])
         # This partial green must not claim that its app lanes checked a new
         # head: later runs still compare with the original app-tested commits.
         anchor = ci.plan_record(first, 7, 202)["verified"]
@@ -1537,9 +1543,10 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.git("rm", "desktop/src/main/x.test.ts")
         self.pr.git("commit", "-qm", "delete unit test")
         self.pr.check_out_merge()
-        # A deleted unit test has no test left to repeat.
+        # A deleted unit test has no test left to repeat; the pull request
+        # adds no Windows code to main, so the suite reruns on Linux alone.
         deleted = self.pr.plan(lambda: anchor)
-        self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
+        self.assertEqual(deleted["lanes"], ["policy", "checks"])
         self.assertEqual(deleted["verified"], self.green)
         self.pr.commit("topic", "product change", {"web/src/x.ts": "changed again\n"})
         self.pr.check_out_merge()
@@ -1646,7 +1653,9 @@ class LastGreenRun(unittest.TestCase):
             self.run_(9, "2026-10-15T04:00:00Z"),
         ]
         gh, calls = self.gh(runs, record)
-        self.assertEqual(ci.last_green_run("o/r", 5, "o/r", "topic", 9, gh=gh), self.VERIFIED)
+        # The commits its lanes checked, and the head this run checked itself.
+        self.assertEqual(ci.last_green_run("o/r", 5, "o/r", "topic", 9, gh=gh),
+                         {**self.VERIFIED, "pr_head": self.HEAD, "run_id": 2})
         query = calls[0]
         self.assertIn("repos/o/r/actions/workflows/pr.yml/runs", query)
         self.assertIn("status=success", query)

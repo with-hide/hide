@@ -428,6 +428,137 @@ def pull_request_macos(result, entries, root=ROOT):
     return with_macos(result, False, ["no macOS path changed; main's push run and the nightly run the macOS jobs"])
 
 
+# Whether a pull request takes a Windows runner at all (operator decision
+# 2026-11-21, the macOS rule of 2026-11-01 applied to Windows). Over 28 hours
+# of pull request runs `windows check` and the Windows e2e shards were the
+# longest jobs and held the most runner slots, and 39 of 285 failed pull
+# request runs in two weeks failed in Windows jobs only; a pull request
+# therefore runs its Windows jobs only when it changes a Windows path, and
+# main's push run and the nightly run all of them. A Windows break another
+# change causes shows up on main and is fixed before the next release
+# (CONTRIBUTING.md, When main's push run fails).
+#
+# The lanes that run on Windows alone in a pull request (`agy-contract` runs
+# only its Windows leg there; `rust` runs the same agy tests on Linux), and
+# the lanes with a Windows leg beside their Linux one, which run without it
+# (`pr.yml` reads the plan's `windows`). `package` is neither: every package
+# input is a Windows path (`windows_path`), since the Windows installer and
+# the Windows device kit are what it builds, so it never runs without them.
+WINDOWS_ONLY_LANES = ("windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "agy-contract")
+WINDOWS_LEG_LANES = ("relay-protocol", "os-contract", "vt", "holder-restart", "omp-contract", "agent-journey", "agent-clis")
+# Each entry is code or CI whose Windows form only a Windows job of a pull
+# request proves. A glob's `*` includes descendants. When it is unclear
+# whether a path needs Windows, it does: a Windows path left out is a break
+# no pull request shows.
+WINDOWS_PATHS = (
+    # The workflows that define the Windows jobs a pull request runs, and
+    # `pr.yml`, which calls them and picks their legs.
+    ".github/workflows/pr.yml", ".github/workflows/web-e2e.yml", ".github/workflows/desktop-e2e.yml",
+    ".github/workflows/wsl-device.yml", ".github/workflows/os-contract.yml", ".github/workflows/vt.yml",
+    ".github/workflows/holder-restart.yml", ".github/workflows/omp-contract.yml", ".github/workflows/agy-contract.yml",
+    ".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml", ".github/workflows/relay-protocol.yml",
+    ".github/workflows/package.yml",
+    # Steps every Windows job runs: the caches, the fixture shims and their PATH.
+    ".github/actions/*",
+    # This plan, which decides which Windows jobs run.
+    "scripts/ci-plan.py",
+    # How a shell reads a command line, PowerShell's syntax among them, which
+    # `windows check` runs in Windows PowerShell for the hooks.
+    "hide-shell/*",
+    # A crate's dependencies, features and build script: a dependency that
+    # does not build on Windows, or a Windows-only one, shows only there.
+    "*/Cargo.toml", "*/build.rs",
+    # The web code whose Windows form differs from Linux's, of the files the
+    # desktop host imports or drives (SHARED_WEB above): the host bridge (the
+    # firewall ask, the taskbar badge), the chords, their labels and the
+    # keyboard (AltGr, a Windows IME, Ctrl+C with a selection), and terminal
+    # links (a drive path, the right-click order). The rest of SHARED_WEB is
+    # the same code on every system, which the Linux suites run.
+    "web/src/host.ts", "web/src/revealExternal.ts", "web/src/shortcuts.ts", "web/src/shortcutLabels.ts",
+    "web/src/keyboard.ts", "web/src/keys.ts", "web/src/terminalLinks.ts", "web/src/terminalLinkProvider.ts",
+    # The files the WSL device lane proves besides its crates (WSL_CRATE_FILES above).
+    *WSL_CRATE_FILES,
+)
+# A path named for Windows or a piece only Windows has: the ConPTY runtime
+# and its pin, PowerShell, WSL, a `win` folder (portable-pty's Windows side),
+# the Windows installer's resources and the Windows fixtures and tests; and a
+# PowerShell, batch or NSIS script, which runs on Windows alone (a Windows
+# device's bootstrap, the installer's script).
+WINDOWS_NAME = re.compile(r"(?i)(?:^|[/_.-])(?:windows|win|win32|powershell|conpty|wsl)(?:[/_.-]|$)|\.(?:ps1|psm1|cmd|bat|nsh)$")
+# A changed file that holds Windows-only code: a Rust `cfg` or target that
+# names Windows, `std::os::windows`, a `win32` branch in desktop, web or
+# script code, a Python `os.name` or `platform.system()` branch, or an e2e
+# test tagged `@platform`, which the Windows e2e lanes run.
+WINDOWS_CODE = re.compile(
+    r'cfg(?:_attr)?!?\s*\([^)\n]*\bwindows\b|target_(?:os|family)\s*=\s*"windows"|std::os::windows'
+    r'|\bwin32\b|os\.name\s*[!=]=\s*["\']nt["\']|platform\.system\(\)|@platform'
+)
+# The files whose code `WINDOWS_CODE` reads; a deleted one cannot be read.
+CODE_SUFFIXES = (".rs", ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".py", ".sh", ".c", ".h")
+
+
+def windows_path(status, name, crates, root=ROOT):
+    """Why a changed path makes a pull request run its Windows jobs, or None."""
+    if status not in ("A", "M", "D"):
+        return f"{status} change, unreadable: {name}"
+    if any(fnmatchcase(name, pattern) for pattern in WINDOWS_PATHS):
+        return f"Windows path: {name}"
+    if any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS):
+        return f"package input, which the Windows installer and kit carry: {name}"
+    path = PurePosixPath(name)
+    lanes, reason, _ = classify(path, status, crates, root)
+    if lanes is None:
+        if any(fnmatchcase(name, pattern) for pattern in ALL_LANE_PATHS):
+            # A CI definition that defines no Windows job a pull request runs.
+            return None
+        # A path no rule narrows plans every lane, and it cannot be shown to leave Windows alone.
+        return f"every lane: {reason}"
+    if not lanes and not reader_entries(name):
+        # Documentation, the design library and paths only `policy` reads.
+        return None
+    if WINDOWS_NAME.search(name):
+        return f"Windows path: {name}"
+    if path.suffix not in CODE_SUFFIXES:
+        return None
+    if status == "D":
+        return f"deleted code, which cannot be read for its Windows code: {name}"
+    try:
+        code = (root / name).read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return f"unreadable, so it cannot be shown to hold no Windows code: {name} ({error.strerror})"
+    if WINDOWS_CODE.search(code):
+        return f"Windows code: {name}"
+    return None
+
+
+def with_windows(result, runs, why):
+    """Record whether the Windows jobs run; without them, drop the Windows-only lanes."""
+    result["windows"] = {"runs": runs, "why": why}
+    if not runs:
+        result["lanes"] = [lane for lane in result["lanes"] if lane not in WINDOWS_ONLY_LANES]
+        for lane in WINDOWS_ONLY_LANES:
+            result["reasons"].pop(lane, None)
+    return result
+
+
+def pull_request_windows(result, entries, crates, root=ROOT):
+    """A pull request's plan with its Windows jobs only when it changes a Windows path."""
+    why = [reason for reason in (windows_path(status, name, crates, root) for status, name in entries) if reason]
+    if why:
+        return with_windows(result, True, why)
+    return with_windows(result, False, ["no Windows path changed; main's push run and the nightly run the Windows jobs"])
+
+
+def pull_request_systems(result, entries, crates, root=ROOT):
+    """A pull request's plan with its macOS and Windows jobs decided."""
+    return pull_request_windows(pull_request_macos(result, entries, root), entries, crates, root)
+
+
+def every_system(result, why):
+    """A plan that runs every macOS and Windows job its lanes have."""
+    return with_windows(with_macos(result, True, why), True, why)
+
+
 # Paths named here and in READERS are the only ones narrower than "every
 # lane"; a path no rule names still plans every lane. Each entry says who reads the path, and
 # `scripts/tests/test_ci_plan.py` checks the claim where it can be checked.
@@ -971,7 +1102,9 @@ def last_green_run(repo, number, head_repo, head_ref, run_id, gh=call_gh):
     with tempfile.TemporaryDirectory() as directory:
         gh("run", "download", str(run["id"]), "--repo", repo, "--name", RECORD_ARTIFACT, "--dir", directory)
         record = json.loads((Path(directory) / RECORD_FILE).read_text(encoding="utf-8"))
-    return verified_commits(record, number, run)
+    # The head this run checked (its `policy` among the checks), beside the
+    # commits its lanes checked, which an earlier run may have checked.
+    return {**verified_commits(record, number, run), "pr_head": run["head_sha"], "run_id": run["id"]}
 
 
 def fetch_history(root, *commits):
@@ -1023,9 +1156,11 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     return why, delta
 
 
-def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None, nightly_agent_checks=False):
+def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None, nightly_agent_checks=False,
+         body_edit=False):
     """The lanes for base..head. `last_green` answers the commits of the pull
-    request's latest green run, or raises; None skips the reuse check."""
+    request's latest green run, or raises; None skips the reuse check.
+    `body_edit` is a run started by an edit of the pull request's body."""
     if nightly_agent_checks:
         if event not in ("schedule", "workflow_dispatch"):
             raise ValueError("only nightly's scheduled or dispatched call can own the agent checks")
@@ -1042,13 +1177,13 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         why = "merge group: the checks two changes that each passed can fail together"
         result = {"full": False, "lanes": list(MERGE_GROUP_LANES), "rust_packages": [],
                   "reasons": {lane: [why] for lane in MERGE_GROUP_LANES}}
-        return with_macos(result, False, ["merge group: no macOS job"])
+        return with_windows(with_macos(result, False, ["merge group: no macOS job"]), False, ["merge group: no Windows job"])
     if draft:
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
         # starts the run that plans lanes.
         return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True,
-                "macos": {"runs": False, "why": ["draft"]}}
+                "macos": {"runs": False, "why": ["draft"]}, "windows": {"runs": False, "why": ["draft"]}}
     if crates is None:
         try:
             crates = cargo_crates(root)
@@ -1056,11 +1191,11 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             # Without the crate graph no Rust change can be narrowed; the full
             # Rust lane runs the whole workspace and needs no package list.
             reason = f"crate graph unavailable: {error}"
-            return with_macos(select([], {}, root, reason), True, [reason])
+            return every_system(select([], {}, root, reason), [reason])
     if event != "pull_request":
         result = select([], crates, root, f"{event}: every lane runs on main")
         result["deny"] = event != "push"
-        return with_macos(result, True, [f"{event}: every macOS job runs"])
+        return every_system(result, [f"{event}: every macOS and Windows job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -1071,37 +1206,47 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             raise ValueError(f"{head} is not a merge commit")
         entries = changed_entries(base, head, root)
     except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as error:
-        # Paths that cannot be listed cannot be shown to leave macOS alone.
+        # Paths that cannot be listed cannot be shown to leave macOS or Windows alone.
         reason = f"comparison unavailable: {error_detail(error)}"
-        return with_macos(select([], crates, root, reason), True, [reason])
+        return every_system(select([], crates, root, reason), [reason])
     result = select(entries, crates, root)
     result["commits"] = {"base": parents[1], "head": parents[2]}
-    # `policy` alone is what a reuse plans; nothing to save.
-    if last_green is None or result["lanes"] == ["policy"]:
-        return pull_request_macos(result, entries, root)
+    # `policy` alone is what a reuse plans; nothing to save. A body edit still
+    # asks which head the last green run checked, for `body_only` below.
+    if last_green is None or (result["lanes"] == ["policy"] and not body_edit):
+        return pull_request_systems(result, entries, crates, root)
     try:
-        verified = last_green()
-        why, delta = still_stands(verified, base, head, entries, crates, root)
+        green = last_green()
+        verified = {key: green[key] for key in ("run", "base", "head")}
+        if result["lanes"] != ["policy"]:
+            why, delta = still_stands(verified, base, head, entries, crates, root)
     except (NotReused, subprocess.CalledProcessError, OSError, ValueError) as error:
         # Every failure keeps the plan the change itself needs.
         result["reuse"] = {"run": None, "why": error_detail(error)}
-        return pull_request_macos(result, entries, root)
-    # Never call select with an empty delta: an empty comparison deliberately
-    # plans every lane. Preserve the original green anchor even after these
-    # checks succeed, so a later run compares with the app code actually tested.
-    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
-    rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
-    return pull_request_macos({
-        "full": False,
-        "lanes": rerun["lanes"],
-        "rust_packages": rerun["rust_packages"],
-        "reasons": rerun["reasons"],
-        "repeat": rerun["repeat"],
-        "deny": rerun.get("deny", False),
-        "commits": result["commits"],
-        "reuse": {"run": verified["run"], "why": why},
-        "verified": verified,
-    }, entries, root)
+        return pull_request_systems(result, entries, crates, root)
+    if result["lanes"] != ["policy"]:
+        # Never call select with an empty delta: an empty comparison deliberately
+        # plans every lane. Preserve the original green anchor even after these
+        # checks succeed, so a later run compares with the app code actually tested.
+        rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
+        rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
+        result = {
+            "full": False,
+            "lanes": rerun["lanes"],
+            "rust_packages": rerun["rust_packages"],
+            "reasons": rerun["reasons"],
+            "repeat": rerun["repeat"],
+            "deny": rerun.get("deny", False),
+            "commits": result["commits"],
+            "reuse": {"run": verified["run"], "why": why},
+            "verified": verified,
+        }
+    if body_edit and green.get("pr_head") == parents[2]:
+        # The green run's `policy` ran the script suite and the structural
+        # checks on this head, and a body edit changes no file they read; only
+        # the checks that read the body run again.
+        result["body_only"] = f"body edit of head {parents[2][:9]}, which run {green['run_id']} checked"
+    return pull_request_systems(result, entries, crates, root)
 
 
 def plan_record(result, number, run_id):
@@ -1172,10 +1317,14 @@ def summary(result, runs_url=None):
     if result["rust_packages"]:
         lines.append("")
         lines.append("Rust packages: " + ", ".join(result["rust_packages"]))
-    macos = result["macos"]
-    why = "; ".join(macos["why"][:3]) + (f" (+{len(macos['why']) - 3} more)" if len(macos["why"]) > 3 else "")
-    lines.append("")
-    lines.append(f"macOS jobs: {'run' if macos['runs'] else 'skipped'}: {why}.")
+    for key, label in (("macos", "macOS"), ("windows", "Windows")):
+        system = result[key]
+        why = "; ".join(system["why"][:3]) + (f" (+{len(system['why']) - 3} more)" if len(system["why"]) > 3 else "")
+        lines.append("")
+        lines.append(f"{label} jobs: {'run' if system['runs'] else 'skipped'}: {why}.")
+    if result.get("body_only"):
+        lines.append("")
+        lines.append(f"`policy` runs only the checks that read the body: {result['body_only']}.")
     reuse = result.get("reuse")
     if reuse:
         lines.append("")
@@ -1195,6 +1344,8 @@ def main():
     plan_parser.add_argument("--base", default="HEAD^1")
     plan_parser.add_argument("--head", default="HEAD")
     plan_parser.add_argument("--draft", choices=("true", "false"), default="false", help="the pull request is a draft")
+    plan_parser.add_argument("--body-edit", choices=("true", "false"), default="false",
+                             help="the run was started by an edit of the pull request's body")
     plan_parser.add_argument("--nightly-agent-checks", choices=("true", "false"), default="false",
                              help="nightly owns agy and the journey in its direct jobs")
     plan_parser.add_argument("--record", type=Path, help="write the plan record a pull request's next run reads here")
@@ -1218,7 +1369,7 @@ def main():
             def last_green():
                 return last_green_run(repo, pull["number"], head_repo, pull["head"]["ref"], run_id)
         result = plan(args.event, args.base, args.head, draft=draft, last_green=last_green,
-                      nightly_agent_checks=args.nightly_agent_checks == "true")
+                      nightly_agent_checks=args.nightly_agent_checks == "true", body_edit=args.body_edit == "true")
         print(json.dumps(result, indent=2))
         if args.record and pull is not None and not draft:
             args.record.write_text(json.dumps(plan_record(result, pull["number"], run_id), indent=2) + "\n", encoding="utf-8")
@@ -1228,6 +1379,8 @@ def main():
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
                 output.write(f"macos={str(result['macos']['runs']).lower()}\n")
+                output.write(f"windows={str(result['windows']['runs']).lower()}\n")
+                output.write(f"body-only={str(bool(result.get('body_only'))).lower()}\n")
                 output.write(f"deny={str(result.get('deny', False)).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
                 repeat = result.get("repeat", NO_REPEAT)
