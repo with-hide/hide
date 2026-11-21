@@ -445,12 +445,12 @@ it("shows a pane's list as its 태스크 row does: a parent's holds its descenda
     expect(own.container.querySelector("[data-agent-pr=child]")?.textContent).toBe("#" + "1073");
   } finally { await own.unmount(); }
   // Several PRs are one mark: how many are still open, in the worst open
-  // state's colour, over how many in all; the name still counts each state. The
+  // state's colour; the name still counts each state, the merged one too. The
   // child that made them has ended; the parent's list keeps them.
   const several = await mountChip("parent", [pullRow("parent", [sessionPull(1074, "mergeable", { own: false }), sessionPull(1073, "merged", { own: false })])]);
   try {
     const mark = several.container.querySelector<HTMLButtonElement>("[data-agent-pr=parent]")!;
-    expect([mark.querySelector("[data-pr-count]")?.getAttribute("data-pr-count"), mark.textContent]).toEqual(["mergeable", "1/2"]);
+    expect([mark.querySelector("[data-pr-count]")?.getAttribute("data-pr-count"), mark.textContent]).toEqual(["mergeable", "1"]);
     expect(mark.getAttribute("aria-label")).toBe("PR 2 · Mergeable 1 · Merged 1");
   } finally { await several.unmount(); }
   const none = await mountChip("parent", [pullRow("parent", [])]);
@@ -726,12 +726,12 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
   }
 });
 
-// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting lead
-// the pane's second row as a mark, the question bubble and their count, named
-// `질문 N` (`Questions N`), whose press opens the turn card that lists them; with
-// nothing else on the row the oldest question's words follow it; the head draws
-// the mark only while the row is off, and a pane with none draws nothing in either place.
-it("counts a pane's waiting questions at the start of its second row, on the head only when the row is off, and draws nothing without them", async () => {
+// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting end
+// the pane's second row's turn as words, `· 질문 N` (`Questions N`), whose press
+// opens the turn card that lists them; with nothing else on the row the oldest
+// question's words follow them; the head draws them only while the row is off,
+// and a pane with none draws nothing in either place.
+it("counts a pane's waiting questions as the tail of its second row, on the head only when the row is off, and draws nothing without them", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
@@ -752,17 +752,17 @@ it("counts a pane's waiting questions at the start of its second row, on the hea
     // With the row off the head holds them and no row is drawn.
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
     await draw();
-    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.getAttribute("aria-label")).toBe("Questions 2");
+    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("Questions 2");
     expect(container.querySelector("[data-pane-header-band]")).toBeNull();
     useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
     await draw();
     expect(container.querySelector("[data-head]")?.childElementCount).toBe(0);
     const mark = container.querySelector<HTMLButtonElement>('[data-pane-header-band="open_asks"] [data-pane-open-asks=solo]')!;
-    expect([mark.textContent, mark.getAttribute("aria-label")]).toEqual(["2", "Questions 2"]);
-    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("2Decide the closed tab defect");
-    // Beside a request and its progress the mark leads the row, and the question's own words stay in the card.
+    expect(mark.textContent).toBe("Questions 2");
+    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("Questions 2Decide the closed tab defect");
+    // Beside a request and its progress they follow the progress, and the question's own words stay in the card.
     await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, request: { text: "Proceed as proposed", images: 0 }, progress: "Reading the tab code" } as PaneHeader} actions={actions} /></TooltipProvider>));
-    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("2Proceed as proposed→Reading the tab code");
+    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("Proceed as proposed→Reading the tab code· Questions 2");
     await draw();
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
     expect(container.querySelector("[data-quiet-row] [data-pane-header-band]")).toBeNull();

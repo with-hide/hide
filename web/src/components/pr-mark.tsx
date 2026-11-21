@@ -42,27 +42,25 @@ export function PrMark({
 }
 
 /**
- * The mark of several PRs, as one: the icon and colour of the worst state
- * among those still open with how many are, then `/` and how many there are in
- * all, muted, so open 1 beside merged 8 reads green `1/9`. With none merged or
- * closed the count stands alone, and once all are it is the whole count in the
- * merged (or closed) colour. The hover and the list name each PR. A stale mark dims.
+ * The mark of several PRs, as one: the icon of the worst state among those
+ * still open and how many are open, in that state's colour, so open 1 beside
+ * merged 8 reads green `1`; a merged or closed PR asks nothing and is counted
+ * in the mark's name, its hover and its list alone. Once every PR is over the
+ * mark is the merged icon with no count, or the closed one, dimmed, when none
+ * merged. A stale mark dims.
  */
 function PrStateCounts({ counts, stale = false, className, ...rest }: { counts: { state: PrState; count: number }[]; stale?: boolean } & HTMLAttributes<HTMLSpanElement>) {
-  const { state, left, total } = prCountsSummary(counts);
+  const { state, left } = prCountsSummary(counts);
   const { icon: Icon, tone } = PR_LOOK[state];
   return (
     <span
       data-pr-counts={counts.map(({ state, count }) => `${state}:${count}`).join(" ")}
       data-stale={stale ? "true" : undefined}
-      className={cn("inline-flex shrink-0 items-center font-mono text-caption", stale && "opacity-(--opacity-dimmed)", className)}
+      className={cn("inline-flex shrink-0 items-center gap-xxs font-mono text-caption", tone, state === "closed" && CLOSED_DIM, stale && "opacity-(--opacity-dimmed)", className)}
       {...rest}
     >
-      <span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-pr-count={state}>
-        <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
-        {left || total}
-      </span>
-      {left > 0 && left < total ? <span className="text-muted-foreground" data-pr-total={total}>/{total}</span> : null}
+      <Icon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" data-pr-count={state} />
+      {left > 0 ? left : null}
     </span>
   );
 }

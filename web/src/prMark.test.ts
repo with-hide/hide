@@ -82,12 +82,12 @@ describe("a PR mark's parts", () => {
     expect(prMarkParts(pulls)).toEqual({ counts: [{ state: "failed", count: 1 }, { state: "mergeable", count: 1 }, { state: "merged", count: 2 }] });
   });
 
-  it("sums several PRs up as the worst open state, how many are still open and how many in all", () => {
+  it("sums several PRs up as the worst open state and how many are still open", () => {
     const counts = (pulls: SessionPull[]) => { const parts = prMarkParts(pulls)!; if (!("counts" in parts)) throw new Error("one PR has no counts"); return prCountsSummary(parts.counts); };
-    expect(counts([sessionPull(1, "merged"), sessionPull(2, "mergeable"), sessionPull(3, "closed"), sessionPull(4, "failed")])).toEqual({ state: "failed", left: 2, total: 4 });
-    expect(counts([sessionPull(1, "draft"), sessionPull(2, "pending")])).toEqual({ state: "pending", left: 2, total: 2 });
+    expect(counts([sessionPull(1, "merged"), sessionPull(2, "mergeable"), sessionPull(3, "closed"), sessionPull(4, "failed")])).toEqual({ state: "failed", left: 2 });
+    expect(counts([sessionPull(1, "draft"), sessionPull(2, "pending")])).toEqual({ state: "pending", left: 2 });
     // Every PR is over: nothing is left, and the merged ones lead the closed.
-    expect(counts([sessionPull(1, "closed"), sessionPull(2, "merged")])).toEqual({ state: "merged", left: 0, total: 2 });
+    expect(counts([sessionPull(1, "closed"), sessionPull(2, "merged")])).toEqual({ state: "merged", left: 0 });
   });
 
   it("draws nothing without a PR", () => {

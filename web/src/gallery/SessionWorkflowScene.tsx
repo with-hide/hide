@@ -209,7 +209,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const heldBy = (row: AgentRow) => ownOf(row).map((pull) => ({ ...pull, own: false, holders: [row.identity_label] }));
     const listOf = (...parts: SessionPull[][]) => (parts.flat().length ? { pulls: parts.flat() } : null);
     children[0] = { ...children[0]!, pulls: listOf(ownOf(children[0]!), heldBy(children[2]!)) };
-    // Two an ended child merged stay in the list, so the mark reads how many are still open over how many in all (`3/5`).
+    // Two an ended child merged stay in the list, which the mark does not count: it reads the three still open.
     const merged = [228, 229].map((number) => listedPull(number, "세션 줄 간격 정리", "merged", "끝난 자식", `https://example.invalid/pull/${number}`));
     agents[5] = { ...agents[5]!, pulls: listOf(ownOf(agents[5]!), heldBy(children[1]!), heldBy(children[0]!), heldBy(children[2]!), merged) };
     const tree = [heldBy(children[1]!), heldBy(children[0]!), heldBy(children[2]!)];

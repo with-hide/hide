@@ -166,7 +166,7 @@ function useRowLinks(agent: PhoneAgent): AgentLinks {
 
 /**
  * The desktop row's marks after the title, in its order (`sidebar-agent-row.tsx`): the pull requests (one as its state's mark
- * and `#number`, several as one mark, how many are still open over how many in all) and the mission chip with `!` for the operator's turn and `k/n`. They
+ * and `#number`, several as one mark, how many are still open) and the mission chip with `!` for the operator's turn and `k/n`. They
  * never shrink, so a narrow phone cuts the title first; the row opens the detail, whose chips open the pages.
  */
 function RowMarks({ links }: { links: AgentLinks }) {
@@ -175,9 +175,9 @@ function RowMarks({ links }: { links: AgentLinks }) {
   return (
     <span aria-hidden="true" className="flex shrink-0 items-center gap-sm font-mono text-body" data-phone-row-marks="true">
       {parts && "counts" in parts ? (() => {
-        const { state, left, total } = prCountsSummary(parts.counts);
+        const { state, left } = prCountsSummary(parts.counts);
         const { icon: Icon, tone } = PR_LOOK[state];
-        return <span className="inline-flex items-center" data-phone-row-pr={state}><span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)}><Icon className="size-(--size-pr-icon) shrink-0" />{left || total}</span>{left > 0 && left < total ? <span className="text-muted-foreground">/{total}</span> : null}</span>;
+        return <span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-phone-row-pr={state}><Icon className="size-(--size-pr-icon) shrink-0" />{left > 0 ? left : null}</span>;
       })() : parts ? (() => {
         const { icon: Icon, tone } = PR_LOOK[parts.state];
         return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />#{parts.number}</span>;
