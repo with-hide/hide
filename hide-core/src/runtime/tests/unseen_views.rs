@@ -508,7 +508,7 @@ fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
         &mut guard,
         "00000000000000b8",
         "8",
-        crate::access::Mode::All,
+        crate::access::Mode::Own,
     );
     // The tool started `sender`, and `recipient` under it, as the started
     // record keeps every agent delegated under the tool's.
@@ -557,7 +557,7 @@ fn a_view_a_tools_agent_opened_is_the_eye_on_its_row_in_the_tools_cell_only() {
         &mut guard,
         "00000000000000b9",
         "9",
-        crate::access::Mode::All,
+        crate::access::Mode::Own,
     );
     guard.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
         connection: connection.clone(),
@@ -624,7 +624,7 @@ fn a_tools_direct_open_is_the_operators_own_open() {
         &mut guard,
         "00000000000000ba",
         "a",
-        crate::access::Mode::All,
+        crate::access::Mode::Own,
     );
     keyboard(&mut guard, Some("sender"));
     let caller = crate::workspace_control::access_caller_id(&connection, None);

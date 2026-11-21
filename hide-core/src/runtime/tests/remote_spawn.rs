@@ -2673,3 +2673,56 @@ fn an_ended_wait_says_what_became_of_the_spawns_brief() {
     confirmed.brief_input.as_mut().unwrap().confirmed_at_unix_ms = Some(1);
     assert_eq!(confirmed.brief_phase().word(), "confirmed");
 }
+
+/// mission-87: an own-mode bot starts agents in any project on a connected
+/// device, and the agent it starts there is its own work.
+#[test]
+fn an_own_mode_bots_spawn_on_a_device_is_its_own_work() {
+    use crate::access::{Call as AccessCall, Mode, key_hash};
+    use crate::runtime::access::AccessEvent;
+    let spawner = spawner();
+    let connection = {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        runtime.install_delivery_client(spawner.client.clone());
+        let (asked, _) = runtime.access_call(AccessCall::Request {
+            name: "nightly".into(),
+            key_sha256: key_hash(&"7".repeat(64)),
+            program: None,
+            id: "00000000000000a7".into(),
+        });
+        let id = asked.unwrap()["id"].as_str().unwrap().to_owned();
+        assert!(runtime.access_event(AccessEvent::Approve {
+            id: id.clone(),
+            mode: Mode::Own,
+        }));
+        id
+    };
+    let mut command = match desk_command(DEVICE, "own-run") {
+        crate::delivery::Command::Agents { command } => command,
+        _ => unreachable!(),
+    };
+    if let Command::Spawn { machine, .. } = &mut command {
+        *machine = Some(DEVICE.into());
+    }
+    // The guard ends with this statement: the run waits on a worker that
+    // takes the runtime lock.
+    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+        crate::node::TEST_NODE,
+        &crate::workspace_control::access_caller_id(&connection, None),
+        &crate::access::access_context(crate::node::TEST_NODE, &connection),
+        None,
+        crate::delivery::Command::Agents { command },
+    );
+    let started = prepared
+        .and_then(|prepared| prepared.run(Duration::from_secs(30)))
+        .unwrap();
+    assert_eq!(started["machine"], DEVICE);
+    assert_eq!(started["origin_tool"], "nightly");
+    let ledger = spawner.published();
+    let own = crate::coordination::started::hide_started(&ledger).tool_work;
+    assert!(
+        own.iter().any(|work| work.connection == connection
+            && Some(work.agent_id.as_str()) == started["id"].as_str()),
+        "the agent it started on the device is its work"
+    );
+}

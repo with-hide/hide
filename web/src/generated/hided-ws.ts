@@ -136,7 +136,8 @@ export type SnapshotSections =
   | AccessSnapshot
   | AccessApprovePayload
   | AccessModePayload
-  | AccessIdPayload;
+  | AccessIdPayload
+  | BotStarter;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -154,15 +155,14 @@ export type PaneTurnRowMode = "one_line" | "two_lines" | "off";
  */
 export type ColorTheme = "hide" | "neutral";
 /**
- * What an approved bot reaches (mission-87 D2): `all` is the whole Hide; `workspace` is one workspace, Hide's project, by the id `navigator.workspaces` gives it, with every checkout inside it, which the core holds the bot's commands, lists and reads to. A window names the workspace from `navigator.workspaces`; an id no longer there is a workspace since removed, where the bot reaches nothing.
+ * What an approved bot reaches (mission-87): `all` is the whole Hide, the operator's work and every bot's on every connected device; `own` is the bot's own work only, the agents it started, the agents started under them and the missions they conduct, which the core holds its commands, lists and reads to. Either mode starts agents in any project on any connected device.
  */
 export type AccessMode =
   | {
       kind: "all";
     }
   | {
-      kind: "workspace";
-      workspace_id: string;
+      kind: "own";
     };
 
 export interface HideWireTypes {
@@ -964,14 +964,14 @@ export interface AccessConnection {
   mission_count: number;
 }
 /**
- * Payload of access_approve, taken only from a window's connection: the waiting request `id` becomes a bot in `mode`. A workspace the catalog does not carry, a request gone, a full list or a taken name changes nothing.
+ * Payload of access_approve, taken only from a window's connection: the waiting request `id` becomes a bot in `mode`. A request gone, a full list or a taken name changes nothing.
  */
 export interface AccessApprovePayload {
   id: string;
   mode: AccessMode;
 }
 /**
- * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`. It moves none of the bot's work; a workspace the catalog does not carry changes nothing.
+ * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`. It moves none of the bot's work.
  */
 export interface AccessModePayload {
   id: string;
@@ -982,4 +982,18 @@ export interface AccessModePayload {
  */
 export interface AccessIdPayload {
   id: string;
+}
+/**
+ * The bot that started a row's root, on an agent row (`navigator.agents[].tool`, a device session's agents alike) and a mission (`missions.items[].tool`), absent for work no bot started (mission-87). Set from the coordination ledger for every bot-started root whatever the bot's mode, and shown, not an owner: `owns` is true only while the bot stands in own mode and keeps the work in its own cell; a bot of the whole Hide works as the operator, so its work is the operator's (false), as it is once the bot disconnects.
+ */
+export interface BotStarter {
+  /**
+   * The bot's connection id (`accessConnection.id`); a new connection of the same name is another id.
+   */
+  connection: string;
+  /**
+   * The name the bot connected with.
+   */
+  name: string;
+  owns: boolean;
 }

@@ -1,4 +1,5 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
+import { botStarter } from "./bots";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
 import { Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
@@ -511,7 +512,7 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationRun(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} />}
-            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} profile={agent.profile} />
+            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} bot={botStarter(agent)} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}

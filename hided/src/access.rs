@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use hide_agent_hooks::hook_request::install::{AccessAsk, PaneRequest};
 use hide_core::access::{
-    Call, NEEDS_AGENT, OUTSIDE_WORKSPACE, SPAWN_PARENT, key_hash, valid_key, valid_name,
+    Call, NEEDS_AGENT, NOT_OWN_WORK, OPERATOR_ONLY, SPAWN_PARENT, key_hash, valid_key, valid_name,
 };
 use hide_core::engine::EngineHandle;
 use serde_json::{Value, json};
@@ -36,7 +36,8 @@ pub const REFUSALS: &[&str] = &[
     "access_not_connected",
     "access_key_unreadable",
     "access_reapprove",
-    OUTSIDE_WORKSPACE,
+    NOT_OWN_WORK,
+    OPERATOR_ONLY,
     NEEDS_AGENT,
     SPAWN_PARENT,
     "access_core_only",
@@ -76,8 +77,9 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
         "access_reapprove" => {
             "External tools became bots, and a View only tool is approved again before it runs anything; run hide access request --name <name> to ask the operator"
         }
-        "access_outside_workspace" => {
-            "This bot is limited to its one workspace; run the command on that workspace's agents, panes, Views and missions, or ask the operator to give it the whole Hide in Settings"
+        "access_not_own_work" => hide_core::access::NOT_OWN_WORK_NEXT_ACTION,
+        "access_operator_only" => {
+            "Only the operator adds or removes a device, in Settings > Devices; ask the operator"
         }
         "access_needs_agent" => {
             "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send"

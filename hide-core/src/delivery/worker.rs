@@ -49,6 +49,9 @@ pub struct Prepared {
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
+    /// For a bot held in one workspace, the registrations `hide agent list`
+    /// answers it with, by id (mission-87 D3); `None` answers every one.
+    listed: Option<std::collections::HashSet<String>>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -178,7 +181,14 @@ impl Prepared {
             answered: None,
             then: None,
             forced: None,
+            listed: None,
         }
+    }
+
+    /// Lists only the registrations `ids` names in an agent list's answer.
+    pub(crate) fn listing_only(mut self, ids: Option<std::collections::HashSet<String>>) -> Self {
+        self.listed = ids;
+        self
     }
 
     /// Words what the command hands over in `language`.
@@ -295,6 +305,11 @@ impl Prepared {
                 };
                 Some((text, json!(cells)))
             });
+        }
+        if let (Some(listed), Ok(value)) = (&self.listed, result.as_mut())
+            && let Some(items) = value.get_mut("items").and_then(Value::as_array_mut)
+        {
+            items.retain(|item| item["id"].as_str().is_some_and(|id| listed.contains(id)));
         }
         if let Some(after) = self.then {
             after(&result);

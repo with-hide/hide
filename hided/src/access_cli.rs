@@ -547,12 +547,11 @@ fn fresh_key() -> Result<String, Refusal> {
     Ok(hex::encode(bytes))
 }
 
-/// The mode a bot runs in, in words: the whole Hide, or the one workspace
-/// by its id, which `hide workspace info` in that workspace names.
-fn mode_words(value: &Value) -> String {
-    match value["mode"]["workspace_id"].as_str() {
-        Some(workspace) => format!("workspace {workspace}"),
-        None => "whole Hide".to_owned(),
+/// The mode a bot runs in, in words.
+fn mode_words(value: &Value) -> &'static str {
+    match value["mode"]["kind"].as_str() {
+        Some("own") => "own work",
+        _ => "whole Hide",
     }
 }
 

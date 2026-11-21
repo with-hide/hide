@@ -728,3 +728,112 @@ fn the_agent_list_names_no_tools_own_identity() {
         ["other", "worker"]
     );
 }
+
+/// mission-87 c2: an own-mode bot reaches the agents and panes of its own
+/// work (shows, writes to, reads, types into), a connected device's pane
+/// among them, and is refused the same on the operator's with
+/// `access_not_own_work`; its agent list names its own work only, and the
+/// whole Hide reaches the operator's again with no new approval.
+#[test]
+fn an_own_mode_bot_reaches_its_own_agents_and_panes_and_not_the_operators() {
+    let fixture = Fixture::start();
+    let connection = fixture.connect(Mode::Own);
+    let (worker, other) = (fixture.ids["worker"].clone(), fixture.ids["other"].clone());
+    // `worker` and a pane on the device `mini` are the bot's work, as the
+    // started records name them; `other` is the operator's.
+    let mine = |runtime: &mut Runtime| {
+        runtime.hide_started.tool_work = [
+            (worker.as_str(), "worker"),
+            ("agent-m", "remote:mini:pane:p1"),
+        ]
+        .into_iter()
+        .map(|(agent, pane)| crate::coordination::started::ToolWork {
+            connection: connection.clone(),
+            name: "nightly".into(),
+            agent_id: agent.into(),
+            pane_id: pane.into(),
+            session: None,
+            ended: false,
+        })
+        .collect();
+    };
+    let tool = |command: Command| {
+        mine(&mut fixture.runtime.lock().unwrap());
+        fixture.tool(&connection, command)
+    };
+    let not_own = |result: Result<Value, String>| {
+        assert_eq!(result.err().as_deref(), Some(crate::access::NOT_OWN_WORK))
+    };
+    let show = |id: &str| Command::Agents {
+        command: crate::coordination::Command::Show { id: id.into() },
+    };
+    let list = || Command::Agents {
+        command: crate::coordination::Command::List { live: false },
+    };
+    let listed = |result: Value| {
+        let mut panes = result["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["pane"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        panes.sort();
+        panes
+    };
+
+    assert!(tool(show(&worker)).is_ok());
+    not_own(tool(show(&other)));
+    assert!(tool(send(&worker, "look")).is_ok());
+    not_own(tool(send(&other, "look")));
+    assert_eq!(listed(tool(list()).unwrap()), ["worker"]);
+    not_own(tool(Command::Agents {
+        command: crate::coordination::Command::End {
+            id: other.clone(),
+            actor: None,
+            keep_pane: true,
+        },
+    }));
+
+    let caller = access_caller_id(&connection, None);
+    let context = crate::access::access_context(crate::node::TEST_NODE, &connection);
+    let read = |pane: &str| crate::pane_command::PaneCommand::Read {
+        pane: pane.into(),
+        lines: 10,
+    };
+    let typing = |pane: &str| crate::pane_command::PaneCommand::Send {
+        pane: pane.into(),
+        text: Some("hi".into()),
+        keys: Vec::new(),
+        enter: false,
+        paste: false,
+    };
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        mine(&mut runtime);
+        let node = crate::node::TEST_NODE;
+        let prepare = |command| runtime.prepare_pane_command(node, &caller, &context, command);
+        assert!(prepare(read("worker")).is_ok());
+        assert!(prepare(typing("worker")).is_ok());
+        for pane in ["other", "remote:mini:pane:p2"] {
+            for command in [read(pane), typing(pane)] {
+                assert_eq!(
+                    prepare(command).err().as_deref(),
+                    Some(crate::access::NOT_OWN_WORK),
+                    "{pane}"
+                );
+            }
+        }
+        // The device's pane of its own work goes past the hold, to the
+        // device's engine, which this fixture does not connect.
+        let device = prepare(read("remote:mini:pane:p1")).err();
+        assert_ne!(device.as_deref(), Some(crate::access::NOT_OWN_WORK));
+    }
+
+    // The whole Hide reaches the operator's work again.
+    fixture.operator(AccessEvent::Mode {
+        id: connection.clone(),
+        mode: Mode::All,
+    });
+    assert!(tool(show(&other)).is_ok());
+    assert_eq!(listed(tool(list()).unwrap()), ["other", "worker"]);
+}

@@ -9,7 +9,7 @@
 import { ChevronDownIcon } from "lucide-react";
 import { useState } from "react";
 import type { Actions } from "../actions";
-import { BOT_MODES, botModeKind, type BotModeKind } from "../bots";
+import { BOT_MODES, type BotModeKind } from "../bots";
 import { BotFace } from "../components/bot-mark";
 import { useMinuteClock } from "../components/elapsed";
 import { Group, Note } from "../components/settings-rows";
@@ -114,7 +114,7 @@ function PendingRow({ request, machine, now, actions }: { request: AccessPending
 function ConnectionRow({ connection, machine, now, actions }: { connection: AccessConnection; machine: string; now: number; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const mode = botModeKind(connection.mode);
+  const mode = connection.mode.kind;
   return (
     <div className="flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm" data-access-connection={connection.id} data-access-mode={mode}>
       <BotFace name={connection.name} size="tile" mode={mode} />

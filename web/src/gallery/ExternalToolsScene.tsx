@@ -15,8 +15,7 @@ import { useShellStore } from "../store";
 
 const MINUTE = 60_000;
 
-/** A bot in its own space, as the core's wire names one today. */
-const OWN: AccessMode = { kind: "workspace", workspace_id: "gallery-own" };
+const OWN: AccessMode = { kind: "own" };
 
 function connection(id: string, name: string, mode: AccessMode, agents: number, missions: number, lastUsedMinutes: number): AccessConnection {
   const now = Date.now();
@@ -66,7 +65,7 @@ export function ExternalToolsScene({ params }: { params: URLSearchParams }) {
     const current = useShellStore.getState().access;
     if (!current) return true;
     const payload = event.payload as { id?: string; mode?: { kind: BotModeKind } };
-    const wire = (kind: BotModeKind): AccessMode => (kind === "all" ? { kind: "all" } : OWN);
+    const wire = (kind: BotModeKind): AccessMode => ({ kind });
     const id = payload.id;
     if (event.kind === "access_refuse") useShellStore.setState({ access: { ...current, pending: current.pending.filter((one) => one.id !== id) } });
     if (event.kind === "access_approve" && payload.mode) {

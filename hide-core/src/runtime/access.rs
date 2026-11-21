@@ -146,13 +146,7 @@ impl Runtime {
         )
     }
 
-    fn note_access(
-        &self,
-        kind: &str,
-        id: Option<&str>,
-        mode: Option<&Mode>,
-        reason: Option<&str>,
-    ) {
+    fn note_access(&self, kind: &str, id: Option<&str>, mode: Option<Mode>, reason: Option<&str>) {
         crate::diagnostic!(json!({
             "component": "access",
             "kind": kind,
@@ -214,7 +208,7 @@ impl Runtime {
                             self.note_access(
                                 "access.key_issued",
                                 Some(&connection.id),
-                                Some(&connection.mode),
+                                Some(connection.mode),
                                 None,
                             );
                         }
@@ -288,18 +282,20 @@ impl Runtime {
         let now = super::unix_milliseconds();
         let outcome = match &event {
             AccessEvent::Approve { id, mode } => self
-                .known_mode(mode)
-                .and_then(|()| self.access.state.approve(id, mode.clone(), now))
-                .map(|_| ("access.approved", id, Some(mode), true)),
+                .access
+                .state
+                .approve(id, *mode, now)
+                .map(|_| ("access.approved", id, Some(*mode), true)),
             AccessEvent::Refuse { id } => self
                 .access
                 .state
                 .refuse(id)
                 .map(|_| ("access.refused", id, None, false)),
             AccessEvent::Mode { id, mode } => self
-                .known_mode(mode)
-                .and_then(|()| self.access.state.set_mode(id, mode.clone()))
-                .map(|changed| ("access.mode", id, Some(mode), changed)),
+                .access
+                .state
+                .set_mode(id, *mode)
+                .map(|changed| ("access.mode", id, Some(*mode), changed)),
             AccessEvent::Revoke { id } => self
                 .access
                 .state
@@ -310,9 +306,11 @@ impl Runtime {
             Ok((kind, id, mode, save)) => {
                 self.note_access(kind, Some(id), mode, None);
                 self.access_changed(save);
-                // A mode moves no work: the bot keeps what it started in
-                // either mode (D5). A disconnect hands it to the operator.
-                if matches!(event, AccessEvent::Revoke { .. }) {
+                // Who keeps the bot's work follows the event that moved it:
+                // a bot of the whole Hide works as the operator, so all mode
+                // or a disconnect hands it to the operator at once, and own
+                // mode takes it back (mission-87).
+                if matches!(event, AccessEvent::Mode { .. } | AccessEvent::Revoke { .. }) {
                     let id = id.clone();
                     self.tool_work_moved(&id);
                 }
@@ -333,21 +331,12 @@ impl Runtime {
         }
     }
 
-    /// A workspace mode names a workspace this core registers; a window
-    /// sends only one it shows, so another is a stale screen's.
-    fn known_mode(&self, mode: &Mode) -> Result<(), &'static str> {
-        match mode.workspace() {
-            Some(workspace) if !self.workspace_known(workspace) => Err("access_workspace_unknown"),
-            _ => Ok(()),
-        }
-    }
-
     /// The connection `id` names, while it stands: the mode a command of
     /// it runs in, and the identity it acts as.
     pub(crate) fn access_actor(&self, id: &str) -> Option<(Mode, crate::delivery::Actor)> {
         self.access.state.connection(id).map(|connection| {
             (
-                connection.mode.clone(),
+                connection.mode,
                 crate::delivery::Actor::access(
                     &connection.id,
                     &connection.name,
@@ -363,12 +352,16 @@ impl Runtime {
     }
 
     /// Whether the bot of `connection` keeps its work now: the connection
-    /// stands, in either mode (PRD hide-external-control D-14, mission-87
-    /// D5). A disconnected or a left connection keeps none, and a new
-    /// connection of the same name is another id, so it takes none of this
-    /// (D-40).
+    /// stands in own mode (PRD hide-external-control D-14, mission-87). A
+    /// bot of the whole Hide works as the operator, so what it starts is the
+    /// operator's and only names it as its starter; a disconnected or a left
+    /// connection keeps none, and a new connection of the same name is
+    /// another id, so it takes none of this (D-40).
     pub(crate) fn access_keeps_work(&self, connection: &str) -> bool {
-        self.access.state.connection(connection).is_some()
+        self.access
+            .state
+            .connection(connection)
+            .is_some_and(|connection| connection.mode == Mode::Own)
     }
 
     /// The external tool `work` is, as a row or a mission names it: whether
@@ -395,7 +388,16 @@ impl Runtime {
         &self,
         mission: &crate::missions::Mission,
     ) -> Option<crate::model::ToolWorkSnapshot> {
-        let conductor = &mission.conductor;
+        self.conductor_tool(&mission.conductor)
+            .map(|work| self.tool_work_snapshot(work))
+    }
+
+    /// The bot's work `conductor` is, by its registration or, for a record
+    /// that names none, by its pane and session.
+    fn conductor_tool(
+        &self,
+        conductor: &crate::missions::Conductor,
+    ) -> Option<&crate::coordination::started::ToolWork> {
         self.hide_started
             .tool_work
             .iter()
@@ -407,10 +409,10 @@ impl Runtime {
                         && work.session == conductor.actor.session
                 }
             })
-            .map(|work| self.tool_work_snapshot(work))
     }
 
-    /// Who keeps connection `id`'s work moved (a disconnect, a leave): the rows and their lists are judged again on this event, so
+    /// Who keeps connection `id`'s work moved (a mode, a disconnect, a
+    /// leave): the rows and their lists are judged again on this event, so
     /// the work is in or out of the operator's lists at once (B16). Nothing
     /// is read for a tool that started nothing.
     fn tool_work_moved(&mut self, id: &str) -> bool {
@@ -465,7 +467,7 @@ impl Runtime {
                 AccessConnectionSnapshot {
                     id: connection.id.clone(),
                     name: connection.name.clone(),
-                    mode: connection.mode.clone(),
+                    mode: connection.mode,
                     program: connection.program.clone(),
                     created_ms: connection.created_ms,
                     last_used_ms: connection.last_used_ms,
@@ -512,32 +514,104 @@ impl Runtime {
             .access_actor(connection)
             .filter(|_| device == self.node.as_str())
             .ok_or(Ended::Revoked.reason())?;
-        crate::access::admit(&mode, need)?;
+        crate::access::admit(mode, need)?;
         Ok((actor, mode))
     }
 }
 
+/// What an own-mode bot's command reaches, judged against its own work
+/// (mission-87): the agents its connection started and every agent started
+/// under them, as the started records hold them (`hide_started.tool_work`,
+/// the set that keeps them out of the operator's lists), and the missions
+/// those agents conduct. What none of them is, is not its own.
 impl Runtime {
-    /// Whether `workspace` is a workspace the catalog carries, on this
-    /// machine or a connected device.
-    pub(super) fn workspace_known(&self, workspace: &str) -> bool {
-        self.catalog_workspaces().any(|known| known.id == workspace)
+    /// The own work an own-mode bot's command is held to: `None` for a
+    /// caller that is no bot, or a bot of the whole Hide.
+    pub(super) fn own_work(&self, caller: &str) -> Option<OwnWork> {
+        match crate::workspace_control::Caller::parse(caller) {
+            crate::workspace_control::Caller::Access { connection, .. }
+                if self
+                    .access
+                    .state
+                    .connection(connection)
+                    .is_some_and(|connection| connection.mode == Mode::Own) =>
+            {
+                Some(self.own_work_of(connection))
+            }
+            _ => None,
+        }
     }
 
-    /// The workspace whose tabs hold `pane` on `device`.
-    pub(super) fn pane_workspace(&self, device: &str, pane: &str) -> Option<&str> {
-        self.catalog_workspaces()
-            .filter(|workspace| workspace.device_id == device)
-            .find(|workspace| {
-                workspace.checkouts.iter().any(|checkout| {
-                    checkout.tabs.iter().any(|tab| {
-                        tab.panes.iter().any(|row| {
-                            crate::address::same_pane(self.node.as_str(), device, &row.id, pane)
-                        })
-                    })
+    /// Connection `id`'s own work now.
+    pub(super) fn own_work_of(&self, id: &str) -> OwnWork {
+        let work: Vec<_> = self
+            .hide_started
+            .tool_work
+            .iter()
+            .filter(|work| work.connection == id)
+            .collect();
+        OwnWork {
+            connection: id.to_owned(),
+            agents: work.iter().map(|work| work.agent_id.clone()).collect(),
+            panes: work
+                .iter()
+                .filter(|work| !work.ended)
+                .map(|work| work.pane_id.clone())
+                .collect(),
+        }
+    }
+
+    /// Whether the agent or pane `key` a command names on `device` is
+    /// `own`'s: a registration by its id, name or pane, else a live pane of
+    /// its work.
+    pub(super) fn is_own(&self, own: &OwnWork, device: &str, key: &str) -> bool {
+        let node = self.node.as_str();
+        let registered = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
+            ledger
+                .agents
+                .iter()
+                .rev()
+                .filter(|record| !record.ended)
+                .chain(ledger.agents.iter().rev().filter(|record| record.ended))
+                .find(|record| {
+                    record.id == key
+                        || record.name.as_deref() == Some(key)
+                        || crate::address::same_pane(node, device, &record.actor.pane_id, key)
                 })
-            })
-            .map(|workspace| workspace.id.as_str())
+                .map(|record| own.agents.contains(&record.id))
+        });
+        registered.unwrap_or_else(|| {
+            own.panes
+                .iter()
+                .any(|pane| crate::address::same_pane(node, device, pane, key))
+        })
+    }
+
+    /// Whether `conductor` conducts as `own`'s work.
+    pub(super) fn conducts_own(
+        &self,
+        own: &OwnWork,
+        conductor: &crate::missions::Conductor,
+    ) -> bool {
+        self.conductor_tool(conductor)
+            .is_some_and(|work| work.connection == own.connection)
+    }
+}
+
+/// An own-mode bot's work: its started agents by registration id, and the
+/// panes of those still running, by the id the core names them with.
+pub(super) struct OwnWork {
+    pub connection: String,
+    pub agents: std::collections::HashSet<String>,
+    pub panes: Vec<String>,
+}
+
+/// Holds what an own-mode bot names to its own work.
+pub(super) fn hold(own: bool) -> Result<(), String> {
+    if own {
+        Ok(())
+    } else {
+        Err(crate::access::NOT_OWN_WORK.to_owned())
     }
 }
 
@@ -589,9 +663,6 @@ mod tests {
     fn the_access_section_and_its_events_are_the_shapes_the_wire_contract_names() {
         let schema = schema();
         let defs = &schema["$defs"];
-        let workspace = Mode::Workspace {
-            workspace_id: "workspace:00000000000000aa".into(),
-        };
         let section = serde_json::to_value(AccessSnapshot {
             machine: "this-mac".into(),
             limit: crate::access::MAX_CONNECTIONS,
@@ -601,7 +672,7 @@ mod tests {
                 program: None,
                 requested_ms: 1,
             }],
-            connections: [Mode::All, workspace.clone()]
+            connections: [Mode::All, Mode::Own]
                 .into_iter()
                 .enumerate()
                 .map(|(n, mode)| AccessConnectionSnapshot {
@@ -625,8 +696,8 @@ mod tests {
         }
 
         // Each event the contract declares decodes from its payload, and a
-        // level, the earlier wire, decodes into nothing.
-        for mode in [json!({"kind": "all"}), serde_json::to_value(&workspace).unwrap()] {
+        // level or a workspace, earlier wires, decodes into nothing.
+        for mode in [json!({"kind": "all"}), json!({"kind": "own"})] {
             let payload = json!({"id": "00000000000000a1", "mode": mode});
             assert!(fits(&defs["accessApprovePayload"], &payload));
             assert!(fits(&defs["accessModePayload"], &payload));
@@ -646,13 +717,32 @@ mod tests {
         for refused in [
             ("access_approve", json!({"id": "a", "level": "act"})),
             ("access_level", json!({"id": "a", "level": "act"})),
-            ("access_mode", json!({"id": "a", "mode": {"kind": "workspace"}})),
+            (
+                "access_mode",
+                json!({"id": "a", "mode": {"kind": "workspace"}}),
+            ),
         ] {
-            assert!(AccessEvent::decode(refused.0, refused.1.clone()).is_none(), "{refused:?}");
+            assert!(
+                AccessEvent::decode(refused.0, refused.1.clone()).is_none(),
+                "{refused:?}"
+            );
         }
+        // The starter a row and a mission carry names the bot either way.
+        let starter = serde_json::to_value(crate::model::ToolWorkSnapshot {
+            connection: "00000000000000b1".into(),
+            name: "bot-1".into(),
+            owns: false,
+        })
+        .unwrap();
+        assert!(fits(&defs["botStarter"], &starter), "{starter}");
         assert_eq!(
             AccessEvent::KINDS,
-            ["access_approve", "access_refuse", "access_mode", "access_revoke"]
+            [
+                "access_approve",
+                "access_refuse",
+                "access_mode",
+                "access_revoke"
+            ]
         );
     }
 }

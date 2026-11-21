@@ -1633,6 +1633,7 @@ impl Runtime {
         // already scoped to a device is a full address and stays as it is.
         let node = self.node.as_str().to_owned();
         let qualify = |pane: &str| crate::address::named_pane_id(&node, device, pane);
+        let mut listed = None;
         // Only Hide's pane attestation names the agent a command acts as; a
         // checkout-bound caller has no pane, and a hint cannot lend it one.
         // The Desk process acts as Hide's own `hide:desk` while it runs.
@@ -1649,13 +1650,15 @@ impl Runtime {
             if hint.is_some() {
                 return Err("caller_identity_conflict".into());
             }
-            // What its level does not allow, a pane agent's own asks among
-            // them, is refused before any of it is read (B20-B23).
-            (
-                expected.clone(),
-                self.access_authority(device, connection, crate::access::delivery_need(&command))?
-                    .0,
-            )
+            // What its mode does not allow, a pane agent's own asks among
+            // them, is refused before any of it is read (B20-B23), and an
+            // own-mode bot's command is held to its own work (mission-87).
+            let (actor, _) =
+                self.access_authority(device, connection, crate::access::delivery_need(&command))?;
+            if let Some(own) = self.own_work(caller) {
+                listed = self.hold_delivery(device, &own, &command)?;
+            }
+            (expected.clone(), actor)
         } else {
             let context = self
                 .workspace_control_query(device, caller, Query::Info)
@@ -1679,6 +1682,36 @@ impl Runtime {
             return Err("caller_context_changed".into());
         }
         self.prepare_as(device, caller, context, Proven::Now, actor, command)
+            .map(|prepared| prepared.listing_only(listed))
+    }
+
+    /// Holds an own-mode bot's delivery command to its own work (mission
+    /// -87): the agent it shows, ends, writes to or watches is one it
+    /// started or one started under those; a spawn, in any project on any
+    /// connected device, starts its own work; its own letters and watches
+    /// are its own. An agent list answers with its own work, which this
+    /// returns.
+    fn hold_delivery(
+        &self,
+        device: &str,
+        own: &super::access::OwnWork,
+        command: &Command,
+    ) -> Result<Option<std::collections::HashSet<String>>, String> {
+        use crate::coordination::Command as Agents;
+        match command {
+            Command::Agents {
+                command: Agents::List { .. },
+            } => return Ok(Some(own.agents.clone())),
+            Command::Agents {
+                command: Agents::Show { id } | Agents::End { id, .. },
+            }
+            | Command::Send { target: id, .. }
+            | Command::WatchStart { target: id, .. } => {
+                super::access::hold(self.is_own(own, device, id))?;
+            }
+            _ => {}
+        }
+        Ok(None)
     }
 
     /// A letter a guest's node kept while this core was away (PRD

@@ -104,8 +104,8 @@ pub struct Capability {
 impl Capability {
     /// The mode a bot's command runs in, which the command boundary judges
     /// it by (`server::ScopedRequest::access_need`).
-    pub(crate) fn access_mode(&self) -> Option<&hide_core::access::Mode> {
-        self.access_mode.as_ref()
+    pub(crate) fn access_mode(&self) -> Option<hide_core::access::Mode> {
+        self.access_mode
     }
 
     /// The shell a pane-bound credential was proved against; none for any

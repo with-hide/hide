@@ -3,7 +3,7 @@
 //! A program outside every Hide pane on the core's own machine (a chat
 //! gateway, a cron job, a script) asks once with `hide access request
 //! --name <name>`; the operator approves it as a bot from Settings, in one
-//! of two modes, the whole Hide or one workspace, and from then on the bot
+//! of two modes, the whole Hide or its own work, and from then on the bot
 //! runs the ordinary `hide` commands as that connection.
 //!
 //! The tool makes its key itself and keeps it in an owner-only file under
@@ -40,32 +40,25 @@ pub(crate) const READ_CAP: u64 = 256 * 1024;
 /// schema 1 is read once more on load ([`decode`]).
 const SCHEMA_VERSION: u32 = 2;
 
-/// What an approved bot reaches (mission-87 D1, D2): every bot runs what
-/// the operator does through `hide`; a mode says over how much of Hide.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+/// What an approved bot reaches (mission-87): every bot runs what the
+/// operator does through `hide`; a mode says over whose work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Mode {
-    /// The whole Hide: every workspace, device and the settings-wide state.
+    /// The whole Hide: the operator's work and every bot's, on every
+    /// connected device, and the settings-wide state.
     All,
-    /// One workspace, Hide's project, with every checkout inside it: the
-    /// core holds the bot inside it (`runtime::access`, D3).
-    Workspace { workspace_id: String },
+    /// Its own work only: the agents it started, the agents started under
+    /// them, and the missions they conduct (`Runtime::own_work`); it starts
+    /// agents in any project on any connected device, and those are its own.
+    Own,
 }
 
 impl Mode {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
-            Self::Workspace { .. } => "workspace",
-        }
-    }
-
-    /// The workspace a workspace-mode bot is held in; `None` for the whole
-    /// Hide.
-    pub fn workspace(&self) -> Option<&str> {
-        match self {
-            Self::All => None,
-            Self::Workspace { workspace_id } => Some(workspace_id),
+            Self::Own => "own",
         }
     }
 }
@@ -306,8 +299,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Stored, String> {
     let version: Version = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let mut stored = match version.schema_version {
         0 | 1 => {
-            let old: StoredV1 =
-                serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+            let old: StoredV1 = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
             let (act, view): (Vec<_>, Vec<_>) = old
                 .connections
                 .into_iter()
@@ -476,8 +468,7 @@ impl Access {
         })
     }
 
-    /// The operator approves the waiting request `id` in `mode` (B4); the
-    /// caller has checked that a workspace mode names a workspace.
+    /// The operator approves the waiting request `id` in `mode` (B4).
     pub fn approve(
         &mut self,
         id: &str,
@@ -582,14 +573,18 @@ impl Access {
 /// and the core again when the command runs (`runtime::access`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Need {
-    /// Reaches agents, panes, Views, missions, checkouts or paths, or only
-    /// the bot's own letters and watches: every bot runs it, and the core
-    /// holds a workspace-mode bot's to its workspace where the command
-    /// names or lists what it reaches (`Runtime::access_scope`).
-    Workspace,
-    /// Belongs to no workspace (devices, settings-wide state): the whole
-    /// Hide only.
+    /// Reaches agents, panes or missions, or only the bot's own letters and
+    /// watches: every bot runs it, and the core holds an own-mode bot's to
+    /// its own work where the command names or lists what it reaches
+    /// (`runtime::access`, `Runtime::own_work`).
+    Work,
+    /// Reaches what is no one bot's work: the operator's screen (Views,
+    /// files, the project's records), devices and the settings-wide state.
+    /// The whole Hide only.
     All,
+    /// The operator's alone, whatever the mode: adding or removing a device
+    /// (operator decision 2026-11-21), as approving a bot is.
+    Operator,
     /// Means an agent in a Hide pane: no bot runs it; the bot starts an
     /// agent and asks it instead (B22).
     Agent,
@@ -597,28 +592,33 @@ pub enum Need {
     Parent,
 }
 
-/// A workspace-mode bot reached past its workspace, or for what belongs to
-/// no workspace (D3).
-pub const OUTSIDE_WORKSPACE: &str = "access_outside_workspace";
+/// An own-mode bot reached past its own work.
+pub const NOT_OWN_WORK: &str = "access_not_own_work";
+/// What only the operator does, such as adding or removing a device.
+pub const OPERATOR_ONLY: &str = "access_operator_only";
+/// What a bot refused [`NOT_OWN_WORK`] is told, by the core's refusals and
+/// hided's alike.
+pub const NOT_OWN_WORK_NEXT_ACTION: &str = "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings";
 /// A command only an agent in a Hide pane can mean (B22).
 pub const NEEDS_AGENT: &str = "access_needs_agent";
 /// A bot's spawn named a parent (B23).
 pub const SPAWN_PARENT: &str = "access_spawn_parent";
 
 /// Whether a bot in `mode` runs a command that needs `need`, or the reason
-/// it is refused. What a `Need::Workspace` command names is judged where it
-/// is read, against [`Mode::workspace`].
-pub fn admit(mode: &Mode, need: Need) -> Result<(), &'static str> {
+/// it is refused. What a `Need::Work` command of an own-mode bot names is
+/// judged where it is read, against its own work.
+pub fn admit(mode: Mode, need: Need) -> Result<(), &'static str> {
     match (mode, need) {
-        (_, Need::Workspace) | (Mode::All, Need::All) => Ok(()),
-        (Mode::Workspace { .. }, Need::All) => Err(OUTSIDE_WORKSPACE),
+        (_, Need::Work) | (Mode::All, Need::All) => Ok(()),
+        (Mode::Own, Need::All) => Err(NOT_OWN_WORK),
+        (_, Need::Operator) => Err(OPERATOR_ONLY),
         (_, Need::Agent) => Err(NEEDS_AGENT),
         (_, Need::Parent) => Err(SPAWN_PARENT),
     }
 }
 
 /// What a delivery command needs: listing, showing, spawning and ending
-/// agents and the bot's letters and watches reach a workspace, a spawn
+/// agents and the bot's letters and watches reach work, a spawn
 /// under a parent never runs, and what names the caller's own pane
 /// (`here`, `--beside`, a plan node, registering, asking a person, a hook's
 /// reads) needs an agent. A spawn with a task is Hide's own, which the
@@ -635,9 +635,10 @@ pub fn delivery_need(command: &crate::delivery::Command) -> Need {
             Agents::Spawn {
                 beside, plan_node, ..
             } if *beside || plan_node.is_some() => Need::Agent,
-            Agents::List { .. } | Agents::Show { .. } | Agents::Spawn { .. } | Agents::End { .. } => {
-                Need::Workspace
-            }
+            Agents::List { .. }
+            | Agents::Show { .. }
+            | Agents::Spawn { .. }
+            | Agents::End { .. } => Need::Work,
             Agents::RegisterSelf { .. }
             | Agents::Register { .. }
             | Agents::AskHuman { .. }
@@ -655,12 +656,12 @@ pub fn delivery_need(command: &crate::delivery::Command) -> Need {
         | Delivery::WatchStart { .. }
         | Delivery::WatchStop { .. }
         | Delivery::WatchAssign { .. }
-        | Delivery::WatchList => Need::Workspace,
+        | Delivery::WatchList => Need::Work,
     }
 }
 
 /// What a pane command needs: reading a pane and typing into one reach the
-/// pane's workspace, and opening a pane beside the caller or naming its
+/// work it runs, and opening a pane beside the caller or naming its
 /// purpose needs the caller's own pane.
 pub fn pane_need(command: &crate::pane_command::PaneCommand) -> Need {
     use crate::pane_command::PaneCommand;
@@ -668,24 +669,28 @@ pub fn pane_need(command: &crate::pane_command::PaneCommand) -> Need {
         PaneCommand::Read { .. }
         | PaneCommand::ReadScreen { .. }
         | PaneCommand::AgentRead { .. }
-        | PaneCommand::Send { .. } => Need::Workspace,
+        | PaneCommand::Send { .. } => Need::Work,
         PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => Need::Agent,
     }
 }
 
-/// What a mission command needs: reading missions reaches their
-/// workspaces; a bot leads none, a Conductor it starts does (D-12).
+/// What a mission command needs: reading missions reaches their work; a bot leads none, a Conductor it starts does (D-12).
 pub fn mission_need(command: &crate::missions::MissionCommand) -> Need {
     use crate::missions::MissionCommand;
     match command {
-        MissionCommand::List | MissionCommand::Show { .. } => Need::Workspace,
+        MissionCommand::List | MissionCommand::Show { .. } => Need::Work,
         _ => Need::Agent,
     }
 }
 
-/// What a device command needs: devices belong to no workspace.
-pub fn device_need(_command: &crate::device_command::DeviceCommand) -> Need {
-    Need::All
+/// What a device command needs: devices are no bot's work, and adding or
+/// removing one is the operator's alone.
+pub fn device_need(command: &crate::device_command::DeviceCommand) -> Need {
+    use crate::device_command::DeviceCommand;
+    match command {
+        DeviceCommand::List | DeviceCommand::Retry { .. } => Need::All,
+        DeviceCommand::Add { .. } | DeviceCommand::Remove { .. } => Need::Operator,
+    }
 }
 
 #[cfg(test)]
@@ -825,15 +830,13 @@ mod tests {
     }
 
     #[test]
-    fn every_bot_runs_a_workspace_command_and_only_the_whole_hide_runs_one_of_no_workspace() {
-        let workspace = Mode::Workspace {
-            workspace_id: "workspace:1".into(),
-        };
-        assert_eq!(admit(&Mode::All, Need::Workspace), Ok(()));
-        assert_eq!(admit(&Mode::All, Need::All), Ok(()));
-        assert_eq!(admit(&workspace, Need::Workspace), Ok(()));
-        assert_eq!(admit(&workspace, Need::All), Err(OUTSIDE_WORKSPACE));
-        for mode in [&Mode::All, &workspace] {
+    fn every_bot_runs_a_command_on_work_and_only_the_whole_hide_runs_the_rest() {
+        assert_eq!(admit(Mode::All, Need::Work), Ok(()));
+        assert_eq!(admit(Mode::All, Need::All), Ok(()));
+        assert_eq!(admit(Mode::Own, Need::Work), Ok(()));
+        assert_eq!(admit(Mode::Own, Need::All), Err(NOT_OWN_WORK));
+        for mode in [Mode::All, Mode::Own] {
+            assert_eq!(admit(mode, Need::Operator), Err(OPERATOR_ONLY));
             assert_eq!(admit(mode, Need::Agent), Err(NEEDS_AGENT));
             assert_eq!(admit(mode, Need::Parent), Err(SPAWN_PARENT));
         }
@@ -868,21 +871,13 @@ mod tests {
     }
 
     #[test]
-    fn a_mode_reads_and_writes_as_its_kind_with_the_workspace_it_names() {
-        let workspace = Mode::Workspace {
-            workspace_id: "workspace:00000000000000aa".into(),
-        };
-        assert_eq!(
-            serde_json::to_value(&workspace).unwrap(),
-            serde_json::json!({"kind": "workspace", "workspace_id": "workspace:00000000000000aa"})
-        );
-        assert_eq!(
-            serde_json::to_value(&Mode::All).unwrap(),
-            serde_json::json!({"kind": "all"})
-        );
-        assert!(
-            serde_json::from_value::<Mode>(serde_json::json!({"kind": "workspace"})).is_err()
-        );
+    fn a_mode_reads_and_writes_as_its_kind() {
+        for (mode, kind) in [(Mode::All, "all"), (Mode::Own, "own")] {
+            let wire = serde_json::json!({"kind": kind});
+            assert_eq!(serde_json::to_value(mode).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<Mode>(wire).unwrap(), mode);
+        }
+        assert!(serde_json::from_value::<Mode>(serde_json::json!({"kind": "workspace"})).is_err());
     }
 
     #[test]

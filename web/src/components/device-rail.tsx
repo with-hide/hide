@@ -11,7 +11,8 @@ import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
-import { botModeKind, type BotModeKind } from "../bots";
+import type { BotModeKind } from "../bots";
+import type { AccessConnection } from "../snapshot";
 import { BotFace } from "./bot-mark";
 import { EntryContextMenu } from "./entry-menu";
 import { Button } from "./ui/button";
@@ -22,6 +23,8 @@ import { SidebarMenus } from "./sidebar-menus";
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
 /** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
 export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
+
+const NO_BOTS: AccessConnection[] = [];
 
 /** A paired machine's tile counts nothing until its screen is shown here. */
 const NO_COUNTS: TileCounts = { needs_you: 0, done: 0 };
@@ -49,6 +52,7 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const tools = useShellStore((s) => toolCells(s.rest));
+  const bots = useShellStore((s) => s.access?.connections ?? NO_BOTS);
   // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).
   const toolFront = useFrontTool()?.connection ?? null;
   const tiles = useMemo<Tile[]>(() => {
@@ -106,13 +110,17 @@ export function DeviceRail({ actions }: { actions: Actions }) {
               </button>
             </Hint>
           </li>
-          {/* The bots, under a short line, after the devices and Add device (PRD hide-external-control D-50). */}
-          {tools.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
-          {tools.map((cell) => (
-            <li key={cell.connection} className="flex">
-              <BotTile name={cell.name} turn={cell.turn} connection={cell.connection} selected={cell.connection === toolFront} onSelect={() => actions.focusTool(cell.connection)} />
-            </li>
-          ))}
+          {/* Every connected bot, under a short line, after the devices and Add device, in the order they were approved (PRD hide-external-control D-50).
+              A bot in its own space opens its cell; a 전체 bot has none, since its work is the operator's, and opens Settings › 봇. */}
+          {bots.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
+          {bots.map((bot) => {
+            const cell = bot.mode.kind === "own" ? tools.find((one) => one.connection === bot.id) : undefined;
+            return (
+              <li key={bot.id} className="flex">
+                <BotTileView name={bot.name} turn={cell?.turn ?? 0} connection={bot.id} mode={bot.mode.kind} selected={cell !== undefined && cell.connection === toolFront} onSelect={() => (cell ? actions.focusTool(cell.connection) : actions.openSettings("externalTools"))} />
+              </li>
+            );
+          })}
         </ul>
         {/* View, Help and Settings stand at the rail's foot, as a chat app's rail keeps its own. */}
         <div className="mt-auto flex flex-col items-center gap-xs pt-md" data-rail-menus="true">
@@ -190,13 +198,6 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
     </Hint>
   );
 }
-
-/** A bot's tile reading its mode from the access section, where the core publishes it beside the connection. */
-const BotTile = memo(function BotTile(props: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
-  const connection = useShellStore((s) => s.access?.connections.find((one) => one.id === props.connection));
-  // A cell whose connection the section does not list yet reads as its own space, the narrower mode.
-  return <BotTileView {...props} mode={connection ? botModeKind(connection.mode) : "own"} />;
-});
 
 /**
  * A bot's tile (PRD hide-external-control D-50, B39, B41): the size of a

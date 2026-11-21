@@ -11,7 +11,7 @@ import sleepy from "./assets/bots/sleepy.png";
 import smile from "./assets/bots/smile.png";
 import tufts from "./assets/bots/tufts.png";
 import wink from "./assets/bots/wink.png";
-import type { AccessMode } from "./snapshot";
+import type { AccessMode, ToolWork } from "./snapshot";
 
 export const BOT_SHAPES = ["smile", "sleepy", "wink", "headset", "antenna", "beanie", "tufts"] as const;
 export const BOT_COLORS = ["slate", "coral", "teal", "lavender", "mustard", "sage", "charcoal"] as const;
@@ -53,10 +53,15 @@ function nth<T>(list: readonly T[], value: number): T {
  * only the agents and missions it started, or `all`, where it also reaches the
  * workspaces the operator works in.
  */
-export type BotModeKind = "own" | "all";
+export type BotModeKind = AccessMode["kind"];
 export const BOT_MODES: readonly BotModeKind[] = ["own", "all"];
 
-/** The screen's mode of a connected bot, from the core's. */
-export function botModeKind(mode: AccessMode): BotModeKind {
-  return mode.kind === "all" ? "all" : "own";
+/**
+ * The 전체-mode bot that started an agent the operator now keeps, by its
+ * name, or null: such a row carries `tool` only to name its starter
+ * (`owns` false), while a bot in its own space keeps its work (`owns`).
+ */
+export function botStarter(row: { tool?: ToolWork | null } | null | undefined): string | null {
+  const tool = row?.tool;
+  return tool && !tool.owns ? tool.name : null;
 }
