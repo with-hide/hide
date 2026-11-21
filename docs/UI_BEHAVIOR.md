@@ -2415,7 +2415,7 @@ A browser tab has no default chord for either, because Chrome keeps both pairs f
 
 ## Device rail
 
-Web owner: `web/src/components/device-rail.tsx`, `web/src/devices.ts`, the rail branch of `web/src/sidebar.tsx`.
+Web owner: `web/src/components/device-rail.tsx`, `web/src/devices.ts`, `web/src/computers.ts`, `web/src/RemoteStage.tsx`, the rail branch of `web/src/sidebar.tsx`.
 
 This section supersedes PRD home-device-rail rows D-10, D-11, D-27, B3, B4 and B12 (quick device-rail-badges): the Inbox, the rail that came and went with the first remote device, the Needs You-only badge and the footer device button no longer exist.
 Quick device-rail-slack then narrowed the rail to `--size-rail` (48), ran it the sidebar's full height, took the names off the tiles and left Working to the session rows.
@@ -2433,7 +2433,7 @@ The counts come from the device's published `agent_scope` values; the browser do
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported; while the center already offers `다시 연결` for that device (its Work, Projects and Backlog body, or its Workspace's surface or stale line), the sidebar leaves its own out, so the same action is drawn once.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row of its own names the device, while Needs You also lists the other connected devices' rows, each with its device's chip ([Sidebar hierarchy](#sidebar-hierarchy), operator decision 2026-11-08).
-In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
+In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the computer tile at that number, top to bottom with This Mac first, paired machines included, whether or not the rail shows and whether or not another machine's screen holds the keyboard, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 ⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
@@ -2447,7 +2447,19 @@ Selecting a tool's tile shows the tool's Overview as the center's page, never as
 The selected tile, a device's or a tool's, follows what the center shows: landing on a pane of a tool's agent by any path selects the tool's tile, and landing on any other pane selects that pane's device.
 A device's tile takes the center back to that device's Workspace; from a tool's cell, to the Workspace as the core holds it unless the pane it focuses is the tool's, else to that device's pane the keyboard was in last that no tool keeps, else to the device's Overview, so the press never lands back on the tool's work.
 Which cell a window shows is the window's own: another window and the phone keep theirs.
-⌥⌘1-9 numbers the devices only.
+⌥⌘1-9 numbers the computer tiles only.
+
+**Another computer's screen** (PRD device-connect-iroh D-37, B17, B20, B21, B47, B52, B63).
+The computer tiles are one group before `+`: This Mac, each device, and each other computer running its own Hide that this one is paired with and opens, drawn alike and numbered together; no tile wears a crown, and in a build that connects Hides the Settings › Devices row of This Mac wears none either, since every computer runs a core of its own (D-80).
+A paired computer's tile shows that computer's own Hide screen: the rail stays, and the rest of the window, from the rail's edge, is that computer's screen as its own window draws it, with no rail of its own, the keys typed there going to it; This Mac's tile, or any device's, brings this window's own screen back.
+How the two connect (direct, relay) is said in the device's Settings row only.
+A screen that cannot show says why, in the place it would stand and in its tile's hint, each in its own words: `연결 안 됨` with `다시 닿으면 자동으로 열려요`, `멈춤`, `상대가 멈춤`, `이 컴퓨터 업데이트 필요` or `그 컴퓨터 업데이트 필요`, `허가 없음`, and `확인하는 중` while the pairing settles; the tile is dimmed with its `×` meanwhile, and the screen opens on its own once it can, asking again every 5 s while its computer reads as reachable.
+While the other computer's screen drops for a moment, it shows its own `다시 연결하는 중` and sends no keys.
+Its connection lives only while its tile shows: another tile closes it, and coming back opens it at once, drawn from where it was.
+Anything this window draws over the screen's place (a menu, Settings, a dialog) moves the screen aside until it closes, since the screen is a view of its own over the window.
+On that screen the other computer offers nothing that lets a machine or a tool into it: no sharing, no allowing a pairing, no pausing or removing a computer, no approving an external tool and no pairing a phone, and a request for one is refused to that screen alone; removing a phone works.
+A browser tab has no way to draw another computer's screen, so a paired computer's tile there opens its row in Settings › Devices.
+The count marks of a paired computer's tile come from the counts its core sends over the connection, which the letters work adds; until then its tile carries none.
 
 A right-click on the rail offers `기기 목록 숨기기`.
 While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), then, after a line, the tools with their letters and their grey number, `기기 추가…` and `기기 목록 표시`; while a tool's cell is in front the top row names the tool, `nightly 외부 도구`.
