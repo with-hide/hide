@@ -1408,23 +1408,34 @@ With grants both ways both write.
 Only an agent writes to another core: a tool, Hide's own identities and another core's agent are refused `machine_not_permitted`, so nothing is passed on through a third machine.
 `hide pane send` types into no pane of another core and is refused `machine_not_permitted`; a read or a start asked while the two are not connected is refused `machine_unavailable`.
 
-A letter to another core's agent is kept by the sending core's ledger as any letter is and waits there as `pending`, on the clock of the connection between the two cores (`core:<device>`), so its deadline does not run while the other machine is away.
-The daemon carries it on the stream the two cores share ([ARCHITECTURE.md: The two cores' stream](ARCHITECTURE.md#the-two-cores-stream)), named by the sending machine and that core's letter id; the other core keeps it under an id of its own and remembers the sender's, and a reply names the sender's id back.
-A letter is sent again until it is answered, and the receiving core keeps it once, by its sender and intent.
-A refusal there (its ledger's cap, an intent conflict, a recipient that is gone) is answered with its reason: the letter ends `undelivered`, its sender gets one note from `hide:delivery` with the reason (`letter-undelivered:<id>`), and the letters behind it go on.
+A letter between two machines is between two registrations, as every letter is (PRD letters-missions-simplify D-21).
+Its target is `core:<device>:agent:<id>`, the registration id or the registered name of an agent there; a pane's address is refused `recipient_not_agent` where it is written.
+Its sender is the registration it writes as: an agent Hide holds none for is registered from what Hide reads of its pane, as any letter's sender is, and one Hide reads no agent session from is refused `sender_not_registered`, for a letter and for a start, because the other machine answers an agent.
+The letter is kept by the sending core's ledger as any letter is and waits there as `pending`, with no deadline, while the other machine is away.
+The daemon carries it on the stream the two cores share ([ARCHITECTURE.md: The two cores' stream](ARCHITECTURE.md#the-two-cores-stream)), named by that core's letter id and its sender's registration id and name; the other core keeps it under an id of its own and remembers the sender's (`core_id`), answers with the registration that took it, and a reply names the sender's id back.
+The receiving core takes it for an agent only: the registration it names, or the agent that runs in that registration's place now (`coordination::live_successor`), never a pane and never one of Hide's own identities, and any other target is refused `target_unavailable`.
+A letter is sent again until it is answered, and the receiving core keeps it once, by its sender's connection and letter id: asked again, it is answered as it stands, taken by its agent, or `no_recipient` once that agent ended with no agent after it.
+A refusal there (its ledger's cap, an intent conflict, a recipient that is gone) is answered with its reason: the letter ends `no_recipient` with that reason as its failure code, its sender reads it once as a status cell (`letter:<id>`, which says why and how to send again), and the letters behind it go on.
+A reply whose original the ledger no longer keeps and a letter whose sender has no registration end the same way before they leave (`letter_unavailable`, `sender_not_registered`).
 
-A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked and on which connection (`ledger::CoreStart`, at most 256), saved before the ask leaves, which is what lets that machine's result report in.
+A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked, by registration id, and on which connection (`ledger::CoreStart`, at most 256), saved before the ask leaves, which is what lets that machine's result report in.
+The asker is registered with that write when Hide holds no registration for it, and the other core is told its registration id and name.
+An asker whose pane another agent took hands its starts to that agent (`Ledger::hand_core_starts`), so the report reaches the agent that runs in its place.
 Asked again, the record takes the newest place and time; at the cap the oldest record whose asker ended goes, since no report reaches an ended agent, and while every asker may still take its report the new start is refused `capacity` and nothing is dropped, so a long mission's report is not lost to newer starts.
 When a pairing ends, the store's upkeep ends that machine's identities here and forgets the starts asked of it (`coordination::end_gone_cores`), as it does for a gone tool.
 
 A Conductor another machine's agent started with no parent reports to that agent: when its mission closes, by its own `hide mission close` or by Hide once every node is done, the core sends that origin the mission's report as a `report` letter, the Conductor's own (`hide-core/src/runtime/mission_report.rs`).
 An origin on the Conductor's own machine is sent none: an agent that starts an independent Conductor there hands the work to the operator.
-The letter is prepared at the next tick as a send from the Conductor's pane, so every rule of a letter applies to it; one that cannot be sent (no Conductor in its pane, an origin that is gone) is recorded as `mission.report_unsent` and the mission keeps its report.
-The same close asked again is the same letter, and a close with another end or report (a mission that waited for its merges turning done) is a new one.
+The debt is part of the mission's record: the close saves it with the close itself (`origin_report: owed`, `missions::OriginReport`), and a start reads the owed reports back from the stored missions, so a core that ends between the close and the letter writes it at its next start.
+The letter is prepared at the next tick as a send from the Conductor's pane, so every rule of a letter applies to it, and written on a thread of its own.
+Only what became of the letter settles the debt: kept by the store (`sent`, with the letter's id), or refused for good (`refused`, with the reason: the Conductor ended, the two machines are paired no longer, the origin is gone), which the Conductor reads once as a status cell (`mission-report:<id>`) so it can still write the letter itself.
+A Conductor away from its pane and a store that could not keep the letter (`delivery_unavailable`, `ledger_unavailable`, `delivery_timeout`) leave the debt, which is tried again 30 s later.
+The same close asked again is the same letter, and a close with another end or report (a mission that waited for its merges turning done) is a new one, which a send prepared for the earlier close does not settle.
 A Conductor under a parent, a fork, and one an agent of its own machine, a tool or Hide started send none.
 A question for a person (내 차례) reaches people only: no agent of another machine answers it.
 
 `hide-core/src/runtime/tests/core_letters.rs` runs two cores against each other for each of these, and `hided/src/peer_core.rs` the stream between two endpoints.
+What the ledger and a mission keep of another machine is also written over every released state folder and read by the next start ([TESTING.md: Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)).
 `hided/tests/it/pairing/core_letters.rs` is the journey: two daemons of a shipped copy of the build pair by a link, and a stand-in agent in a pane of each runs the shipped `hide` through a letter and its reply, the reads, both refusals, a start with no parent and the closed mission's report.
 
 ## Missions
