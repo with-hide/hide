@@ -87,7 +87,15 @@ def failures(jobs):
 
 def judge(run, jobs):
     """(exit status, lines) once the run is decided, or None while it is not."""
+    if run["status"] == "completed" and run["conclusion"] == "cancelled":
+        return 2, [f"cancelled: run {run['id']} ended before {WORKFLOW} did; a newer push replaces it ({run['html_url']})"]
     failed = failures(jobs)
+    # `verify` fails on a lane a newer push cancelled before the run itself
+    # reads as cancelled; with no lane of its own failed, the run's end
+    # decides between replaced and failed.
+    if failed and all(job["name"] == WORKFLOW for job in failed) \
+            and any(job["conclusion"] == "cancelled" for job in jobs) and run["status"] != "completed":
+        return None
     if failed:
         job = failed[0]
         step = next((step["name"] for step in job.get("steps") or [] if step.get("conclusion") in FAILED), None)
@@ -102,8 +110,6 @@ def judge(run, jobs):
         return 0, [f"passed: {WORKFLOW} ({run['html_url']})"]
     if run["status"] != "completed":
         return None
-    if run["conclusion"] == "cancelled":
-        return 2, [f"cancelled: run {run['id']} ended before {WORKFLOW} did; a newer push replaces it ({run['html_url']})"]
     # The run ended and `verify` did not pass: a job its own limit cancelled,
     # or no `verify` verdict at all (none, or skipped), which is not a pass.
     ended = [job for job in jobs if job["conclusion"] not in (PASSED, "skipped")]

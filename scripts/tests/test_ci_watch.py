@@ -136,6 +136,25 @@ class Replaced(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertTrue(lines[-1].startswith("cancelled: run 7"))
 
+    def test_verify_failing_on_a_lane_a_newer_push_cancelled_is_a_replaced_run(self):
+        # Seen on run 44914849365: the push cancelled `package (macos)`, and
+        # `verify` failed on it before the run read as cancelled.
+        cancelled = job("package / package (macos)", "completed", "cancelled", "2026-11-21T15:47:00Z")
+        gate = failed("verify", "2026-11-21T15:48:00Z", step="Every planned lane succeeded and every other lane was skipped")
+        github = GitHub([(run(), [passed("rust workspace / lint"), cancelled, gate]),
+                         (run("completed", "cancelled"), [passed("rust workspace / lint"), cancelled, gate])])
+        status, lines, sleeps = follow(github)
+        self.assertEqual((status, sleeps), (2, 1))
+        self.assertTrue(lines[-1].startswith("cancelled: run 7"))
+
+    def test_verify_failing_on_a_cancelled_lane_of_a_run_that_ends_failed_is_a_failure(self):
+        cancelled = job("rust workspace / build tests", "completed", "cancelled", "2026-11-21T12:26:00Z")
+        gate = failed("verify", "2026-11-21T12:27:00Z")
+        github = GitHub([(run(), [cancelled, gate]), (run("completed", "failure"), [cancelled, gate])])
+        status, lines, sleeps = follow(github)
+        self.assertEqual((status, sleeps), (1, 1))
+        self.assertTrue(lines[1].startswith("failed: verify"))
+
     def test_a_job_its_own_limit_cancelled_fails_the_watch_once_the_run_ends_failed(self):
         cancelled = job("rust workspace / build tests", "completed", "cancelled", "2026-11-21T12:26:00Z")
         github = GitHub([(run(), [cancelled]), (run("completed", "failure"), [cancelled, job("verify", "completed", "skipped")])])
