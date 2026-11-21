@@ -539,7 +539,13 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     apply(measure(), (update) => update());
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
-    return () => observer.disconnect();
+    // The selected name's width is the text's, which a font that finishes loading later changes with no box resized.
+    const fontsLoaded = () => apply(measure(), flushSync);
+    document.fonts?.addEventListener("loadingdone", fontsLoaded);
+    return () => {
+      observer.disconnect();
+      document.fonts?.removeEventListener("loadingdone", fontsLoaded);
+    };
   }, [tabCount, hasSelected, selectedId, selectedLabel, fits.selected]);
   // The shown view's tab stays in sight however many tabs the area holds
   // (B20, B21): the strip scrolls itself, and nothing around it, whenever
