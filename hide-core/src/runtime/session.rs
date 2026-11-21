@@ -3423,10 +3423,14 @@ impl Runtime {
 
     /// Records the number a page gave an operator focus, so the next snapshot
     /// tells that page how much of what it sent the focused pane already
-    /// includes (`OperatorFocusAck`).
+    /// includes (`OperatorFocusAck`). A card open (`detail_open`, `pr_open`)
+    /// carries the same numbering, since it may focus its owner's pane and
+    /// the page hands the card the keyboard only from the snapshot that
+    /// includes it.
     ///
-    /// Called for every operator focus the core receives, before it decides
-    /// what to do with it: a refused or redundant focus still answers the page.
+    /// Called for every operator focus and card open the core receives,
+    /// before it decides what to do with it: a refused or redundant one still
+    /// answers the page.
     /// The record is capped by page, oldest evicted, and an eviction is logged
     /// because the evicted page then reads as having nothing in flight.
     pub(super) fn acknowledge_operator_focus(

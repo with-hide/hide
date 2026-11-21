@@ -26,7 +26,7 @@ export const operatorFocusClientId: string = Array.from(crypto.getRandomValues(n
  * its owner's pane and hands the card the keyboard only from the snapshot
  * that includes it (`ViewAreas.tsx`).
  */
-export function isOperatorFocus(event: { kind: string; payload: Record<string, unknown> }): boolean {
+export function movesOperatorFocus(event: { kind: string; payload: Record<string, unknown> }): boolean {
   return (event.kind === "focus_pane" && event.payload.origin === "operator") || event.kind === "detail_open" || event.kind === "pr_open";
 }
 
