@@ -357,11 +357,15 @@ impl Runtime {
         Ok(access::core_admit(standing, command, ask)?)
     }
 
-    /// Who a send that names another core's agent goes to (`core:<device>:
-    /// agent:<id>`): that agent as this core knows it, with no pane to
-    /// observe. A pane of another machine is no recipient, and neither is a
-    /// sender Hide holds no registration for and cannot make one (D-21).
-    /// `None` for any other target.
+    /// Who a send that names another core's agent goes to: that agent as
+    /// this core knows it, with no pane to observe. It is named by its
+    /// address (`core:<device>:agent:<id>`), read on the one paired machine
+    /// that says the device id, or by the exact id of the registration this
+    /// ledger keeps of it, which is the agent on the connection it was
+    /// registered on whatever says its device id now. A pane of another
+    /// machine is no recipient, and neither is a sender Hide holds no
+    /// registration for and cannot make one (D-21). `None` for any other
+    /// target.
     pub(super) fn core_send_target(
         &self,
         sender: &Actor,
@@ -370,21 +374,38 @@ impl Runtime {
         let Command::Send { target, force, .. } = command else {
             return Ok(None);
         };
-        let Some(address) = CoreAddress::parse(target) else {
-            return Ok(None);
+        let recipient = match CoreAddress::parse(target) {
+            Some(address) => {
+                let address = address.map_err(|_| "target_unavailable".to_owned())?;
+                if address.item != CoreItem::Agent {
+                    return Err(RECIPIENT_NOT_AGENT.into());
+                }
+                let machine = self.peer_on(address.device)?;
+                Actor::core(
+                    address,
+                    &machine.key,
+                    &machine.name,
+                    address.id,
+                    self.node.as_str(),
+                )
+            }
+            None => {
+                let kept = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
+                    ledger
+                        .agents
+                        .iter()
+                        .find(|record| record.id == *target)
+                        .filter(|record| record.actor.core_address().is_some())
+                });
+                match kept {
+                    Some(record) => record.actor.clone(),
+                    None => return Ok(None),
+                }
+            }
         };
-        let address = address.map_err(|_| "target_unavailable".to_owned())?;
-        if address.item != CoreItem::Agent {
-            return Err(RECIPIENT_NOT_AGENT.into());
-        }
-        let machine = self.peer_on(address.device)?;
-        let recipient = Actor::core(
-            address,
-            &machine.key,
-            &machine.name,
-            address.id,
-            self.node.as_str(),
-        );
+        // Its machine is read from the recipient's own connection here, so
+        // a kept registration whose connection is paired no longer is
+        // refused and never turns to another that says its device id.
         self.core_send_admitted(sender, &recipient, command)?;
         self.core_asker_registration(sender)?;
         if *force {

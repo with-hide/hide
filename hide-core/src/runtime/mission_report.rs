@@ -1,14 +1,13 @@
 //! The result report a closed mission owes the agent that asked for it
 //! (PRD device-connect-iroh D-72, B65).
 //!
-//! A Conductor another machine's agent started here with no parent names
-//! that agent as its origin: the identity that core's agent stands as
-//! here. When its mission closes, by its own `hide mission close` or by
-//! Hide once every node is done, the origin is sent the mission's report
-//! as a `report` letter, which waits in this ledger and goes over the
-//! connection between the two cores once. An origin on this machine is
-//! sent none: the agent that started an independent Conductor here handed
-//! the work to the operator, who sees the mission close.
+//! A Conductor an agent started with no parent names that agent as its
+//! origin: an agent of this core, or the identity another machine's agent
+//! stands as here. When its mission closes, by its own `hide mission
+//! close` or by Hide once every node is done, the origin is sent the
+//! mission's report as a `report` letter, the same on this machine as on
+//! another; one for another machine waits in this ledger and goes over
+//! the connection between the two cores once.
 //!
 //! The letter is the Conductor's own, prepared as a `hide request send`
 //! from its pane and sent by the rules every letter of that Conductor is
@@ -56,10 +55,19 @@ fn later(code: &str) -> bool {
 const CUT: &str = "\n\n(The report is cut here to fit one letter.)";
 
 /// Who the Conductor `conductor` reports to, as a letter names it: the
-/// agent of another machine's core that started it with no parent, by its
-/// address on its own core. `None` for every other Conductor: one typed by
-/// the operator, delegated under a parent, a fork, and one an agent of this
-/// machine, Hide or an external tool started.
+/// agent that started it with no parent, by a registration id.
+///
+/// An agent of this core is named by the registration that runs in its
+/// place now; one whose line ended with no agent after it hears nothing.
+/// An agent of another machine's core is named by the registration this
+/// ledger keeps of it, ended or not. That registration is the agent on the
+/// connection its machine proved when it asked, so the report never reads
+/// the machine's device id again: another connection that says the same id
+/// neither makes it ambiguous nor takes it (`Runtime::core_send_target`),
+/// and one paired no longer refuses it.
+///
+/// `None` for every other Conductor: one typed by the operator, delegated
+/// under a parent, a fork, and one Hide or an external tool started.
 pub(in crate::runtime) fn origin_target(ledger: &Ledger, conductor: &Actor) -> Option<String> {
     let record = registration(ledger, conductor)?;
     if record.forked {
@@ -67,11 +75,12 @@ pub(in crate::runtime) fn origin_target(ledger: &Ledger, conductor: &Actor) -> O
         return None;
     }
     let origin = record.origin.as_deref()?;
-    let origin = ledger.agents.iter().find(|agent| agent.id == origin)?;
-    origin
-        .actor
-        .core_address()
-        .map(|address| address.to_string())
+    let kept = ledger.agents.iter().find(|agent| agent.id == origin)?;
+    if kept.actor.core_address().is_some() {
+        return Some(kept.id.clone());
+    }
+    let now = crate::coordination::live_successor(ledger, origin)?.ok()?;
+    (!now.actor.code_owned()).then(|| now.id.clone())
 }
 
 /// The Conductor's newest registration, a live one first.
@@ -372,11 +381,12 @@ mod tests {
         }
     }
 
-    /// D-72: the origin on another machine is named by its address there;
-    /// a Conductor nobody handed the work to, one an agent of this machine
-    /// started, a fork, and one a tool or Hide started report to no one.
+    /// D-72: the origin is named by its registration, on this machine as
+    /// on another; a Conductor nobody handed the work to, a fork, and one
+    /// a tool or Hide started report to no one, and neither does one whose
+    /// origin on this machine ended with no agent after it.
     #[test]
-    fn a_conductor_reports_to_the_agent_of_another_machine_that_started_it() {
+    fn a_conductor_reports_to_the_registration_of_the_agent_that_started_it() {
         let lead = agent("w1:p2");
         let there = Actor::core(
             CoreAddress::new("macbook", CoreItem::Agent, "agent-7"),
@@ -402,13 +412,14 @@ mod tests {
             origin_target(&ledger, &lead)
         };
         assert_eq!(
-            started_by("agent-1", false),
-            None,
-            "an agent of this machine handed the work to the operator"
+            started_by("agent-1", false).as_deref(),
+            Some("agent-1"),
+            "an agent of this machine hears it as one of another does"
         );
         assert_eq!(
             started_by("agent-2", false).as_deref(),
-            Some("core:macbook:agent:agent-7")
+            Some("agent-2"),
+            "the registration kept of the agent that asked"
         );
         assert_eq!(started_by("agent-3", false), None, "a tool hears no letter");
         assert_eq!(
@@ -417,6 +428,21 @@ mod tests {
             "a fork was asked nothing"
         );
         assert_eq!(started_by("agent-9", false), None, "an origin long gone");
+
+        // The origin's conversation ended and another agent took its pane:
+        // that agent is told. With no agent after it, nobody is.
+        ledger.agents[3].origin = Some("agent-1".into());
+        ledger.agents[3].forked = false;
+        ledger.agents[0].ended = true;
+        assert_eq!(origin_target(&ledger, &lead), None);
+        ledger.agents[0].successor = Some("agent-5".into());
+        ledger.agents.push(record("agent-5", agent("w1:p1"), None));
+        assert_eq!(origin_target(&ledger, &lead).as_deref(), Some("agent-5"));
+        // The kept registration of another machine's agent stays the
+        // target once its machine is gone, so the refusal is the letter's.
+        ledger.agents[3].origin = Some("agent-2".into());
+        ledger.agents[1].ended = true;
+        assert_eq!(origin_target(&ledger, &lead).as_deref(), Some("agent-2"));
     }
 
     /// The letter says which mission closed and how, carries the report,
