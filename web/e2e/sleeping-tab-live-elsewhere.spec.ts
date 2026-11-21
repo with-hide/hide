@@ -8,12 +8,11 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { startFixture } from "./engine-fixture";
-import { agentIn, corePaneFocus, shownTab, startAgentInCheckout, tabOfPane, withControl, type AgentRow } from "./daemon-actions";
-import { CLAUDE_FULL_ACCESS } from "./pane-fixture";
+import { agentIn, corePaneFocus, loggedCount, shownTab, startAgentInCheckout, tabOfPane, untilLogged, withControl, type AgentRow } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 
-test.describe.configure({ timeout: 150_000 });
+test.describe.configure({ timeout: 120_000 }); // wait-ok: the fixture's two agent starts, a sleep and a third start pass the 30 s default
 
 // The session the fixture's second agent runs (`engine-fixture.ts`).
 const SESSION = "fixture-two";
@@ -25,20 +24,15 @@ test("a visit to a sleeping tab whose conversation runs in another pane goes to 
   try {
     daemon = await startHided(engine, "sleeping-tab-live-elsewhere");
     const [, sleeper] = engine.panes;
-    const flat = (text: string) => text.replace(/\s+/g, "");
-    const resume = flat(`claude --resume ${SESSION} ${CLAUDE_FULL_ACCESS[0]} ${CLAUDE_FULL_ACCESS[1]}`);
-    const typedResumes = () => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", sleeper).then((text) => flat(text).split(resume).length - 1);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const pane = page.locator(`[data-pane-view="${sleeper}"]`);
-    await expect(pane).toBeVisible({ timeout: 20_000 });
+    await expect(pane).toBeVisible();
 
     await page.locator(`[data-pane-menu="${sleeper}"]`).click();
-    const item = page.locator('[data-menu-item="sleep_agent"]');
-    await expect(item).toBeEnabled({ timeout: 20_000 });
-    await item.click();
-    await expect(pane.locator('[data-pane-sleep="sleeping"]')).toBeVisible({ timeout: 30_000 });
-    const typedBefore = await typedResumes();
+    await page.locator('[data-menu-item="sleep_agent"]').click();
+    await untilLogged(daemon, { kind: "agent_sleep.slept", pane_id: sleeper, outcome: "slept" }, 1, `the sleep of ${sleeper}`);
+    await expect(pane.locator('[data-pane-sleep="sleeping"]')).toBeVisible();
 
     // The same conversation resumed in a tab of its own, as Take over or a
     // `claude --resume` typed in another tab does.
@@ -50,25 +44,24 @@ test("a visit to a sleeping tab whose conversation runs in another pane goes to 
     });
     await screenshot(page, "sleeping-tab-live-elsewhere-before");
 
-    // The operator clicks the sleeping agent's tab.
+    // The operator clicks the sleeping agent's tab: the core decides not to
+    // wake it, and the screen goes to the pane that runs the conversation.
     await page.locator(`[data-tab="${engine.tab}"]`).click();
-
-    // The screen goes to the pane that runs the conversation, and the
-    // sleeping pane holds no agent and no sleeping body any more.
-    await withControl(daemon, (control) => control.until((rest) => (corePaneFocus(rest) === live && shownTab(rest) === tabOfPane(rest, live)) || undefined, `the focus on ${live}`, 30_000));
-    await expect(page.locator(`[data-pane-view="${live}"]`)).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator(`[data-pane-view="${sleeper}"]`)).toHaveCount(0);
+    await untilLogged(daemon, { kind: "agent_sleep.live_elsewhere", pane_id: sleeper, live_pane_id: live, trigger: "visit" }, 1, `the visit to ${sleeper} finding ${SESSION} in ${live}`);
+    expect(loggedCount(daemon, { kind: "agent_sleep.waking", pane_id: sleeper })).toBe(0);
     await withControl(daemon, (control) => control.until((rest) => {
       const rows = ((rest.navigator as { agents?: AgentRow[] } | undefined)?.agents ?? []).filter((row) => row.session_id === SESSION);
-      return rows.length === 1 && rows[0].pane_id === live && !agentIn(rest, sleeper) ? true : undefined;
-    }, `one agent on ${SESSION}, in ${live}`, 30_000));
+      return corePaneFocus(rest) === live && shownTab(rest) === tabOfPane(rest, live) && rows.length === 1 && rows[0].pane_id === live && !agentIn(rest, sleeper) ? true : undefined;
+    }, `the focus on ${live}, the one agent on ${SESSION}`, 30_000));
+    await expect(page.locator(`[data-pane-view="${live}"]`)).toBeVisible();
+    await expect(pane).toHaveCount(0);
     await screenshot(page, "sleeping-tab-live-elsewhere-after");
 
     // A second visit finds the pane's shell, with nothing left to wake.
     await page.locator(`[data-tab="${engine.tab}"]`).click();
-    await expect(pane).toBeVisible({ timeout: 20_000 });
+    await expect(pane).toBeVisible();
     await expect(pane.locator("[data-pane-sleep]")).toHaveCount(0);
-    expect(await typedResumes()).toBe(typedBefore);
+    expect(loggedCount(daemon, { kind: "agent_sleep.waking", pane_id: sleeper })).toBe(0);
   } finally {
     daemon?.stop();
     engine.stop();
