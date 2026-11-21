@@ -488,10 +488,50 @@ mod tests {
         kinds
     }
 
+    /// The kinds the daemon answers before the core sees them: each one an
+    /// arm of `handle_client_text` names (`Some("…")`), its device file
+    /// events and the automation screen's kind.
+    fn daemon_kinds() -> BTreeSet<String> {
+        let path = format!("{}/src/server.rs", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        let start = text
+            .find("fn handle_client_text(")
+            .expect("the daemon reads a screen's events in handle_client_text");
+        let end = start
+            + text[start..]
+                .find("\n}\n")
+                .expect("handle_client_text ends");
+        let mut kinds = BTreeSet::new();
+        for arm in text[start..end].split("Some(").skip(1) {
+            let Some(close) = arm.find(')') else {
+                continue;
+            };
+            kinds.extend(
+                arm[..close]
+                    .split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_owned),
+            );
+        }
+        kinds.extend(
+            crate::server::DEVICE_FILE_EVENTS
+                .iter()
+                .map(|kind| (*kind).to_owned()),
+        );
+        kinds.insert(crate::automation_screen::KIND.to_owned());
+        assert!(
+            kinds.len() > 20,
+            "handle_client_text was not read: {kinds:?}"
+        );
+        kinds
+    }
+
     #[test]
-    fn every_kind_the_core_decodes_has_a_class() {
+    fn every_kind_the_core_or_the_daemon_reads_has_a_class() {
         let unclassified: Vec<_> = core_kinds()
             .into_iter()
+            .chain(daemon_kinds())
             .filter(|kind| class_of(kind).is_none())
             .collect();
         assert!(
