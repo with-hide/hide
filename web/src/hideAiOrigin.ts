@@ -45,6 +45,11 @@ export function taskLine(t: TFunction<"translation">, task: HideAiTask | undefin
   return task.target ? `${kind} · ${task.target}` : kind;
 }
 
+/** Whether the row is an automation run's agent (PRD automations B15): it wears the automation's repeat mark, not Hide AI's owl, though Hide starts it. */
+export function automationRun(agent: Pick<AgentRow, "hide_ai">): boolean {
+  return agent.hide_ai?.task?.kind === "automation";
+}
+
 /** What a started thing is called on the screen: its task line, or `Hide AI` alone while the core names no task (B10). */
 export function originLine(t: TFunction<"translation">, hideAi: HideAi, names: AutomationNames = NO_NAMES): string {
   return taskLine(t, hideAi.task, names) ?? t("hideAi.name");
@@ -64,7 +69,8 @@ export function hideAiWords(t: TFunction<"translation">, hideAi: HideAi | undefi
   if (!hideAi) return null;
   const task = taskLine(t, hideAi.task, names);
   const turn = hideAi.turn ? homeTurnLine(t, hideAi.turn) : null;
-  return [t("hideAi.name"), task, turn].filter(Boolean).join(" · ");
+  // An automation run is the automation's, which its task line names; Hide AI is only how it started.
+  return [hideAi.task?.kind === "automation" ? null : t("hideAi.name"), task, turn].filter(Boolean).join(" · ");
 }
 
 /** The place line of a row Hide AI started: the project and the task in the branch's place (`herdr-ide › Memory 반영하기 · m72`). */

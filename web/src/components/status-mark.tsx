@@ -11,7 +11,9 @@ import { Hint } from "./ui/tooltip";
  * names the mark; this draws it. The shapes differ without their
  * colours: the operator's turn is a `!` in a warning badge, a View to look
  * at the same badge with an eye (PRD unseen-agent-views D-15), a person's turn
- * the agent declared the same badge with a key (`human`, PRD ask-human D-09), in progress is a
+ * the agent declared the same badge with a key (`human`, PRD ask-human D-09), an automation
+ * run's turn or View the same badge with the repeat arrow (`automation`, operator decision
+ * 2026-11-21), in progress is a
  * three-quarter ring that turns while the agent works (operator decision 2026-11-13, replacing
  * D-02) and stands cut into dashes while it waits on proven work (D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
@@ -27,13 +29,15 @@ import { Hint } from "./ui/tooltip";
 /** A filled badge (the operator's turn, a View to look at, a person's step) carries more weight than an outline at the same size, so it is drawn a little smaller inside the same box, about its centre. */
 const FILLED_VIEW = "-1 -1 14 14";
 
-export function StatusMark({ mark, label, read = false, human = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean; human?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+export function StatusMark({ mark, label, read = false, human = false, automation = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean; human?: boolean; automation?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  const repeat = automation && !human && (mark === "turn" || mark === "look");
   const shape = (
     <span
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       data-mark={mark ?? undefined}
       data-mark-read={read ? "true" : undefined}
       data-mark-human={human && mark !== null ? "true" : undefined}
+      data-mark-automation={repeat ? "true" : undefined}
       className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
       {...rest}
     >
@@ -43,6 +47,13 @@ export function StatusMark({ mark, label, read = false, human = false, className
           {read ? <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" /> : <circle cx="6" cy="6" r="6" className="fill-warning" />}
           <circle cx="4.3" cy="6" r="1.7" fill="none" strokeWidth="1.2" className={read ? "stroke-warning" : "stroke-status-foreground"} />
           <path d="M5.9 5.4h3.9v1.2h-.6v1.4H8.1V6.6H5.9z" className={read ? "fill-warning" : "fill-status-foreground"} />
+        </svg>
+      ) : repeat ? (
+        <svg viewBox={read ? "0 0 12 12" : FILLED_VIEW} className="size-full">
+          {/* What an automation run left for the operator: the same badge, the repeat arrow in place of the `!` or the eye, so the row reads as the automation's; read, it is hollow as a read `!` is. */}
+          {read ? <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" /> : <circle cx="6" cy="6" r="6" className="fill-warning" />}
+          <path d="M8.75 6.4A2.8 2.8 0 1 1 7.7 3.75" fill="none" strokeWidth="1.25" strokeLinecap="round" className={read ? "stroke-warning" : "stroke-status-foreground"} />
+          <path d="M6.6 2.35 9.35 2.6 8.3 5.15Z" className={read ? "fill-warning" : "fill-status-foreground"} />
         </svg>
       ) : mark === "turn" && read ? (
         <svg viewBox="0 0 12 12" className="size-full">

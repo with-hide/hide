@@ -724,6 +724,7 @@ impl Runtime {
                 )),
                 empty: panes.is_empty(),
                 delegated: delegated_tabs.contains(&session_tab.tab_id),
+                automation: false,
                 panes,
             };
             self.apply_tab_rename(&mut tab);
@@ -2007,6 +2008,7 @@ impl Runtime {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
             return;
@@ -2033,6 +2035,7 @@ impl Runtime {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
             return;
@@ -2060,6 +2063,7 @@ impl Runtime {
                 label: Some("No tabs".to_owned()),
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
         }

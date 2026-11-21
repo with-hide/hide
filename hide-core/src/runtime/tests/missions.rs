@@ -2031,6 +2031,7 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         })
         .collect();
     let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
@@ -9393,6 +9394,7 @@ fn a_full_wake_queue_keeps_what_waits() {
         since_unix_ms: None,
         notified: false,
         opened_seq: None,
+        round: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
@@ -10589,6 +10591,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
@@ -14169,7 +14172,11 @@ fn a_fix_answer_goes_back_to_the_worker_and_the_gate_asks_again() {
     assert_eq!(fixes, [None, Some("agent-2")]);
     let letter = crate::runtime::missions::wake_body(
         mission,
-        mission.wakes.iter().find(|wake| wake.to.is_some()).unwrap(),
+        mission
+            .wakes
+            .iter()
+            .find(|wake| wake.event == WakeEvent::GateFix && wake.to.is_some())
+            .unwrap(),
     );
     assert!(letter.contains("the error banner overlaps the map") && letter.contains(&defect.key));
     let line = defect.key.clone();
@@ -16009,7 +16016,19 @@ fn a_put_away_mission_row_comes_back_only_for_a_newer_raise() {
     runtime.drive_mission_health(now);
     assert!(!operator_turn(&mut runtime).mission_item);
 
-    // A node raised after the put-away asks the operator again.
+    // A node raised after the put-away asks the operator again. Its cell
+    // starts on the clock, so the raise waits for the clock to pass the
+    // put-away's millisecond (#2760).
+    let put_away = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .put_away_unix_ms
+        .unwrap();
+    while crate::runtime::unix_milliseconds() <= put_away {
+        std::hint::spin_loop();
+    }
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission
         .nodes
@@ -18308,6 +18327,7 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
                 since_unix_ms: None,
                 notified: false,
                 opened_seq: None,
+                round: None,
             },
         )
     };
@@ -19263,6 +19283,7 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
             since_unix_ms: Some(start),
             notified: false,
             opened_seq: None,
+            round: None,
         };
         crate::runtime::missions::push_wake(mission, wake).unwrap();
     }
@@ -19472,4 +19493,418 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
     rows(&mut guard, "blocked", STOPPED + 40_000);
     assert_eq!(take(&mut guard), ["child:w1:p2"], "the new block");
     assert!(take(&mut guard).is_empty());
+}
+
+const HEAD_2: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0f98765432";
+
+/// `running_criteria_mission`'s fix node at work under `recipient`
+/// (agent-2) with pull request 7, reviewed by `reviewer` (agent-3).
+fn reviewed_fix(runtime: &mut Runtime) {
+    running_criteria_mission(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+}
+
+/// The lines of the cells standing for `recipient`, taken as read.
+fn read_cells(runtime: &mut Runtime, recipient: &str) -> Vec<String> {
+    let ledger = runtime.delivery_ledger.clone().ok();
+    runtime
+        .take_status_of(recipient, ledger.as_deref(), None)
+        .into_iter()
+        .map(|cell| cell.line)
+        .collect()
+}
+
+/// PRD mission-speed-2 B1, B3, B4, B8, B9, B16, B17: the worker's check
+/// wakes the node's own reviewer; a push alone or the same check again
+/// wakes no one; a failure goes to the worker; the next check asks the same
+/// reviewer for what changed; a pass tells the worker nothing; the
+/// Conductor is told no result. The wake rides `new_head`, which an older
+/// build reads, and a later kind reads as unknown.
+#[test]
+fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "no check yet"
+    );
+    let check = record_of("fix", "check", json!({"commit": HEAD}));
+    command(&mut runtime, "recipient", check.clone()).unwrap();
+    let wake = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .last()
+        .unwrap()
+        .clone();
+    let stored = serde_json::to_value(&wake).unwrap();
+    assert_eq!(
+        (&stored["event"], &stored["round"]),
+        (&json!("new_head"), &json!("check_asked"))
+    );
+    let mut later = stored;
+    later["round"] = json!("a_kind_from_a_later_build");
+    let later: crate::missions::PendingWake = serde_json::from_value(later).unwrap();
+    assert_eq!(later.round, Some(crate::missions::RoundWake::Unknown));
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert!(
+        asked.len() == 1
+            && asked[0]
+                .contains("ready for your review: its worker recorded its check on commit a1b2c3d"),
+        "{asked:?}"
+    );
+    assert!(!command(&mut runtime, "recipient", check).unwrap().1);
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "the same check wakes no one"
+    );
+    let fail = json!({"commit": HEAD, "pass": false, "evidence": "parser drops v1"});
+    command(&mut runtime, "reviewer", record_of("fix", "review", fail)).unwrap();
+    let told = read_cells(&mut runtime, "agent-2");
+    assert!(
+        told.len() == 1
+            && told[0].contains("review FAIL · round 1 of 3")
+            && told[0].contains("Confirm your plan"),
+        "{told:?}"
+    );
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    let again = read_cells(&mut runtime, "agent-3");
+    assert!(
+        again.len() == 1 && again[0].contains("again: you last checked commit a1b2c3d"),
+        "{again:?}"
+    );
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    assert!(
+        read_cells(&mut runtime, "agent-2").is_empty(),
+        "a passed round tells nothing"
+    );
+    assert!(
+        runtime
+            .take_conductor_cells("mission-1")
+            .iter()
+            .all(|cell| !cell.line.contains("review FAIL") && !cell.line.contains("ready for")),
+    );
+}
+
+/// PRD mission-speed-2 B5: a check while the node's reviewer ended asks
+/// the Conductor for a fresh one, naming the node and the line.
+#[test]
+fn a_check_with_its_reviewer_ended_asks_the_conductor_for_one() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for record in ledger
+        .agents
+        .iter_mut()
+        .filter(|record| record.id == "agent-3")
+    {
+        record.ended = true;
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(runtime.cells_of("agent-3").is_empty());
+    let asked: Vec<String> = runtime
+        .take_conductor_cells("mission-1")
+        .into_iter()
+        .map(|cell| cell.line)
+        .filter(|line| line.starts_with("Node fix is ready for its review, and no live checker"))
+        .collect();
+    assert!(
+        asked.len() == 1 && asked[0].contains("hide mission node fix --reviewer <agent-id>"),
+        "{asked:?}"
+    );
+}
+
+/// PRD mission-speed-2 B2, B6, B7: on a node with no check command every
+/// line of the worker's passed is the signal, and recording them again is
+/// the next; the first failure says start fixing while the other runs, the
+/// second what to do with both; a worker's or checker's cell rings mid-turn.
+#[test]
+fn a_general_nodes_lines_wake_its_checkers_and_each_result_reaches_the_worker() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Research"}),
+    )
+    .unwrap();
+    let by = json!([{"agent": "codex", "model": "gpt-6-astra"}]);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["the guide says it"],
+             "checks": [{"as": "review", "by": by}, {"as": "verify", "by": by}]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"agent_id": "agent-2", "reviewer": "agent-3", "verifier": "agent-1"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({})),
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .status_rings_due()
+            .iter()
+            .any(|ring| ring.recipient == "agent-3" && ring.mid_turn)
+    );
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert!(
+        asked[0].contains("its worker recorded every one of its lines passed"),
+        "{asked:?}"
+    );
+    read_cells(&mut runtime, "agent-1");
+    let fail = json!({"pass": false, "evidence": "a step is missing"});
+    command(&mut runtime, "reviewer", record_of("docs", "review", fail)).unwrap();
+    let first = read_cells(&mut runtime, "agent-2");
+    assert!(
+        first.len() == 1
+            && first[0].contains("review FAIL · verify running")
+            && first[0].contains("Start fixing now"),
+        "{first:?}"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        record_of("docs", "verify", json!({})),
+    )
+    .unwrap();
+    let second = read_cells(&mut runtime, "agent-2");
+    assert!(
+        second.len() == 1
+            && second[0].contains("review FAIL · verify PASS")
+            && second[0].contains("Confirm your plan"),
+        "{second:?}"
+    );
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({"evidence": "the step is in"})),
+    )
+    .unwrap();
+    let again = read_cells(&mut runtime, "agent-3");
+    assert!(
+        again.len() == 1 && again[0].contains("again: after your last answer"),
+        "{again:?}"
+    );
+}
+
+/// PRD mission-speed-2 B14: a pull-request change the plan makes wait for
+/// the whole of another gets its Conductor one suggestion of a line key;
+/// the same plan again, or a line key, gets none.
+#[test]
+fn a_plan_that_waits_for_a_whole_change_node_suggests_its_line() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Stack"}),
+    )
+    .unwrap();
+    let plan = |depends: &str| {
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "core", "title": "Core", "kind": "change", "delivery": "pr", "criteria": ["the API holds"]},
+            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr", "criteria": ["it shows"], "depends_on": [depends]},
+            {"key": "notes", "title": "Notes", "kind": "research", "criteria": ["written"], "depends_on": ["core"]},
+        ]}})
+    };
+    let hints = |runtime: &mut Runtime| -> Vec<String> {
+        runtime
+            .take_conductor_cells("mission-1")
+            .into_iter()
+            .map(|cell| cell.line)
+            .filter(|line| line.contains("waits for the whole"))
+            .collect()
+    };
+    command(&mut runtime, "sender", plan("core")).unwrap();
+    let first = hints(&mut runtime);
+    assert!(
+        first.len() == 1
+            && first[0].starts_with("Node screen waits for the whole of node core")
+            && first[0].contains("`\"core:c1\"`"),
+        "{first:?}"
+    );
+    command(&mut runtime, "sender", plan("core")).unwrap();
+    command(&mut runtime, "sender", plan("core:c1")).unwrap();
+    assert!(hints(&mut runtime).is_empty());
+}
+
+/// PRD mission-speed-2 B15: a node worker's brief ends with what starts its
+/// checkers, the same each time it is asked; a node without checkers and
+/// another intent keep the brief as written.
+#[test]
+fn a_node_workers_brief_ends_with_what_starts_its_checkers() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let brief = |runtime: &mut Runtime, intent: &str| {
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                &conductor.pane_id,
+                &authority(&conductor).context,
+                None,
+                spawn(None, intent, Some("Fix it.")),
+            )
+            .unwrap()
+            .spawn_brief()
+            .map(str::to_owned)
+            .unwrap()
+    };
+    let first = brief(&mut runtime, "mission-1:fix");
+    assert!(
+        first.starts_with("Fix it.\n\n") && first.contains("recording `check` starts"),
+        "{first}"
+    );
+    assert_eq!(brief(&mut runtime, "mission-1:fix"), first);
+    assert_eq!(brief(&mut runtime, "mission-1:docs"), "Fix it.");
+    assert_eq!(brief(&mut runtime, "mission-1:review-fix"), "Fix it.");
+}
+
+/// PRD mission-speed-2 D-03: an agent that takes letters at its tools takes
+/// a mission cell waiting for it at its next tool use, and a tool use with
+/// nothing waiting for it takes nothing; an agent Hide rings mid-turn
+/// instead (Codex) takes nothing at a tool use.
+#[test]
+fn a_tool_use_hands_a_waiting_mission_cell_to_an_agent_that_takes_letters_there() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let observed: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"opencode","agent_status":"working","state_change_seq":2,"lineage_session":"reviewer-session"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let actor = runtime.delivery_observations["reviewer"].actor.clone();
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for record in ledger
+        .agents
+        .iter_mut()
+        .filter(|record| record.id == "agent-3")
+    {
+        record.actor = actor.clone();
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let node = crate::node::TEST_NODE;
+    let tool =
+        |runtime: &mut Runtime, pane: &str| runtime.take_status(node, pane, Some(4_096), true);
+    assert!(tool(&mut runtime, "reviewer").is_none_or(|cells| cells.is_empty()));
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(
+        tool(&mut runtime, "recipient").is_none(),
+        "Codex is rung instead"
+    );
+    let given = tool(&mut runtime, "reviewer").unwrap();
+    assert!(
+        given.len() == 1 && given[0].line.contains("ready for your review"),
+        "{given:?}"
+    );
+    assert!(
+        tool(&mut runtime, "reviewer").is_none_or(|cells| cells.is_empty()),
+        "taken once"
+    );
+}
+
+/// PRD mission-speed-2 B11, B12: a conflict told to a worker at work says
+/// its CI waits and what to do, and a round failure that comes before the
+/// worker read it joins the same cell instead of replacing it.
+#[test]
+fn a_workers_unread_conflict_cell_keeps_its_round_failure_too() {
+    use crate::missions::{FixReason, Woken};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let mut wake = crate::runtime::missions::wake_about(
+        "fix".into(),
+        Some(7),
+        WakeEvent::Fix,
+        Some(HEAD.into()),
+        Some("wake:7:conflict".into()),
+    );
+    wake.to = Some("agent-2".into());
+    wake.why = Some(FixReason::Conflict);
+    crate::runtime::missions::record(mission, wake).unwrap();
+    let node = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    node.woken.push(Woken {
+        pr: 7,
+        why: FixReason::Conflict,
+        head: Some(HEAD.into()),
+    });
+    let fail = json!({"commit": HEAD, "pass": false, "evidence": "parser drops v1"});
+    command(&mut runtime, "reviewer", record_of("fix", "review", fail)).unwrap();
+    let cells = runtime.cells_of("agent-2");
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert!(cells[0].mid_turn);
+    assert!(
+        cells[0]
+            .line
+            .contains("Its CI does not run until the conflict is gone")
+            && cells[0].line.contains("Its review round: review FAIL"),
+        "{}",
+        cells[0].line
+    );
 }

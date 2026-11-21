@@ -417,13 +417,18 @@ fn a_prompt_hook_that_carries_no_context_takes_no_cells() {
         .unwrap();
     let node = crate::node::TEST_NODE;
     assert!(
-        runtime.take_status(node, "w1:p1", Some(4_096)).is_none(),
+        runtime
+            .take_status(node, "w1:p1", Some(4_096), false)
+            .is_none(),
         "the prompt takes nothing"
     );
-    let inbox = runtime.take_status(node, "w1:p1", None).unwrap();
+    let inbox = runtime.take_status(node, "w1:p1", None, false).unwrap();
     assert_eq!(inbox.len(), 1, "the inbox gives it");
     assert!(
-        runtime.take_status(node, "w1:p1", None).unwrap().is_empty(),
+        runtime
+            .take_status(node, "w1:p1", None, false)
+            .unwrap()
+            .is_empty(),
         "once"
     );
 }

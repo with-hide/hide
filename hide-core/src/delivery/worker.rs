@@ -206,15 +206,36 @@ impl Prepared {
         self
     }
 
+    /// The brief a spawn will start its agent on, as the core prepared it.
+    #[cfg(test)]
+    pub(crate) fn spawn_brief(&self) -> Option<&str> {
+        match &self.command {
+            Command::Agents {
+                command: crate::coordination::Command::Spawn { brief, .. },
+            } => brief.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
         // Hide's own notices are status cells, not letters (PRD
         // letters-missions-simplify D-17): a turn's prompt reads the ones
-        // that changed after its letters, and `hide inbox` lists them.
+        // that changed after its letters, and `hide inbox` lists them; a
+        // tool event's those that reach a working agent (PRD mission-speed-2
+        // D-03).
+        let tool = matches!(
+            &self.command,
+            Command::Pull {
+                point: hide_node_link::panes::PullPoint::Tool,
+                ..
+            }
+        );
         let status = match &self.command {
             Command::Pull {
-                point: hide_node_link::panes::PullPoint::Prompt,
+                point:
+                    hide_node_link::panes::PullPoint::Prompt | hide_node_link::panes::PullPoint::Tool,
                 ..
             } => Some(false),
             Command::Inbox { bundle: true } => Some(true),
@@ -266,7 +287,7 @@ impl Prepared {
                 let mut guard = runtime
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let cells = guard.take_status(&device, &pane, room)?;
+                let cells = guard.take_status(&device, &pane, room, tool)?;
                 let text = if cells.is_empty() {
                     String::new()
                 } else {

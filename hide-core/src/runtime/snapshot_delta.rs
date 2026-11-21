@@ -166,6 +166,8 @@ impl Runtime {
     ) -> crate::model::SnapshotDeltaPayload {
         use crate::model::{RestSections, SnapshotDeltaPayload};
 
+        // A run's tab is marked before the strip and the tree read it.
+        self.mark_automation_run_tabs();
         // A front Workspace moved by the engine or by a device's own focus, not by
         // an event, is followed here, before anything is stamped.
         self.sync_workspace_view();

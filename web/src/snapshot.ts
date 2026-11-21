@@ -878,6 +878,8 @@ export type Tab = {
   label: string | null;
   empty: boolean;
   delegated: boolean;
+  /** Every pane is an automation run's: neither the strip nor the project's tree lists it (absent when false). */
+  automation?: boolean;
   panes: PaneRow[];
 };
 
@@ -3527,6 +3529,8 @@ export type AutomationRun = {
   seen: boolean;
   /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
   spend?: AutomationSpend;
+  /** The agent's last answer, one paragraph, only while a window shows the run (operator decision 2026-11-21). */
+  answer?: string;
 };
 
 /**
