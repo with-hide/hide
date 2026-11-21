@@ -539,21 +539,27 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     apply(measure(), (update) => update());
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
-    // The selected name's room is what the tab leaves beside its marks and controls, which can change after this
-    // measure (a mark or a control drawn a frame later); its title's box changing measures again on the next frame,
-    // which settles once the title holds its name. A font that finishes loading changes the text with no box resized.
+    // The selected name's width can change after this measure with no label or selection changing: a mark or control
+    // drawn beside it a frame later changes its room, its own style changes its text (a preview's italic name kept
+    // open), and a font that finishes loading changes the text with no box resized. Each measures again on the next
+    // frame, which settles once the title holds its name.
     let frame = 0;
     const again = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => apply(measure(), flushSync));
     };
     const title = new ResizeObserver(again);
+    const restyled = new MutationObserver(again);
     const selectedTitle = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"] [data-tab-title]');
-    if (selectedTitle) title.observe(selectedTitle);
+    if (selectedTitle) {
+      title.observe(selectedTitle);
+      restyled.observe(selectedTitle, { attributes: true, attributeFilter: ["class", "style"], childList: true, characterData: true, subtree: true });
+    }
     document.fonts?.addEventListener("loadingdone", again);
     return () => {
       observer.disconnect();
       title.disconnect();
+      restyled.disconnect();
       cancelAnimationFrame(frame);
       document.fonts?.removeEventListener("loadingdone", again);
     };
