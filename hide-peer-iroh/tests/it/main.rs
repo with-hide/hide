@@ -136,6 +136,7 @@ fn pair(host: &Machine, guest: &Machine) {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: host.addr().candidates,
+                started: None,
             })
         })
         .unwrap();
@@ -298,7 +299,7 @@ async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
         .into_iter()
         .find_map(|candidate| match candidate {
             Candidate::Ip(address) => Some(address),
-            Candidate::Relay(_) => None,
+            Candidate::Relay(_) | Candidate::Wsl(_) => None,
         })
         .expect("a bound endpoint has an address");
 

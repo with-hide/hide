@@ -181,6 +181,40 @@ fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     );
 }
 
+/// B23: this PC puts its build beside the one a distribution's Hide runs,
+/// through `wsl.exe` alone, and is told where its `hided` is; a build the
+/// distribution holds already is sent again as nothing.
+#[test]
+fn a_build_is_put_in_a_distribution_s_install_root() {
+    let fixture = fixture();
+    let packages = fixture.packages();
+    let installed = fixture
+        .access
+        .install_build("Ubuntu", &packages, "~/.hide/helper")
+        .unwrap();
+    let hided = PathBuf::from(&installed);
+    // The distribution names its home as its own shell resolves it.
+    let home = std::fs::canonicalize(fixture.home()).unwrap();
+    assert!(hided.starts_with(home.join(".hide/helper")), "{installed}");
+    assert_eq!(std::fs::read_to_string(&hided).unwrap(), "helper build 1");
+    assert_eq!(
+        std::fs::read_to_string(hided.with_file_name("hide")).unwrap(),
+        "command build 1"
+    );
+    assert_eq!(
+        fixture
+            .access
+            .install_build("Ubuntu", &packages, "~/.hide/helper"),
+        Ok(installed)
+    );
+    assert!(
+        fixture
+            .access
+            .install_build("Ubuntu; rm -rf ~", &packages, "~/.hide/helper")
+            .is_err()
+    );
+}
+
 /// B28: a distribution whose first-run setup has not finished, or one on
 /// WSL 1, is refused from the registry alone, before any `wsl.exe`.
 #[test]

@@ -190,12 +190,13 @@ fn a_registered_distribution_is_named_for_it_and_its_first_attempt_may_start_it(
     assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
 }
 
-/// B22, B24: the core starting dials a distribution that is off with no
-/// leave to start it: it reads `unavailable`, no retry is scheduled, and
-/// only the app opening, or the operator's `다시 연결`, tries it with leave.
-/// A resume does not.
+/// B22, B24, and PRD device-connect-iroh B43: the core starting dials a
+/// distribution that is off with no leave to start it: it reads
+/// `unavailable`, no retry is scheduled, and only the operator opening its
+/// tile, or their `다시 연결`, tries it with leave. A resume and the app
+/// opening do not.
 #[test]
-fn only_the_app_opening_or_the_operators_reconnect_may_start_an_off_distribution() {
+fn only_the_operator_opening_its_tile_or_reconnecting_may_start_an_off_distribution() {
     let (shared, attempts) = wsl_runtime();
     {
         let mut runtime = shared.lock().unwrap();
@@ -236,6 +237,19 @@ fn only_the_app_opening_or_the_operators_reconnect_may_start_an_off_distribution
     shared.lock().unwrap().dispatch_json(&resume);
     let app_open = event("hide_ai_wake", serde_json::json!({"cause": "app_open"}));
     shared.lock().unwrap().dispatch_json(&app_open);
+    {
+        let runtime = shared.lock().unwrap();
+        assert!(
+            !runtime.device_host_connecting("wsl-ubuntu"),
+            "the app opening started an attempt for a distribution that is off"
+        );
+        assert_eq!(wakes(&attempts), [Wake::NotAllowed]);
+    }
+    let opened = event(
+        "focus_device",
+        serde_json::json!({"device_id": "wsl-ubuntu"}),
+    );
+    shared.lock().unwrap().dispatch_json(&opened);
     wait_for_attempts(&attempts, 2);
     host_settled(&shared);
     assert_eq!(wakes(&attempts), [Wake::NotAllowed, Wake::Allowed]);
@@ -253,11 +267,11 @@ fn only_the_app_opening_or_the_operators_reconnect_may_start_an_off_distribution
     );
 }
 
-/// B3: the app opening while the core's own attempt still runs is not
-/// lost: should that attempt find the distribution off, the next one may
-/// start it.
+/// B3, B43: the operator opening the tile while the core's own attempt
+/// still runs is not lost: should that attempt find the distribution off,
+/// the next one may start it.
 #[test]
-fn the_app_opening_during_an_attempt_without_leave_is_taken_by_the_next() {
+fn the_tile_opened_during_an_attempt_without_leave_is_taken_by_the_next() {
     let (shared, attempts) = wsl_runtime();
     let (release, held) = mpsc::channel();
     *attempts.held.lock().unwrap() = Some(held);
@@ -280,18 +294,21 @@ fn the_app_opening_during_an_attempt_without_leave_is_taken_by_the_next() {
         runtime.connect_registered_devices();
         assert!(runtime.device_host_connecting("wsl-ubuntu"));
     }
-    let app_open = event("hide_ai_wake", serde_json::json!({"cause": "app_open"}));
-    shared.lock().unwrap().dispatch_json(&app_open);
+    let opened = event(
+        "focus_device",
+        serde_json::json!({"device_id": "wsl-ubuntu"}),
+    );
+    shared.lock().unwrap().dispatch_json(&opened);
     release.send(()).unwrap();
     wait_for_attempts(&attempts, 2);
     assert_eq!(wakes(&attempts), [Wake::NotAllowed, Wake::Allowed]);
 }
 
-/// B3, D-15: the app opening while the core's own attempt runs is not lost
-/// when that attempt fails without saying whether the distribution runs:
-/// the retry it schedules takes the app's leave.
+/// B3, D-15, B43: the operator opening the tile while the core's own
+/// attempt runs is not lost when that attempt fails without saying whether
+/// the distribution runs: the retry it schedules takes that leave.
 #[test]
-fn the_app_opening_during_an_attempt_that_fails_is_taken_by_its_retry() {
+fn the_tile_opened_during_an_attempt_that_fails_is_taken_by_its_retry() {
     let (shared, attempts) = wsl_runtime();
     attempts
         .undetermined
@@ -317,8 +334,11 @@ fn the_app_opening_during_an_attempt_that_fails_is_taken_by_its_retry() {
         runtime.connect_registered_devices();
         assert!(runtime.device_host_connecting("wsl-ubuntu"));
     }
-    let app_open = event("hide_ai_wake", serde_json::json!({"cause": "app_open"}));
-    shared.lock().unwrap().dispatch_json(&app_open);
+    let opened = event(
+        "focus_device",
+        serde_json::json!({"device_id": "wsl-ubuntu"}),
+    );
+    shared.lock().unwrap().dispatch_json(&opened);
     release.send(()).unwrap();
     wait_for_attempts(&attempts, 1);
     host_settled(&shared);
