@@ -10,6 +10,7 @@ export function readTabStripSizes(): TabStripSizes {
   return {
     preferred: read("--size-tab-preferred"),
     titleMin: read("--size-tab-title-min"),
+    selectedMax: read("--size-tab-selected-max"),
     icon: read("--size-tab-icon-identity"),
     control: read("--size-control-sm"),
   };

@@ -53,15 +53,25 @@ const TAB_SLOT = {
 
 /**
  * The width the selected tab's whole name takes, for a tab that marks its
- * title (`data-tab-title`): its drawn chrome plus the title's full text, read
- * from the title as drawn. A title its fit hides asks nothing: that fit
- * leaves the selected tab less than a title's room, which no need changes.
+ * title (`data-tab-title`): its drawn chrome plus the width of the title's
+ * text (`titleTextWidth`), not the title's box, which a wide tab stretches,
+ * so a tab once wide asks only for its name again. A title its
+ * fit hides asks nothing: that fit leaves the selected tab less than a
+ * title's room, which no need changes.
  */
 function selectedTabNeed(list: HTMLElement): number | undefined {
   const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
   if (!tab || !title || title.offsetParent === null) return undefined;
-  return Math.ceil(tab.offsetWidth - title.clientWidth + title.scrollWidth);
+  return Math.ceil(tab.offsetWidth - title.clientWidth + titleTextWidth(title));
+}
+
+/** A title's whole text width: what overflows a cut title, else the text's own box inside a title stretched wider. */
+function titleTextWidth(title: HTMLElement): number {
+  if (title.scrollWidth > title.clientWidth) return title.scrollWidth;
+  const text = document.createRange();
+  text.selectNodeContents(title);
+  return text.getBoundingClientRect().width;
 }
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };

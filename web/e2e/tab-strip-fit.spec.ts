@@ -16,7 +16,7 @@ test.describe.configure({ timeout: 180_000 });
 // compact while they hold 64 and marks below; then the selected tab gives up
 // width, compact with its close while it holds 88, else 64 marks with its
 // close, and the strip scrolls once even those overflow.
-const PREFERRED = 180, TITLE_MIN = 104, ICON = 40, CONTROL = 24;
+const PREFERRED = 180, TITLE_MIN = 104, SELECTED_MAX = 240, ICON = 40, CONTROL = 24;
 type Fit = "titled" | "compact" | "marks";
 
 /** What the curve draws for `room` and `count`, written out independently of the shell's code. */
@@ -33,13 +33,14 @@ function expected(room: number, count: number): { selected: [number, Fit]; other
 
 /**
  * The View strip's curve: the same stages, and the selected tab growing to
- * `need`, its whole name's width, up to what the others' marks leave, the
- * others splitting the rest (PRD lane-desk-pair-view D-30).
+ * `need`, its whole name's width, up to `--size-tab-selected-max` and what
+ * the others' marks leave, the others splitting the rest (PRD
+ * lane-desk-pair-view D-30).
  */
 function expectedView(room: number, count: number, need: number | null): { selected: [number, Fit]; others: [number, Fit] } {
   const base = expected(room, count);
   if (need === null || count < 2 || base.selected[0] >= need) return base;
-  const width = Math.max(base.selected[0], Math.min(need, room - (count - 1) * ICON));
+  const width = Math.max(base.selected[0], Math.min(need, SELECTED_MAX, room - (count - 1) * ICON));
   if (width < TITLE_MIN) return base;
   const rest = (room - width) / (count - 1);
   const others: [number, Fit] = rest >= TITLE_MIN ? [Math.min(PREFERRED, rest), "titled"] : rest >= ICON + CONTROL ? [rest, "compact"] : [Math.max(ICON, rest), "marks"];
@@ -70,7 +71,13 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
     const selected = selectedTab?.getBoundingClientRect();
     const title = selectedTab?.querySelector<HTMLElement>("[data-tab-title]");
     return {
-      need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.offsetWidth - title.clientWidth + title.scrollWidth) : null,
+      need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.offsetWidth - title.clientWidth + (() => {
+        // The whole text's width: what overflows a cut title, else the text's own box, which a stretched title hides.
+        if (title.scrollWidth > title.clientWidth) return title.scrollWidth;
+        const text = document.createRange();
+        text.selectNodeContents(title);
+        return text.getBoundingClientRect().width;
+      })()) : null,
       room: Math.floor(zone.getBoundingClientRect().width - newTab.getBoundingClientRect().width - (zone.querySelector<HTMLElement>("[data-new-tab-menu]")?.getBoundingClientRect().width ?? 0)),
       scrolls: list.scrollWidth > list.clientWidth,
       selectedInView: !!selected && selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1,
@@ -214,6 +221,8 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     const names = ["한글 노트.md", "検証結果.md", "项目计划.md", ...Array.from({ length: 9 }, (_, i) => `notes-${i + 1}.md`)];
     const root = fs.realpathSync(path.join(fixture.root, "fixture"));
     for (const name of names) fs.writeFileSync(path.join(root, name), `# ${name}\n`);
+    const long = `${"아주 긴 비교 문서 이름 ".repeat(4)}.md`;
+    fs.writeFileSync(path.join(root, long), "# long\n");
     daemon = await startHided(fixture, "file-tab-strip");
     await page.setViewportSize({ width: 2400, height: 1000 });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -286,5 +295,17 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     await expect(tabs.first()).toHaveAccessibleName(/한글 노트.md/);
     await tabs.first().locator("button").click();
     await expect(tabs).toHaveCount(names.length - 1);
+
+    // A long name stops at the selected maximum, cut short; the next tab selected asks only for its own name again.
+    await page.setViewportSize({ width: 2400, height: 1000 });
+    await page.locator(`[data-explorer-row="${toPage(root)}/${long}"]`).dblclick();
+    await expect(tabs).toHaveCount(names.length);
+    await expect(tabs.last()).toHaveAttribute("aria-selected", "true");
+    await expect.poll(async () => (await tabs.last().boundingBox())!.width).toBeLessThanOrEqual(SELECTED_MAX + 0.5);
+    const capped = await strip(page, "view");
+    expect(capped.need!, "the name needs more than the maximum").toBeGreaterThan(SELECTED_MAX);
+    expect(capped.tabs.at(-1)!.width).toBeCloseTo(expectedView(capped.room, capped.tabs.length, capped.need).selected[0], 0);
+    await tabs.first().click();
+    await expect.poll(async () => Math.round((await tabs.first().boundingBox())!.width)).toBeLessThanOrEqual(PREFERRED);
   } finally { daemon?.stop(); fixture.stop(); }
 });
