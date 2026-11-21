@@ -5,7 +5,7 @@
 // chord, so the key follows the host, the system and the operator's bindings.
 
 import type { CommandId } from "../shortcuts";
-import type { PracticeWorld } from "./world";
+import type { CoreEvent, PracticeWorld } from "./world";
 
 /** A pane header dragged onto `edge` of the pane `to` names. */
 export type PracticeDrag = { from: string; to: string; edge: "left" | "right" | "up" | "down" };
@@ -60,10 +60,16 @@ export type PracticeStep<M = unknown> = {
    * before anything covers it. ⏎ brings the guide in at once.
    */
   scene?: number;
+  /**
+   * Told to the world each time the step comes up, so a world that moves on by
+   * itself (`later`) starts from the step the learner is on rather than from a
+   * clock the learner may not have caught up with.
+   */
+  enter?: CoreEvent;
 };
 
 /** The move a chapter's card plays on the practice list (`PracticePreview.tsx`). */
-export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "rows" | "children" | "search" | "lane" | "focus";
+export type PracticePreviewKind = "mission" | "zones" | "split" | "switch" | "rows" | "children" | "search" | "lane" | "automation" | "focus";
 
 export type PracticeChapter<M = unknown> = {
   /** The catalog prefix (`practice.<id>.title`, `practice.<id>.<step>.title`) and the chapter's file name. */
