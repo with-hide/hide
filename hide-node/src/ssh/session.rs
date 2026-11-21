@@ -644,10 +644,13 @@ impl Session {
         result.map_err(SessionError::from)
     }
 
-    /// Puts this build's programs in their version folder under `root` on
-    /// the machine, sending only what it lacks (a core update, PRD
-    /// core-host-node-move B10). Answers the path of the build's `hided`
-    /// there.
+    /// Puts this build in its version folder under `root` on the machine,
+    /// sending only what it lacks (a core update, PRD core-host-node-move
+    /// B10). The build is whole, the pane holder and its runtime with the
+    /// programs: the core that starts from that folder runs its own panes
+    /// from the holder beside it (`terminal::holder::Holders::local_source`)
+    /// and is another Hide's guest only as a whole build (`guest_build`).
+    /// Answers the path of the build's `hided` there.
     pub fn install_build(
         &mut self,
         packages: &HelperPackages,
@@ -655,7 +658,7 @@ impl Session {
     ) -> Result<String, SessionError> {
         self.usable()?;
         let payload = packages
-            .payload(&self.facts.os, &self.facts.arch)
+            .payload_for(&self.facts.os, &self.facts.arch)
             .map_err(|error| SessionError::Refused(error.to_string()))?;
         let installed = bootstrap::install_build(
             &mut self.pipe,

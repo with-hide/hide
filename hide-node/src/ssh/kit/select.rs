@@ -146,27 +146,12 @@ impl HelperPackages {
         Ok(payload)
     }
 
-    /// The programs this build puts on a machine of `os`/`arch` besides the
-    /// pane holder and its runtime (a core's own install, `install_build`):
-    /// the helper, which the machine cannot do without, and the kit's parts.
-    /// From this build's folder a part it does not carry is left out and
-    /// named, and the kit on the device reports it as missing from the
-    /// build.
-    pub(in crate::ssh) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
-        match self.source(os, arch)? {
-            Source::Local => self.local(os, arch),
-            Source::Release => {
-                let mut payload = self.release_kit(os, arch)?;
-                let kept = [HELPER_NAME, CLI_NAME, HOOKS_NAME].map(|name| device_program(name, os));
-                payload.files.retain(|file| kept.contains(&file.relative));
-                Ok(payload)
-            }
-        }
-    }
-
     /// The helper and the kit's parts from this build's folder, each found
-    /// by the same rule as the helper.
-    fn local(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
+    /// by the same rule as the helper: a build without its pane holder and
+    /// runtime, which no machine gets alone ([`Self::payload_for`]). A part
+    /// the folder does not carry is left out and named, and the kit on the
+    /// device reports it as missing from the build.
+    pub(in crate::ssh) fn local(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
         let helper = read_package(&device_program(HELPER_NAME, os), &helper, os, arch).map_err(
             |reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason),
