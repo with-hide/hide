@@ -253,13 +253,13 @@ describe("a terminal link to a file outside every checkout", () => {
     useShellStore.setState({ rest: null });
   });
 
-  it("opens it as a tab of the Workspace in front named by its grant alone (B1, D-05)", async () => {
+  it("opens it as a tab of the Workspace in front named by its grant alone, the pressed pane its owner (B1, D-05, D-54)", async () => {
     const { external, openPath } = host(grant);
     const sent = clicked();
     await vi.waitFor(() => expect(sent.some((event) => event.kind === "external_open")).toBe(true));
     expect(external.open).toHaveBeenCalledWith("/tmp/shot.png", "auto");
     const open = sent.find((event) => event.kind === "external_open")!;
-    expect(open.payload).toEqual({ grant: grant.id, name: "shot.png", kind: "image", request_id: expect.stringMatching(/^follow:/), workspace: { device_id: "core", path: "/repo" } });
+    expect(open.payload).toEqual({ grant: grant.id, name: "shot.png", kind: "image", request_id: expect.stringMatching(/^follow:/), workspace: { device_id: "core", path: "/repo" }, opener_pane: "pane-1" });
     expect(JSON.stringify(sent)).not.toContain("/tmp");
     expect(openPath).not.toHaveBeenCalled();
   });

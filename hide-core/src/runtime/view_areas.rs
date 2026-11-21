@@ -149,6 +149,11 @@ pub(super) struct ExternalOpenPayload {
     pane_id: Option<String>,
     #[serde(default)]
     reveal: bool,
+    /// The pane whose terminal link was pressed: the View is that pane's,
+    /// its agent's or, for a shell, its terminal's (D-54). Absent for an
+    /// open nobody's link made.
+    #[serde(default)]
+    opener_pane: Option<String>,
     /// Names the receipt in `status.browser_opens` the sender waits for.
     #[serde(default)]
     request_id: Option<String>,
@@ -2091,11 +2096,19 @@ impl Runtime {
             workspace,
             pane_id,
             reveal,
+            opener_pane,
             request_id,
         } = payload;
         let outcome = ExternalFile::admitted(&grant, &name, kind)
             .map_err(external_refusal)
             .and_then(|file| self.place_external(file, workspace, pane_id.as_deref(), reveal));
+        if let (Ok((key, display_id)), Some(pane)) = (&outcome, opener_pane.as_deref()) {
+            let by = self.link_owner(pane);
+            self.stamp_view_opener(key, display_id, by);
+            // The lane call stood the desk before the stamp made the View
+            // the pane's own (D-53).
+            self.settle_pair_stood();
+        }
         crate::diagnostic!(serde_json::json!({
             "component": "view_areas",
             "kind": "external.open",
