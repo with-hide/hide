@@ -145,7 +145,7 @@ impl CheckKind {
         }
     }
 
-    fn key(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Review => "review",
             Self::Verify => "verify",
@@ -558,7 +558,8 @@ impl Criterion {
     /// life), whose answer goes with it: an
     /// ended checker never answers again, so its slot would otherwise hold
     /// the line open, or keep an old answer deciding, with no way to put a
-    /// fresh checker in its place.
+    /// fresh checker in its place. A refusal names why: no checker of that
+    /// kind in the line, or every one of them held by a checker still alive.
     pub(crate) fn bind(
         &mut self,
         id: &str,
@@ -583,7 +584,20 @@ impl Criterion {
                     asks(checker) && checker.agent_id.as_deref().is_some_and(&ended)
                 })
             })
-            .ok_or("mission_checker_unknown")?;
+            .ok_or_else(|| {
+                let held: Vec<&str> = self
+                    .checkers
+                    .iter()
+                    .filter(|checker| asks(checker))
+                    .filter_map(|checker| checker.agent_id.as_deref())
+                    .collect();
+                let why = if held.is_empty() {
+                    format!("the line names no {agent} checker")
+                } else {
+                    format!("every {agent} place is held by a live checker: {}", held.join(", "))
+                };
+                crate::coordination::refusal("mission_checker_unknown", &why)
+            })?;
         let slot = &mut self.checkers[at];
         *slot = Checker {
             worker: slot.worker.clone(),
@@ -1334,7 +1348,7 @@ mod tests {
         assert_eq!(review.checkers[2].agent_id, None);
         assert_eq!(
             review.bind("agent-12", "grok", |_| false),
-            Err("mission_checker_unknown".into())
+            Err("mission_checker_unknown\u{1f}the line names no grok checker".into())
         );
         review
             .record_checker(1, true, Answer::default(), 2)
@@ -1511,7 +1525,10 @@ mod tests {
         // Every slot taken and both checkers alive: nothing is free.
         assert_eq!(
             review.bind("agent-12", "codex", |_| false),
-            Err("mission_checker_unknown".into())
+            Err(
+                "mission_checker_unknown\u{1f}every codex place is held by a live checker: agent-10"
+                    .into()
+            )
         );
         let ended = |id: &str| id == "agent-10";
         review.bind("agent-12", "codex", ended).unwrap();
@@ -1535,7 +1552,7 @@ mod tests {
         // Another agent's ended slot is not this agent's to take.
         assert_eq!(
             review.bind("agent-14", "opencode", |_| true),
-            Err("mission_checker_unknown".into())
+            Err("mission_checker_unknown\u{1f}the line names no opencode checker".into())
         );
     }
 

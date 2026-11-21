@@ -997,14 +997,15 @@ impl Runtime {
         kind: CheckKind,
         id: &str,
     ) -> Result<MissionNode, String> {
+        let unknown = |why: &str| crate::coordination::refusal("mission_checker_unknown", why);
         let ledger = self
             .delivery_state()
-            .map_err(|_| "mission_checker_unknown")?;
+            .map_err(|_| unknown("Hide could not read its agent ledger"))?;
         let record = ledger
             .agents
             .iter()
             .find(|record| record.id == id)
-            .ok_or("mission_checker_unknown")?;
+            .ok_or_else(|| unknown(&format!("Hide knows no agent {id}")))?;
         let worker = node
             .agent_id
             .as_deref()
@@ -1021,7 +1022,7 @@ impl Runtime {
         next.criteria
             .iter_mut()
             .find(|line| line.kind == kind.kind())
-            .ok_or("mission_checker_unknown")?
+            .ok_or_else(|| unknown(&format!("node {} has no {} line", node.key, kind.key())))?
             .bind(
                 id,
                 hide_agent_adapter::canonical_kind(&record.actor.kind),

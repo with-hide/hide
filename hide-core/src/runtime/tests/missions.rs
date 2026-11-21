@@ -5143,9 +5143,19 @@ fn a_fresh_reviewer_takes_the_place_of_one_whose_registration_ended() {
             .map(|checker| checker.agent_id.clone())
             .collect()
     };
+    // #2667: the refusal says which of its causes held, and what to do.
+    let refused = command(&mut runtime, "sender", bind.clone()).unwrap_err();
+    let (code, why) = crate::coordination::split_refusal(&refused);
+    assert_eq!(code, "mission_checker_unknown");
+    assert!(
+        why.is_some_and(|why| why.ends_with("place is held by a live checker: agent-3")),
+        "{refused}"
+    );
+    assert!(crate::missions::next_action(code).contains("hide agent end <id>"));
+    let unknown = json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-99"}});
     assert_eq!(
-        command(&mut runtime, "sender", bind.clone()).unwrap_err(),
-        "mission_checker_unknown"
+        crate::coordination::split_refusal(&command(&mut runtime, "sender", unknown).unwrap_err()),
+        ("mission_checker_unknown", Some("Hide knows no agent agent-99"))
     );
     assert_eq!(reviewers(&runtime), [Some("agent-3".to_owned())]);
     for record in &mut ledger.agents {
