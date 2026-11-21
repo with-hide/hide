@@ -2296,8 +2296,7 @@ pub(super) fn spawn_hide_agent(
 }
 
 /// What every start of a Project's promotions begins its intent with: the
-/// digest of the Project's id, which tells whose card a task's number names
-/// (`node_migration::reown`).
+/// digest of the Project's id, which tells whose card a task's number names.
 pub(crate) fn intent_prefix(project_id: &str) -> String {
     format!("memory-promote-{}-", &stable_digest(project_id)[..12])
 }

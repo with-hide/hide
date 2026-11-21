@@ -296,7 +296,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// A request that came before any role mounted (a window reconnecting to
-    /// a process whose folder holds its core for a move, which mounts none)
+    /// a process whose folder a move before 1.2.0 left unfinished, which
+    /// mounts none)
     /// is answered when the seat closes, and the close does not wait on it.
     #[tokio::test]
     async fn a_request_waiting_for_a_first_role_ends_with_the_seat() {

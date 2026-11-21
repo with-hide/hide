@@ -1512,10 +1512,7 @@ impl CoreHandle {
         let _ = thread.join();
         // The core that installs devices is gone: a device's terminals end,
         // and so do this machine's sessions and their attach children, now
-        // rather than when the last holder of the router lets it go. A core
-        // that stops for a move leaves its process a node, whose own
-        // sessions would otherwise find each pane held and draw it only
-        // read-only.
+        // rather than when the last holder of the router lets it go.
         self.terminals.remove_every_device();
         local.close();
     }

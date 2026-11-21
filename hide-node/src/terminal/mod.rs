@@ -845,9 +845,9 @@ impl Service {
     }
 
     /// Ends every session it holds and starts none after, and returns once
-    /// each session it opened has been released: its owner ended (the core
-    /// whose role stopped for a move, in a process that goes on as a node;
-    /// a node whose link ended), whoever still holds the service. A holder
+    /// each session it opened has been released: its owner ended (a core
+    /// whose role stopped; a node whose link ended, in a process that goes
+    /// on as a core), whoever still holds the service. A holder
     /// takes one connection at a time, so the role that follows starts only
     /// after this returns. A session still open after [`CLOSE_WITHIN`] is
     /// left to its reaper and logged.

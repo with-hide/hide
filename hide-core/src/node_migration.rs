@@ -68,7 +68,7 @@ const COMPOSER_MARKS: &str = "composer-marks.json";
 const HOOK_FACTS: &str = "hook-facts.json";
 /// The Conductors' missions (`hide_kit::layout::missions`). Written only by
 /// builds that have node ids, so the layer-1 conversion has nothing in it to
-/// rewrite; a core move maps its machines, panes and projects.
+/// rewrite; a change of a machine's id maps its machines, panes and projects.
 pub(crate) const MISSIONS: &str = "missions.json";
 /// The mission folder (`hide_kit::layout::missions_dir`): each mission's
 /// file in it is a book of that one mission, so the `MISSIONS` rows place
@@ -127,7 +127,8 @@ pub enum Moves {
 /// Every key in the state folder that names a machine, by file and JSON
 /// pointer pattern (`*` is every array element or object key, a number the
 /// array's element at that place), how the
-/// layer-1 conversion keeps it, and how a core move changes it. The contract
+/// layer-1 conversion keeps it, and how a change of a machine's id changes
+/// it. The contract
 /// tests hold a fully populated folder to this list in every shape (the
 /// owner's, a linked node's, a dialed device's), so a store that gains a
 /// machine-bound key must be added here.
@@ -668,8 +669,8 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Moves::Stays,
     ),
     // A Project choice is keyed by the digest of its machine's id and root
-    // and carries that id, so a move re-keys the records of the two
-    // machines (`reown`, project settings).
+    // and carries that id, so a machine's new id re-keys its records
+    // (`id_map`, the Projects' choices).
     (
         CORE_STATE,
         "/project_settings/{key}",
@@ -798,7 +799,7 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Moves::Tab,
     ),
     // A View's opener names its agent's machine at any depth of the layout
-    // tree (`reown`, openers);
+    // tree (`each_opener`);
     // the comments name their recipient's and their screenshot's machine
     // (PRD view-opener-feedback D-23).
     (
@@ -976,8 +977,8 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
-    // A promotion task names its card by number; a fold of Project Memory
-    // that renumbered the card is read through (`reown`, promotion targets).
+    // A promotion task names its card by number, which no change of a
+    // machine's id touches.
     (
         DELIVERY_LEDGER,
         "/spawns/*/task/target",
@@ -2541,10 +2542,11 @@ mod tests {
     ];
 
     /// A core state gains a field often, and a field that names a machine
-    /// (a device id, an engine pane or tab, a digest of either) must move with
-    /// the core or its move stops (`reown`). A field the core saves is
-    /// therefore either a row of `KEYS` or listed above with the fact that it
-    /// names no machine, so a new one cannot reach a move unclassified.
+    /// (a device id, an engine pane or tab, a digest of either) must follow
+    /// its machine's new id or the change stops (`devices`). A field the
+    /// core saves is therefore either a row of `KEYS` or listed above with
+    /// the fact that it names no machine, so a new one cannot reach a change
+    /// unclassified.
     #[test]
     fn every_field_the_core_saves_is_a_row_of_the_table_or_names_no_machine() {
         let dir = tempfile::tempdir().unwrap();

@@ -846,8 +846,9 @@ impl hide_host::serve::Terminals for NodeTerminals {
         }
         // Closed outside the lock, and only then is the link's end done:
         // each session is released and its attach child has exited, so a
-        // core that starts in this process next (a move back) attaches
-        // these panes in control rather than meeting a child still leaving.
+        // core that starts in this process next (a node split from its
+        // core) attaches these panes in control rather than meeting a child
+        // still leaving.
         if let Some(service) = lock(&self.service).take() {
             service.close();
         }

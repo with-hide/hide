@@ -94,7 +94,7 @@ STORES = {
     "hide-core/src/local_issues.rs": (5, "the core's local issue store"),
     "hide-core/src/mission_events.rs": (
         4,
-        "the core's per-mission event logs, which a core move copies; its folder "
+        "the core's per-mission event logs; its folder "
         "is made, each log written, and an ended mission's log deleted or swept; "
         "the same writer then asks mission_store to write the mission files "
         "after the logs they go with",
@@ -103,8 +103,8 @@ STORES = {
         9,
         "the core's mission bodies and index, split from missions.json: reads "
         "the index, sweeps orphan bodies, creates the mission folder and "
-        "atomically replaces its private files; all move with the core, "
-        "and explicit shelf reads run outside the runtime lock; startup streams "
+        "atomically replaces its private files; "
+        "explicit shelf reads run outside the runtime lock; startup streams "
         "and reconciles and trims index rows through the same writer before sweeping, "
         "and committed shelf eviction also deletes its owned history",
     ),
@@ -164,8 +164,8 @@ STORES = {
     ),
     "hide-core/src/global_instruction.rs": (
         16,
-        "the Hide global instruction beside the core's state file, which a "
-        "core move carries (`MOVES_WITH_CORE`): read as a regular file, a link "
+        "the Hide global instruction beside the core's state file: "
+        "read as a regular file, a link "
         "followed only to an existing text file, and written with the checked "
         "save so an edit the operator made meanwhile is kept",
     ),
