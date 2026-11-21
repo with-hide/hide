@@ -1,6 +1,6 @@
 import { paneMoveStartTarget } from "./paneMove";
 import { usePaneMove } from "./PaneMoveControls";
-import { keyboardCommandOwner, useKeyboardOwner } from "./viewFocus";
+import { keyboardCommandOwner, keyboardInputRevision, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
 import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
@@ -165,6 +165,7 @@ export const PaneView = memo(function PaneView({
   zoomed,
   local = true,
   keysStayOnDesk = false,
+  entryInput = null,
   offline = false,
   owned = false,
 }: {
@@ -189,6 +190,8 @@ export const PaneView = memo(function PaneView({
   local?: boolean;
   /** Pair view's left pane taken while pair view was on screen: a desk the keys are on keeps them (D-09). */
   keysStayOnDesk?: boolean;
+  /** For the pane focus mode was asked for: the keyboard's input count then; arriving, it takes the keys only while the operator has not moved them since (`pairEntryInput`). */
+  entryInput?: number | null;
   /** True while that device's connection is down. */
   offline?: boolean;
   /** True where a screen owns the pane's life, as an automation's run terminal (PRD automations B16): its head carries no ⋯ menu and no ✕. */
@@ -324,8 +327,10 @@ export const PaneView = memo(function PaneView({
     // pane, so pane commands reach the pane on screen; the keys stay on the desk where the operator pressed. An entry
     // mounts the pair layer anew, so it is never this case and the pane takes the keys.
     if (keysStayOnDesk && keyboardCommandOwner().kind === "view") return;
+    // Focus mode arrives with the core's answer: a desk tab or page the operator pressed after asking keeps the keys.
+    if (entryInput !== null && keyboardInputRevision() !== entryInput) return;
     focusTerminal(paneId);
-  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk]);
+  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput]);
 
   // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
   // runs in the capture phase, before xterm's textarea sees the event.

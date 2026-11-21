@@ -632,6 +632,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
+   * One `pair_view` event; asking for a pane notes the keyboard's input count
+   * first, so the pane arriving with the core's answer takes the keys only if
+   * the operator has not moved them since (`pairEntryInput`).
+   */
+  const askPairView = (payload: { pane_id?: string; display_id?: string }) => {
+    if (payload.pane_id) useUiStore.setState({ pairEntryInput: keyboardInputRevision() });
+    dispatch({ schema_version: 2, kind: "pair_view", payload });
+  };
+
+  /**
    * Focus mode's desk beside the pane, shown or folded (D-57): one event, the
    * core's to decide, and a desk shown takes the keyboard into its active
    * area. A desk with no tab the strip shows stands for nobody: the core's
@@ -3300,7 +3310,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     togglePairView(paneId: string) {
       const pair = drawnPair(workspaceViewOf(rest()));
-      dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
+      askPairView(pair?.pane_id === paneId ? {} : { pane_id: paneId });
     },
 
     /**
@@ -3311,13 +3321,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     pairViewKey() {
       const view = workspaceViewOf(rest());
-      if (pairModeOn(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      if (pairModeOn(view)) return askPairView({});
       const owner = keyboardCommandOwner();
       const onDesk = owner.kind === "view" && view?.layout ? findArea(view.layout.root, owner.areaId)?.active ?? null : null;
       if (onDesk) return this.pinPairView(onDesk);
       const paneId = useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("pair_view: no focused pane");
-      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
+      askPairView({ pane_id: paneId });
     },
 
     /**
@@ -3330,7 +3340,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
       const paneId = owner ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");
-      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId, display_id: displayId } });
+      askPairView({ pane_id: paneId, display_id: displayId });
     },
 
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF

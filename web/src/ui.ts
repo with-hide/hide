@@ -331,6 +331,8 @@ type UiStore = {
   viewFocusRequest: ViewFocusRequest | null;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
+  /** The keyboard's input count (`keyboardInputRevision`) when the operator last asked focus mode for a pane: the pane it draws takes the keys on arriving only while the operator has not moved them since, such as onto a desk tab pressed before the core answered (D-26, B26). */
+  pairEntryInput: number | null;
   /** `laneExpanded` as it was when focus mode came on, given back when it ends, null outside the mode (PRD lane-desk-pair-view D-51, D-59). Kept here, not on the Workspace screen, so leaving that screen in focus mode forgets nothing. */
   laneExpandedBeforePair: boolean | null;
   /**
@@ -555,6 +557,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   viewFocusRequest: null,
   laneExpanded: false,
   laneExpandedBeforePair: null,
+  pairEntryInput: null,
   hideAiTab: "suggestions",
   openSuggestion: null,
   missions: MISSION_ENTRY,
