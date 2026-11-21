@@ -546,27 +546,12 @@ impl Runtime {
             return false;
         }
         let ledger = self.delivery_state().ok();
-        let node = self.node.as_str();
-        let pane = |agent: Option<&String>| -> Option<String> {
-            let agent = agent?;
-            ledger
-                .as_ref()?
-                .agents
-                .iter()
-                .find(|record| &record.id == agent && !record.ended)
-                .map(|record| record.pane_on(node))
-        };
         let mut panes: Vec<String> = self
             .automations
             .viewing
             .keys()
             .filter_map(|key| self.run_of(key))
-            .filter_map(|run| {
-                let live = run.state.active() || run.closing;
-                live.then(|| pane(run.agent_id.as_ref()))
-                    .flatten()
-                    .or_else(|| pane(run.opened.as_ref()?.agent_id.as_ref()))
-            })
+            .filter_map(|run| self.run_pane(run, ledger.as_ref()))
             .collect();
         panes.sort();
         panes.dedup();
@@ -575,6 +560,29 @@ impl Runtime {
         }
         self.automations.viewed_panes = panes;
         self.track_visible_tab_attachments()
+    }
+
+    /// The pane a run's terminal is: its agent's while it runs or its
+    /// terminal is open, else its opened conversation's; none once both
+    /// ended.
+    fn run_pane(
+        &self,
+        run: &crate::automations::Run,
+        ledger: Option<&std::sync::Arc<crate::delivery::ledger::Ledger>>,
+    ) -> Option<String> {
+        let node = self.node.as_str();
+        let pane = |agent: Option<&String>| -> Option<String> {
+            let agent = agent?;
+            ledger?
+                .agents
+                .iter()
+                .find(|record| &record.id == agent && !record.ended)
+                .map(|record| record.pane_on(node))
+        };
+        let live = run.state.active() || run.closing;
+        live.then(|| pane(run.agent_id.as_ref()))
+            .flatten()
+            .or_else(|| pane(run.opened.as_ref()?.agent_id.as_ref()))
     }
 
     /// Reads the machine's zone again on a worker; a zone that changed moves
@@ -2069,7 +2077,11 @@ impl Runtime {
             .ok_or_else(|| "automation_unknown".to_owned())?;
         let key = (id.clone(), number);
         if on {
-            self.automations.viewing.insert(key, now);
+            let arriving = !self.automations.viewing.contains_key(&key);
+            self.automations.viewing.insert(key.clone(), now);
+            if arriving {
+                self.put_away_viewed_run(&key);
+            }
             while self.automations.viewing.len() > VIEWING_CAP {
                 let oldest = self
                     .automations
@@ -2084,6 +2096,21 @@ impl Runtime {
             self.automations.viewing.remove(&key);
         }
         Ok(json!({"id": id, "run": number, "on": on}))
+    }
+
+    /// A finished run the operator opened is dealt with (operator decision
+    /// 2026-11-21): its row is resolved, so it leaves Needs You, and comes
+    /// back when the run's agent asks again. A run going, or an agent that
+    /// works or waits on an approval, keeps its row (`resolve_refusal`).
+    fn put_away_viewed_run(&mut self, key: &RunKey) {
+        let Some(run) = self.run_of(key).filter(|run| !run.state.active()) else {
+            return;
+        };
+        let ledger = self.delivery_state().ok();
+        let Some(pane) = self.run_pane(run, ledger.as_ref()) else {
+            return;
+        };
+        self.resolve_session(&pane, crate::agent_state::sessions::ResolveSource::Operator);
     }
 
     /// Puts on each run what its conversation spent, from the sessions the

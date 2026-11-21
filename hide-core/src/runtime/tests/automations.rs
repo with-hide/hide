@@ -784,6 +784,14 @@ impl Harness {
         runtime.snapshot.navigator.agents.push(row);
     }
 
+    /// Whether the operator's resolution of the row in `pane` is held or on
+    /// its way to the saved state.
+    fn resolved(&self, pane: &str) -> bool {
+        let runtime = self.runtime.lock().unwrap();
+        runtime.snapshot.ui_state.resolved_sessions.contains_key(pane)
+            || runtime.pending_session_resolutions.contains_key(pane)
+    }
+
     /// The row of the agent in `pane` is not listed, as while the engine
     /// starts again.
     fn vanish(&self, pane: &str) {
@@ -1129,6 +1137,42 @@ fn a_run_goes_from_its_start_to_its_answer_and_its_terminal_closes_once_nothing_
     );
     assert_eq!(harness.cleanups(), 0);
     assert_eq!(harness.records(&id)[0].get("pane_id"), None);
+}
+
+/// Operator decision 2026-11-21: a finished run the operator opens in the
+/// automation screen is dealt with, so its row is resolved and leaves Needs
+/// You; a run still going keeps its row however long the screen shows it.
+#[test]
+fn opening_a_finished_run_resolves_its_row_while_a_going_run_keeps_it() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    harness.tick(1);
+    assert!(!harness.resolved(&pane), "a going run keeps its row");
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": false}))
+        .unwrap();
+
+    // The turn finished while the agent asks the operator something.
+    harness.show(&pane, |row| {
+        answered(row);
+        row.group = "needs_you".into();
+    });
+    harness.tick(1);
+    assert_eq!(harness.run(&id).0, "succeeded");
+    harness.tick(1);
+    assert!(!harness.resolved(&pane), "nothing opened it yet");
+
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    assert!(harness.resolved(&pane), "opened, the finished run is dealt with");
 }
 
 /// B15, B17 (screen e2e): typing into a run's terminal in the automation

@@ -193,6 +193,8 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     const raised = page.locator(`[data-project-list] [data-raised-group="needs_you"] [data-pane="${pane}"]`);
     await expect(raised).toHaveCount(1, { timeout: 30_000 }); // wait-ok: the core read the blocked state and raised the run in Needs You
     await expect(raised.locator("[data-agent-task]")).toContainText("야간 점검");
+    // It wears the automation's repeat arrow in its turn badge (operator decision 2026-11-21).
+    await expect(raised.locator('[data-agent-status-mark][data-mark-automation="true"]')).toHaveCount(1);
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await raised.locator("[data-agent-open]").click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");

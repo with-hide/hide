@@ -18,6 +18,7 @@ import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
 import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
+import { LookChip } from "./components/linked-view";
 import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
 import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
 import { DeviceChip } from "./components/device-chip";
@@ -34,7 +35,7 @@ import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./Si
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
-import { automationNames, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
+import { automationNames, automationRun, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
@@ -509,8 +510,8 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
-            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} profile={agent.profile} />
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} automation={automationRun(agent)} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} />}
+            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !automationRun(agent) ? "card" : null} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
@@ -735,7 +736,7 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
  */
 function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
+  const indent = detailIndent(useAgentLogosShown() || (Boolean(entry.agent.hide_ai) && !automationRun(entry.agent)));
   const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
   const names = useShellStore((s) => automationNames(s.automations));
@@ -746,7 +747,9 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
-  if (!parts && !(showProject && project) && !tool && !origin) return null;
+  // What it opened rides its own chip where the row's line says something else, an ask or a run's result (operator decision 2026-11-21).
+  const look = card.state === "needs_you" && agent.mark !== "look" ? agent.look : undefined;
+  if (!parts && !(showProject && project) && !tool && !origin && !look) return null;
   // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
   const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
@@ -758,6 +761,7 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
+      {look ? <div className={cn(indent, "flex min-w-0")}><LookChip look={look} onOpen={() => actions.openAgent(agent.pane_id, look)} /></div> : null}
     </>
   );
 }

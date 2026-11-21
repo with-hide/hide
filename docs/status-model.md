@@ -523,6 +523,7 @@ While a member is archived, its delivery registration and the watches on it are 
 Every row draws one of nine marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `look`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
 `turn` and `look` are the operator's turn in two shapes: every count takes them as one, and only the badge's glyph is drawn apart.
+An automation run's row draws either with the repeat arrow in the badge in place of the `!` or the eye (`StatusMark` `automation`), so a run Hide started on schedule reads as the automation's at a glance; the mark is the same, only the glyph changes (operator decision 2026-11-21).
 Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |

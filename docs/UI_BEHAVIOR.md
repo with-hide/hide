@@ -1305,16 +1305,19 @@ What the core refuses (a cron that runs two times closer than five minutes or is
 An edit sends only what changed: the worktree choice is sent only when the folder or the box moved.
 The preview, the make, the edit and a run's reopen are one `automation_call` each, answered to that window alone by an `automation_result` frame; every other press is a window event whose result the snapshot shows.
 
-The detail shows the task, the schedule, the next run, the folder, the agent with its model and effort, [지금 실행], [멈춤] or [다시 켜기], [편집], [폴더 열기] (in the desktop app on the core's own machine only) and delete, then the runs newest first (B11, B25); under the task, `최근 N회 · 토큰 61.5K · $2.10` sums what the runs Hide's usage ledger read spent (B39).
+The detail shows the task, the schedule, the next run, the folder, the agent with its model and effort, [지금 실행], [멈춤] or [다시 켜기], [편집], [폴더 열기] (in the desktop app on the core's own machine only) and delete, then the runs newest first (B11, B25); under the task, `최근 N회 · 토큰 61.5K` sums the tokens of the runs Hide's usage ledger read (B39); no price is shown (operator decision 2026-11-21).
 Opening it marks its unseen runs seen, so the sidebar's number drops.
-A run reads its time, its result, the tags `수동`, `놓친 회차`, `이어서 대화 중` and `대화를 찾을 수 없음`, and once the ledger read its conversation what it spent, `토큰 12.3K · $0.42` (`≥` when some calls had no price, the tokens alone when none had one), on its row and its terminal's head (B39); a skipped time and missed times are lines of their own, and times skipped one after another for the same reason are one line with no time of its own, `건너뜀 · <이유> · N번 · 오늘 14:00–18:55` (`어제 23:30 ~ 오늘 01:10` across days).
+A run reads its time, its result, the tags `수동`, `놓친 회차`, `이어서 대화 중` and `대화를 찾을 수 없음`, and once the ledger read its conversation the tokens it spent, `토큰 12.3K`, with no price, on its row and its terminal's head (B39); a skipped time and missed times are lines of their own, and times skipped one after another for the same reason are one line with no time of its own, `건너뜀 · <이유> · N번 · 오늘 14:00–18:55` (`어제 23:30 ~ 오늘 01:10` across days).
 A run going opens its terminal in the screen, live and typed into, with [■ 멈추기], which ends it as `멈춤 · 사람이 끝냄` (B16); the run owns that pane, so its head has no ⋯ menu and no ✕.
 While a run's terminal shows, the window tells the core (`automation_run_viewing`) and tells it again every five minutes, inside the core's 30-minute hold; the core keeps that terminal attached and open, and reads a turn that stops there with no cause as the operator's.
 Pressing a finished run whose terminal is closed asks the core to open its conversation again in the screen (B17); a terminal that slept while shown says so with [다시 열기] (B18), a conversation the core cannot resume says `대화를 찾을 수 없음` and opens nothing, and a refused opening (another opening of the automation still starting, `automation_opening`) is a line above [다시 열기].
 Delete asks `<name> 자동화와 회차 기록 N개를 지울까요? 작업 폴더와 결과 파일은 남아요`, adds `도는 회차도 멈춰요` when a run goes or is open, and offers [자동화 지우기] and [그대로 두기] with neither chosen (B27).
 
 An automation the core stopped for a person is its own Needs You row in the 프로젝트 list, the 태스크 list's 내 차례 and the Overview: its name with the Needs You mark, `<reason> · 고치고` and [다시 켜기], which turns it on and takes the row away; the row opens its detail (B23).
-A run's agent row reads `↻ 자동화: <name>` where a task's origin stands, and when it asks, is blocked or opened a View it stands in Needs You like any agent; pressing it opens the run's terminal in the screen, or the View it opened (B15).
+A run's agent row reads `↻ 자동화: <name>` where a task's origin stands, and when it asks, is blocked or opened a View it stands in Needs You like any agent (B15).
+There its mark is the Needs You badge with the repeat arrow in place of the `!` or the eye, hollow once read, and it draws no Hide AI owl, since Hide only started it (operator decision 2026-11-21).
+Pressing it opens the run in the screen; a finished run opened there is dealt with, so the core resolves its row and it leaves Needs You until the run's agent asks again, while a run that still goes, works or waits on an approval keeps its row (`put_away_viewed_run`, `hide-core/src/runtime/automations.rs`).
+What the run's agent opened and the operator has not looked at is a chip on the row's last line and on the run's line in the run list, its file mark, name and `외 N개`, which brings it forward as a 볼 것 row does.
 An automation's own folder is a workspace the core marks `unlisted`: every list a person picks a project from reads the one listed filter (`listedWorkspaces`), so no sidebar project, project filter, start target, search row, recent move, Overview project or 프로젝트별 group of the 태스크 list shows it, and its checkout's place reads as the run's origin (B30).
 
 ## Terminal image attachment boundary
@@ -1647,6 +1650,7 @@ The old copied Conversation history and its index remain removed; retained-reque
 ## Tasks, card tabs and the PR list
 
 Moved to a private document: `docs/tasks-and-pr-list.md` in with-hide/hide-private.
+A 태스크 row in 내 차례 whose line says something else, a question or a run's result, while its agent opened a View the operator has not looked at, draws that View as a chip on a line of its own under it: the unseen dot, its file mark, its name and `외 N개`; pressing the chip brings it forward as a 볼 것 row does, and the row's own press stays the row's (`LookChip`, `web/src/components/linked-view.tsx`; operator decision 2026-11-21).
 The 태스크 list's 내 차례 draws the missions that are their own Needs You item with the same row and choices as the 프로젝트 list's Needs You, counted in its head with the tasks; with-hide/hide-private `docs/tasks-and-pr-list.md`, 내 차례, says where they stand.
 Its 내 차례 lists every connected device's as the 프로젝트 list's Needs You does, by the same operator decision of 2026-11-08 ([Sidebar hierarchy](#sidebar-hierarchy) for the rule; `elsewhereTasks` in `web/src/taskList.ts`); the same private document says where they stand in each view.
 
