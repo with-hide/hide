@@ -58,6 +58,8 @@ function deciding(over: Partial<PhoneMission> = {}): PhoneMission {
 
 const closed = (id: string, at: number, status: PhoneMission["status"] = "done") => mission(id, { status, created_at_unix_ms: at - 10, closed_at_unix_ms: at, nodes: [node("a", "done")] });
 
+let endConnection: (() => void) | null = null;
+
 /** A phone paired and connected to a fake hided that has listed the given missions. */
 async function connect(items: PhoneMission[]) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -68,6 +70,8 @@ async function connect(items: PhoneMission[]) {
   const { App } = await import("./App");
   const connection = await import("./connection");
   const store = await import("./store");
+  // Its socket watch would fire after this file's environment is gone on a slow machine.
+  endConnection = connection.stop;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -94,6 +98,8 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  endConnection?.();
+  endConnection = null;
   vi.unstubAllGlobals();
 });
 
