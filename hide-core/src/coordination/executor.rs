@@ -1844,6 +1844,21 @@ fn spawn(
                     agent.profile().map(|(id, _)| id).as_ref(),
                 )?;
             }
+            // The spawn itself changed which worktrees this machine's
+            // repository has, so the core asks for the catalog rather than
+            // waiting to be told: a window's Git watch reports the change
+            // too, and with no window nothing else does
+            // (`WorktreeReader::read_unwatched_if_due`), which would leave a
+            // mission made in the new worktree without its project.
+            if made
+                && on_node
+                && let Some(runtime) = client.runtime.upgrade()
+            {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .worktree_made_here();
+            }
             // The terminal is recorded with the pane, so a later attempt can
             // tell this pane from another terminal that later answers to the same id.
             let terminal = pane_terminal(engine.as_ref(), &pane)?;
