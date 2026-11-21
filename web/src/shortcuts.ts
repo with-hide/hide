@@ -312,7 +312,7 @@ export const REGISTRY: readonly Command[] = [
   { id: "focus_pane_right", title: "Focus pane right", group: "Panes", browser: { code: "ArrowRight", meta: true, alt: true }, electron: { code: "ArrowRight", meta: true, alt: true }, moved: false },
   { id: "focus_pane_up", title: "Focus pane up", group: "Panes", browser: { code: "ArrowUp", meta: true, alt: true }, electron: { code: "ArrowUp", meta: true, alt: true }, moved: false },
   { id: "focus_pane_down", title: "Focus pane down", group: "Panes", browser: { code: "ArrowDown", meta: true, alt: true }, electron: { code: "ArrowDown", meta: true, alt: true }, moved: false },
-  { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
+  { id: "toggle_zoom", title: "Focus mode or expand", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
   // The focused pane beside its tab's desk, or the tab's own layout back
   // (PRD lane-desk-pair-view B18, B26, D-24): ⌘. in both hosts and
   // Ctrl+Shift+. on Windows and Linux by the rule; no shell, agent CLI or
@@ -982,7 +982,7 @@ export function isPaneFocusCommand(id: CommandId): boolean {
 /**
  * Commands that leave the operator where they work: pressed while a native
  * page holds the keyboard, the page keeps it, so the next key and the next
- * chord act on that page. Zoom pane in a page is Expand and Expand again
+ * chord act on that page. ⇧⌘↩ in a page is Expand and Expand again
  * (`keyboard.ts`); terminal direction commands leave a page alone. Other
  * commands need the shell's keyboard for the surface they open, or move it.
  */

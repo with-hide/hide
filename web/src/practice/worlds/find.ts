@@ -66,7 +66,7 @@ function initial(): FindModel {
     agent: rested("provider", "Compare payment providers", true, 5, "Which one should we try first?", { starred: false, read_ask: true, since_unix_ms: Date.now() - 4 * HOUR_MS }),
     title: "Compare payment providers",
   };
-  const tabs = [...desk.tabs, ...[copy, provider].map((pane, at) => ({ id: `t${at + 2}`, name: null, root: { type: "pane" as const, pane_id: pane.id }, focused: pane.id, zoomed: false }))];
+  const tabs = [...desk.tabs, ...[copy, provider].map((pane, at) => ({ id: `t${at + 2}`, name: null, root: { type: "pane" as const, pane_id: pane.id }, focused: pane.id }))];
   return {
     desk: { ...desk, panes: [...desk.panes, copy, provider], tabs, groups: [{ id: null, name: null, tabs: tabs.map((tab) => tab.id) }], nextId: 4 },
     searched: false,
@@ -196,7 +196,7 @@ function linkPanel(nowMs: number): LinkPanel {
  */
 function restored(desk: DeskModel): DeskModel {
   const row: AgentRow = { ...rested(RESTORED_PANE, LOGIN_TITLE, true, 0, "Expiry follows the server's clock; test added"), agent_kind: LOGIN_SESSION.agent, session_id: LOGIN_SESSION.session_id };
-  const tab = { id: `t${desk.nextId}`, name: null, root: { type: "pane" as const, pane_id: RESTORED_PANE }, focused: RESTORED_PANE, zoomed: false };
+  const tab = { id: `t${desk.nextId}`, name: null, root: { type: "pane" as const, pane_id: RESTORED_PANE }, focused: RESTORED_PANE };
   return {
     ...desk,
     panes: [...desk.panes, { id: RESTORED_PANE, agent: row, title: LOGIN_TITLE }],

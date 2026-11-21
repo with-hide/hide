@@ -374,12 +374,13 @@ export function installKeyboard(actions: Actions): () => void {
       }
       case "toggle_zoom": {
         // One chord for "this, full size", chosen by where the operator
-        // works: in the right lane it expands the lane and back, anywhere
-        // else it zooms the focused terminal pane.
+        // works: on the desk or a tool it expands the lane over the body and
+        // back, in focus mode too, which stays on (D-59); on a pane it
+        // enters or leaves focus mode, as ⌘. does (D-57).
         const owner = keyboardCommandOwner();
         const lane = ui().drawnLane.mode;
         if ((owner.kind === "view" || owner.kind === "tool") && lane !== "closed") return ui().setLaneExpanded(!ui().laneExpanded);
-        return actions.toggleZoom();
+        return actions.pairViewKey();
       }
       case "pair_view":
         return actions.pairViewKey();

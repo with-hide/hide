@@ -105,7 +105,7 @@ function placeholder(role: Role, paneId: string, kind: string, confirm: boolean)
 
 function initial(): AgentsModel {
   const pane = (id: string, role: Role, kind: string, confirm: boolean): PracticePane => ({ id, title: TITLE[role], agent: placeholder(role, id, kind, confirm) });
-  const tab = (id: string, paneId: string): PracticeTab => ({ id, name: null, root: { type: "pane", pane_id: paneId }, focused: paneId, zoomed: false });
+  const tab = (id: string, paneId: string): PracticeTab => ({ id, name: null, root: { type: "pane", pane_id: paneId }, focused: paneId });
   return {
     panes: [pane(LEAD, "lead", "claude", true), pane(DOCS, "docs", "codex", true)],
     tabs: [tab("t1", LEAD), tab("t2", DOCS)],
@@ -122,7 +122,7 @@ function startReviewer(model: AgentsModel): AgentsModel {
   return {
     ...model,
     panes: [...model.panes, rev],
-    tabs: [...model.tabs, { id: REVIEWER_TAB, name: null, root: { type: "pane", pane_id: REV }, focused: REV, zoomed: false }],
+    tabs: [...model.tabs, { id: REVIEWER_TAB, name: null, root: { type: "pane", pane_id: REV }, focused: REV }],
     groups: model.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, REVIEWER_TAB] } : group)),
     recent: [...model.recent, REV],
   };
@@ -161,7 +161,7 @@ function closePane(model: AgentsModel, id: string, confirmed: boolean): AgentsMo
   const root = without(tab.root, id);
   if (root) {
     const focused = tab.focused === id ? panesOf(root)[0]! : tab.focused;
-    return { ...model, panes, recent, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused, zoomed: false } : row)), closed: [...model.closed, closed] };
+    return { ...model, panes, recent, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused } : row)), closed: [...model.closed, closed] };
   }
   const tabs = model.tabs.filter((row) => row !== tab);
   const groups = model.groups.map((row) => ({ ...row, tabs: row.tabs.filter((one) => one !== tab.id) }));
@@ -190,9 +190,9 @@ function reopen(model: AgentsModel): AgentsModel | null {
     const asLeft = panesOf(tab.root).join("\0") === left.join("\0");
     const root: LayoutNode = asLeft ? rename(last.tab.root, last.pane.id, paneId) : { type: "split", direction: "right", ratio: 0.5, first: tab.root, second: { type: "pane", pane_id: paneId } };
     const group = model.groups.find((row) => row.tabs.includes(tab.id))!;
-    return { ...base, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused: paneId, zoomed: false } : row)), activeTab: tab.id, selectedGroup: group.id, reopened: { paneId, tabId: tab.id, from: last } };
+    return { ...base, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused: paneId } : row)), activeTab: tab.id, selectedGroup: group.id, reopened: { paneId, tabId: tab.id, from: last } };
   }
-  const reopened: PracticeTab = { ...last.tab, id: `t${base.nextId}`, root: { type: "pane", pane_id: paneId }, focused: paneId, zoomed: false };
+  const reopened: PracticeTab = { ...last.tab, id: `t${base.nextId}`, root: { type: "pane", pane_id: paneId }, focused: paneId };
   const home = model.groups.find((row) => row.id === last.group) ?? model.groups.find((row) => row.id === null)!;
   return {
     ...base, nextId: base.nextId + 1,

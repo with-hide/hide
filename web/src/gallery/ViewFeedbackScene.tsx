@@ -148,7 +148,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
     scene.rest.navigator!.focused_workspace_id = workspace.id;
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.navigator!.changes_root_path = root;
-    scene.rest.pane_layouts = [{ workspace_id: workspace.id, tab_id: agentTab.id!, focused_pane_id: "a1", zoomed: false, root: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "a1" }, second: { type: "pane", pane_id: "a2" } } }];
+    scene.rest.pane_layouts = [{ workspace_id: workspace.id, tab_id: agentTab.id!, focused_pane_id: "a1", root: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "a1" }, second: { type: "pane", pane_id: "a2" } } }];
     scene.rest.workspace_view = {
       agent_layout: { root: { area: { id: "g1", active: agentTab.id, displays: [{ id: agentTab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
       device_id: "local", path: root, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: 580, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",

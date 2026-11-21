@@ -148,6 +148,21 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   }, [frame.mode, drawnView, drawnTool, frame.stacked]);
   // Off the Workspace screen nothing is drawn, so a chord there opens the lane.
   useLayoutEffect(() => () => useUiStore.getState().setDrawnLane({ mode: "closed", view: "none", tool: null, stacked: false }), []);
+  // Focus mode draws its pane and desk unexpanded, and leaving it, even
+  // from a desk expanded over the body, brings back the lane as it was
+  // (PRD lane-desk-pair-view D-51, D-59).
+  const pairOn = pair !== null;
+  const expandedBeforePair = useRef<boolean | null>(null);
+  useLayoutEffect(() => {
+    const store = useUiStore.getState();
+    if (pairOn && expandedBeforePair.current === null) {
+      expandedBeforePair.current = store.laneExpanded;
+      store.setLaneExpanded(false);
+    } else if (!pairOn && expandedBeforePair.current !== null) {
+      store.setLaneExpanded(expandedBeforePair.current);
+      expandedBeforePair.current = null;
+    }
+  }, [pairOn]);
   // A closed lane is not expanded when it opens again.
   const closed = frame.mode === "closed";
   useLayoutEffect(() => {
@@ -275,9 +290,9 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
   // tool (D-50): the operator closes the lane with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
   // In pair view the lane is the half beside the paired pane, under the tab
-  // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
+  // row (PRD lane-desk-pair-view B17, D-16, D-58); it is the same
   // element in every mode, so entering pair view mounts no desk again.
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
   const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
   // A press outside a floating tool closes it once the press ends, so what

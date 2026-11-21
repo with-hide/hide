@@ -624,13 +624,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    // In pair view the desk is always drawn: the button takes the keyboard to it and folds nothing (D-46). A pane
-    // drawn alone has no desk beside it until its agent opens a View (D-53).
+    // In focus mode the desk button takes the keyboard to the desk beside the pane, and stands a folded
+    // desk first (D-46, D-57); ⌘E is what folds it.
     if (pairBesideDesk(view)) return showDocuments(true);
-    if (drawnPair(view)) return diagnostic("toggle documents: pair view draws this pane alone");
+    if (drawnPair(view)) return showPairDesk(true);
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
     showDocuments(true);
+  };
+
+  /**
+   * Focus mode's desk beside the pane, shown or folded (D-57): one event, the
+   * core's to decide, and a desk shown takes the keyboard into its active
+   * area. A desk with nothing on it stands for nobody, so only the log says so.
+   */
+  const showPairDesk = (shown: boolean) => {
+    const view = workspaceViewOf(rest());
+    if (!view) return diagnostic("workspace_view: no Workspace in front");
+    if (shown && (view.layout?.display_count ?? 0) === 0) return diagnostic("pair_view_desk: no View to stand beside the pane");
+    dispatch({ schema_version: 2, kind: "pair_view_desk", payload: { shown } });
+    if (shown && view.layout) followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
   };
 
   /**
@@ -642,8 +655,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleLane = () => {
     // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
     if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
-    // ⌘E does nothing in pair view: only ⌘., ◧ and the strip's way back end it (D-46).
-    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_lane: pair view ends only by its own ways out");
+    // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
+    // which is what a pane zoom drew (D-57). Only ⌘., ◧ and ⇧⌘↩ on the pane end the mode (D-46).
+    const pairView = workspaceViewOf(rest());
+    if (drawnPair(pairView)) return showPairDesk(pairBesideDesk(pairView) === null);
     if (laneUp()) return closeLane();
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
@@ -3260,25 +3275,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       armKeyTarget(requestId);
     },
 
-    /** Zooms or unzooms `target`, a pane the operator pointed at, else the focused pane. */
-    toggleZoom(target?: string) {
-      if (remoteContext(rest())) {
-        const host = remoteHost("shell.command.zoomPane");
-        if (!host) return;
-        const paneId = target ?? host.view?.focusedPaneId;
-        if (!paneId) return diagnostic("toggle_pane_zoom: no focused remote pane");
-        sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
-        return;
-      }
-      // Pair view leaves the tab's layout and zoom as they are (PRD lane-desk-pair-view D-16).
-      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
-      const paneId = target ?? useShellStore.getState().focusedPaneId;
-      if (!paneId) return diagnostic("toggle_zoom: no focused pane");
-      dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
-    },
-
     /**
-     * ◧ on a pane's head or in its menus, and the strip's way back (PRD
+     * ◧ on a pane's head or in its menus (PRD
      * lane-desk-pair-view B18, B20, B26, D-46, D-53): the pane beside its
      * tab's desk, or alone while it has no View to show, or, pressed on the
      * pane already there, pair view off everywhere (D-45). The core decides

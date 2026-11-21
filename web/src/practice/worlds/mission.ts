@@ -209,7 +209,7 @@ function chip(row: AgentRow): AgentChip {
 function initial(): MissionModel {
   const desk: DeskModel = {
     panes: [{ id: CONDUCTOR, agent: null, title: title() }],
-    tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: CONDUCTOR }, focused: CONDUCTOR, zoomed: false }],
+    tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: CONDUCTOR }, focused: CONDUCTOR }],
     groups: [{ id: null, name: null, tabs: ["t1"] }],
     selectedGroup: null,
     activeTab: "t1",
@@ -230,7 +230,7 @@ function withWorkerTabs(model: MissionModel): DeskModel {
   return {
     ...desk,
     panes: [...desk.panes, ...fresh.map((part) => ({ id: part.pane, agent: null, title: say(`node.${part.key}`) }))],
-    tabs: [...desk.tabs, ...fresh.map((part) => ({ id: tabId(part), name: null, root: { type: "pane" as const, pane_id: part.pane }, focused: part.pane, zoomed: false }))],
+    tabs: [...desk.tabs, ...fresh.map((part) => ({ id: tabId(part), name: null, root: { type: "pane" as const, pane_id: part.pane }, focused: part.pane }))],
     groups: desk.groups.map((group) => (group.id === null ? { ...group, tabs: [...group.tabs, ...fresh.map(tabId)] } : group)),
   };
 }

@@ -107,7 +107,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
         layout: { root: { area: { id: "v1", active: card.id, displays: [card] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } },
       };
       // The lead alone in its tab, so the slot beside it has the room.
-      rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
+      rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, root: { type: "pane", pane_id: LEAD_PANE } }];
       if (lane === "conductor") rest.missions = { items: [landingMission(now, scene.agents)] };
       let linkPanel = null;
       if (lane === "pr") {
@@ -130,7 +130,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
       const tab = project.checkouts[0]!.tabs[0]!;
       rest.workspace_view = { ...rest.workspace_view!, tool: "memory", panel_width: DETAIL_WIDTH.pr };
-      rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
+      rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, root: { type: "pane", pane_id: LEAD_PANE } }];
       return { ...none, rest, agents: scene.agents, usage: landingUsage(now), memory: landingMemory(now, "hide") };
     }
     if (shot === "quiet") return { ...none, ...withoutHideAi(landingWorkspace(now, SIDEBAR_WIDTH.quiet, [], "tasks", false)), usage: landingUsage(now) };

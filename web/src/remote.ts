@@ -168,7 +168,6 @@ export function remoteRequestId(): string {
 export type RemoteAction =
   | { action: "focus_pane"; pane_id: string }
   | { action: "split_pane"; pane_id: string; direction: "right" | "down"; cwd: string | null }
-  | { action: "toggle_pane_zoom"; pane_id: string }
   | { action: "close_pane"; pane_id: string; confirmed: boolean }
   | { action: "focus_workspace"; workspace_id: string; checkout_id: string }
   | { action: "focus_tab"; tab_id: string }

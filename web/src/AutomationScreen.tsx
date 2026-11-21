@@ -815,7 +815,7 @@ function RunTerminal({ pane, actions }: { pane: PaneRow; actions: Actions }) {
   const props = useMemo(() => agentProps(agent), [agent]);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-automation-run-terminal="pane" data-automation-run-pane={pane.id}>
-      <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...props} paneCount={1} zoomed={false} owned />
+      <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...props} owned />
     </div>
   );
 }

@@ -49,8 +49,8 @@ async function openMenu(first: PaneRow, firstTitle: string) {
 it("keeps a dismissed or newer menu when a terminal link resolves late", async () => {
   const menu = await openMenu(row(), "Shell");
   const context: TerminalMenuContext = {
-    selection: false, zoomed: false, paneCount: 1,
-    chords: { copy: "", paste: "", find: "", splitRight: "", splitDown: "", zoom: "" },
+    selection: false,
+    chords: { copy: "", paste: "", find: "", splitRight: "", splitDown: "" },
   };
   for (const replace of [false, true]) {
     let resolve!: (link: TerminalContextLink) => void;

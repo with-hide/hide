@@ -25,10 +25,7 @@ import type { DispatchFn } from "./ws";
 
 // The center draws the visible tab's projection tree as nested CSS grids
 // (PRD S2 B4): every split is a two-track grid sized by the engine's ratio and
-// every leaf is a pane with its own xterm instance. A zoomed tab draws only
-// the zoomed pane, over the whole canvas, so its fit follows the full
-// geometry the engine gave the PTY (B19); the other panes' terminals stay alive
-// and fed while parked (`toggle_zoom` decides, the shell only draws).
+// every leaf is a pane with its own xterm instance.
 
 type PaneProps = {
   panes: Map<string, PaneRow>;
@@ -36,8 +33,6 @@ type PaneProps = {
   scales: Record<string, number>;
   focusedPaneId: string;
   agents: Map<string, AgentRow>;
-  paneCount: number;
-  zoomed: boolean;
   actions: Actions;
 };
 
@@ -59,8 +54,8 @@ export function PaneCanvas({ actions, tab }: { actions: Actions; tab: Tab | null
   const transportRows = useShellStore((s) => s.rest?.terminal?.panes);
   const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales);
   // A tab in pair view gives its pane to the pair layer and draws none of
-  // its panes meanwhile: their terminals park, alive and fed, at their size,
-  // as a zoom's hidden panes do (PRD lane-desk-pair-view B17, D-16, D-26).
+  // its panes meanwhile: their terminals park, alive and fed, at their size
+  // (PRD lane-desk-pair-view B17, D-16, D-26).
   const paired = useShellStore((s) => drawnPair(workspaceViewOf(s.rest))?.tab_id === tab?.id);
   if (paired && tab) return <div className="relative min-h-0 min-w-0 flex-1" data-canvas={tab.id ?? ""} data-paired-canvas="true" />;
   if (!checkout || !tab || !layout) {
@@ -86,9 +81,8 @@ const EMPTY_TRANSPORTS: TerminalPane[] = [];
 
 /**
  * Pair view's left half (PRD lane-desk-pair-view B17, D-26): the paired
- * pane's own terminal, moved here from its tab's canvas, never a copy. Its
- * head offers no zoom, since pair view leaves the tab's layout and zoom as
- * they are (D-16).
+ * pane's own terminal, moved here from its tab's canvas, never a copy; the
+ * tab's layout stays as it is (D-16).
  */
 export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: Actions }) {
   // A connected device's pane is found in that device's session (B31).
@@ -108,7 +102,7 @@ export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: A
     <div className="relative h-full w-full min-h-0 min-w-0" data-layout-pane={paneId} data-pair-pane={paneId}>
       {/* Keyed by pane, so another pane taking the left mounts its own view and the keys follow it (B25), as on the tab's canvas. */}
       {pane ? (
-        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} keysStayOnDesk={entered.current !== paneId} />
+        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} local={local} keysStayOnDesk={entered.current !== paneId} />
       ) : (
         <div className="h-full bg-background" data-pane-missing={paneId} />
       )}
@@ -120,8 +114,7 @@ export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: A
  * A selected SSH device's visible tab (PRD S5 B19). The device's engine reports a remote
  * tab's geometry as each pane's rectangle rather than the split tree, so the
  * panes are placed where it says. Hairlines mark internal edges, without a
- * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane the engine
- * zoomed, its focused one, over the whole canvas.
+ * resize handle: a remote pane's size is its host's.
  */
 export function RemotePaneCanvas({
   view,
@@ -152,9 +145,9 @@ export function RemotePaneCanvas({
   }
   const panes = new Map(tab.panes.map((pane) => [pane.id, pane]));
   const transports = new Map(transportRows.map((row) => [row.pane_id, row]));
-  const frames = layout.zoomed ? [{ pane_id: layout.focused_pane_id, x: 0, y: 0, width: 1, height: 1 }] : layout.frames;
+  const frames = layout.frames;
   return (
-    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""} data-remote-canvas="true" data-zoomed={layout.zoomed ? "true" : "false"}>
+    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""} data-remote-canvas="true">
       {frames.map((frame) => {
         const pane = panes.get(frame.pane_id);
         return (
@@ -167,8 +160,6 @@ export function RemotePaneCanvas({
                 scale={scales[frame.pane_id] ?? 1}
                 actions={actions}
                 {...agentProps(agents.get(frame.pane_id))}
-                paneCount={tab.panes.length}
-                zoomed={layout.zoomed}
                 local={false}
                 offline={!connected}
               />
@@ -210,14 +201,11 @@ const TabCanvas = memo(function TabCanvas({
     scales,
     focusedPaneId: focusedPaneId ?? "",
     agents,
-    paneCount: tab.panes.length,
-    zoomed: layout.zoomed,
     actions,
   };
-  const root: LayoutNode = layout.zoomed ? { type: "pane", pane_id: layout.focused_pane_id } : layout.root;
   return (
-    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""} data-zoomed={layout.zoomed ? "true" : "false"}>
-      <LayoutView node={root} {...props} />
+    <div className={cn("relative min-h-0 min-w-0 flex-1", away && "border border-device-remote")} data-canvas={tab.id ?? ""}>
+      <LayoutView node={layout.root} {...props} />
     </div>
   );
 });
@@ -235,8 +223,6 @@ function LayoutView({ node, ...props }: { node: LayoutNode } & PaneProps) {
             scale={props.scales[node.pane_id] ?? 1}
             actions={props.actions}
             {...agentProps(props.agents.get(node.pane_id))}
-            paneCount={props.paneCount}
-            zoomed={props.zoomed}
           />
         ) : (
           // The layout names a pane the tab rows do not carry yet; the next
