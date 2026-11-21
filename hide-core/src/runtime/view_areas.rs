@@ -2007,9 +2007,10 @@ impl Runtime {
             area_id,
             beside_display,
         } = payload;
-        let opener = opener_pane
-            .as_deref()
-            .and_then(|pane| self.opener_of_pane(pane));
+        let opener = opener_pane.as_deref().map_or(
+            crate::view_feedback::OpenedBy::Operator,
+            |pane| self.link_owner(pane),
+        );
         let outcome = self.place_browser(
             &url,
             workspace,
@@ -2042,7 +2043,7 @@ impl Runtime {
             device_id: key.0,
             path: key.1,
         };
-        self.place_browser(url, Some(workspace), None, None, None, true, opener)
+        self.place_browser(url, Some(workspace), None, None, None, true, opener.into())
             .map(|(_, display_id)| display_id)
             .map_err(|refusal| refusal.kind)
     }
@@ -2323,7 +2324,7 @@ impl Runtime {
         area_id: Option<&str>,
         beside_display: Option<&str>,
         reveal: bool,
-        opener: Option<crate::view_feedback::Opener>,
+        opener: crate::view_feedback::OpenedBy,
     ) -> Result<(WorkspaceKey, String), LayoutRefusal> {
         if !self.separate_view_areas() {
             return Err(browser_refusal("This shell does not draw View areas"));
@@ -2409,10 +2410,12 @@ impl Runtime {
                 // (PRD session-files D-10, D-30).
                 let parent = beside_display
                     .and_then(|id| layout.display(id))
-                    .map(|page| (page.openers.clone(), page.operator, page.opener.clone()));
+                    .map(|page| {
+                        let owners = (page.opener.clone(), page.link_terminal.clone());
+                        (page.openers.clone(), page.operator, owners)
+                    });
                 let own = |display: &mut Display| match (&opener, &parent) {
-                    (Some(opener), _) => display.opened_by(opener.clone(), stamp),
-                    (None, Some((openers, operator, mark))) => {
+                    (crate::view_feedback::OpenedBy::Operator, Some((openers, operator, (mark, terminal)))) => {
                         // The page's own new tab is its sessions' newest View.
                         display.opened_stamp = stamp;
                         for known in openers {
@@ -2422,8 +2425,12 @@ impl Runtime {
                         }
                         display.operator |= *operator;
                         display.opener = display.opener.take().or_else(|| mark.clone());
+                        display.link_terminal =
+                            display.link_terminal.take().or_else(|| terminal.clone());
                     }
-                    (None, None) => display.operator = true,
+                    (by, _) => {
+                        display.opened_as(by.clone(), stamp);
+                    }
                 };
                 if let Some((display_id, _)) = &existing {
                     if at == place {

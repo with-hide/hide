@@ -28,6 +28,7 @@ import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { countSent, enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { fitWindow, hostLog, launchShell, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { measureFor, quietFor } from "../../web/e2e/wait";
+import { chord } from "../../web/e2e/chords";
 import { cellOf, cellPoint, hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
@@ -316,6 +317,36 @@ test("a file a terminal link opens takes the keyboard, so Command W closes the f
   await page.keyboard.press("Meta+KeyW");
   await expect(viewTab(page, "focus.ts")).toHaveCount(0);
   await expect(page.locator(`[data-pane-view="${paneId}"]`)).toBeVisible();
+});
+
+test("a file a link in a shell pane opens is that pane's: its views chip lists it, not to look at, and ⌘. puts it beside the pane (PRD lane-desk-pair-view D-54)", async () => {
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
+  fs.writeFileSync(path.join(checkout, "linked.md"), "# linked from the shell\n");
+  ({ app } = await launchShell(run.env));
+  const page = await shellPage(app);
+  await withProbe(page);
+  await enterWorkspace(page, "fixture");
+  const [left, right] = fixture.panes;
+  await expect(page.locator(`[data-pane-view="${right}"] [data-pane-split]`), "a shell with nothing opened keeps a quiet head").toHaveCount(0);
+  await print(page, right!, ["file linked.md", "OWNER-END"], "OWNER-END");
+
+  const point = await pointOf(page, right!, "linked.md", { offset: 2 });
+  await hoverLink(page, right!, point);
+  await page.mouse.click(point.x, point.y);
+  await expect(viewTab(page, "linked.md")).toBeVisible({ timeout: 20_000 });
+  // The right shell's views chip counts it, with no unseen dot, and the left shell, which held nothing, has none.
+  const views = page.locator(`[data-pane-views="${right}"]`);
+  await expect(views).toHaveAttribute("aria-label", "1 view");
+  await expect(views).not.toHaveAttribute("data-pane-views-unseen", "true");
+  await expect(page.locator(`[data-pane-views="${left}"]`)).toHaveCount(0);
+  await expect(page.locator(`[data-pane-view="${right}"] [data-pane-pair="off"]`)).toHaveCount(1);
+
+  await page.locator(`[data-pane-view="${right}"] [data-terminal-host]`).click();
+  await expect(page.locator(`[data-pane-view="${right}"]`)).toHaveAttribute("data-focused", "true");
+  await page.keyboard.press(chord("pair_view"));
+  await expect(page.locator(`[data-pair-pane="${right}"]`)).toBeVisible();
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "pair");
+  await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /linked\.md/);
 });
 
 /** Records each page the shell asks the desktop host to give the keyboard to, by display id. */

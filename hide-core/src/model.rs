@@ -368,9 +368,10 @@ pub struct WorkspaceViewSnapshot {
     /// The window's pair view mode (D-45, D-47): whether it is on, and the
     /// left pane's share of the body.
     pub pair_mode: PairModeSnapshot,
-    /// The panes of this Workspace's Agent tabs whose agent has a View to
-    /// show beside the desk, one it opened or a record card of its session
-    /// on a desk (B19, D-49): the pane head's ◧ cell shows on these only.
+    /// The panes of this Workspace's Agent tabs with a View to show beside
+    /// the desk: one their agent opened, one the operator opened from their
+    /// terminal's links, or a record card of their session on a desk (B19,
+    /// D-49, D-54): the pane head's ◧ cell shows on these only.
     /// Every pane enters pair view from ⌘. and the menus (D-53).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub panes_with_views: Vec<String>,

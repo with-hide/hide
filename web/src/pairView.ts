@@ -17,8 +17,9 @@ export function pairLabelKey(offer: PairOffer): "panes.menu.pair" | "panes.menu.
 }
 
 /**
- * Whether the pane head draws its ◧ cell (D-43, D-53): on a pane whose
- * agent has a View to show beside the desk, and on the pane pair view draws,
+ * Whether the pane head draws its ◧ cell (D-43, D-53, D-54): on a pane with
+ * a View to show beside the desk, one its agent opened or one the operator
+ * opened from its terminal's links, and on the pane pair view draws,
  * pressed. Every other pane enters pair view from ⌘. and its menus only, so
  * its head stays quiet.
  */

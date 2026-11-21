@@ -57,7 +57,7 @@ export type WorkspaceView = {
   tray: TraySnapshot;
   /** The window's pair view mode (D-45, D-47): on or off, and the left pane's share of the body in thousandths once the divider was dragged. */
   pair_mode?: PairMode;
-  /** The panes of this Workspace's Agent tabs whose agent has a View to show beside the desk (B19): the pane head draws its ◧ cell on these only (D-53). */
+  /** The panes of this Workspace's Agent tabs with a View to show beside the desk, their agent's or one opened from their links (B19, D-54): the pane head draws its ◧ cell on these only (D-53). */
   panes_with_views?: string[];
   /** The View areas (S7) of the desk in front; absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;

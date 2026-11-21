@@ -2595,6 +2595,88 @@ fn pair_view_ends_when_the_pane_drawn_alone_closes() {
     assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
 }
 
+/// A terminal link the operator pressed in `pane`, as the web sends it: a
+/// file open naming the pane whose terminal the link was in.
+fn open_link(runtime: &mut Runtime, checkout_id: &str, directory: &Path, name: &str, pane: &str) {
+    std::fs::write(directory.join(name), name).unwrap();
+    runtime.dispatch_json(&explorer_event(
+        "file_open",
+        serde_json::json!({
+            "path": directory.join(name).to_string_lossy(),
+            "workspace_id": "workspace:order",
+            "checkout_id": checkout_id,
+            "preview": false,
+            "opener_pane": pane,
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+}
+
+/// Each pane's `N views` rows as (pane, name, unseen).
+fn pane_rows(runtime: &Runtime) -> Vec<(String, String, bool)> {
+    let view = runtime.snapshot.workspace_view.as_ref().expect("published");
+    view.feedback.as_ref().map_or_else(Vec::new, |feedback| {
+        feedback
+            .opened
+            .iter()
+            .map(|row| (row.pane_id.clone(), name_of(&row.path), row.unseen))
+            .collect()
+    })
+}
+
+/// D-54, D-33: a file the operator opens from a terminal link is the pane's
+/// whose link it was, a shell's as an agent's: it is in that pane's
+/// `N views`, not To look at since the operator opened it, its desk tab
+/// names that pane and only an agent as its opener, the shell's head gets
+/// its ◧ cell, and pair view puts the file beside the shell.
+#[test]
+fn a_link_pressed_in_a_pane_is_that_panes_view_and_not_to_look_at() {
+    let (mut runtime, checkout, directory) = setup("link-owner");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    open_link(&mut runtime, &checkout, &directory, "shell.md", "w-order:t1:q");
+    open_link(&mut runtime, &checkout, &directory, "agent.md", "w-order:t1:p");
+    let rows = pane_rows(&runtime);
+    assert!(
+        rows.contains(&("w-order:t1:q".into(), "shell.md".into(), false)),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&("w-order:t1:p".into(), "agent.md".into(), false)),
+        "{rows:?}"
+    );
+    let shell = display_id(&runtime, &directory, "shell.md");
+    let agent = display_id(&runtime, &directory, "agent.md");
+    assert!(!unseen(&runtime, &directory, "shell.md"));
+    assert!(!unseen(&runtime, &directory, "agent.md"));
+    let stored = |id: &str| runtime.view_display(&key(&directory), id).cloned().unwrap();
+    assert!(stored(&shell).opener.is_none(), "a shell is no opener");
+    assert!(stored(&agent).opener.is_some());
+    assert!(panes_with_views(&runtime).contains(&"w-order:t1:q".to_owned()));
+
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(
+        front_owner(&runtime),
+        ("shell.md".into(), Some("w-order:t1:q".into()))
+    );
+}
+
+/// D-54: what the operator opens from the Explorer, ⌘P or ⌘K is the
+/// operator's, never the pane that held the keyboard.
+#[test]
+fn an_explorer_open_belongs_to_no_pane() {
+    let (mut runtime, checkout, directory) = setup("explorer-owner");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    std::fs::write(directory.join("mine.md"), "mine").unwrap();
+    open(&mut runtime, &checkout, &directory, "mine.md");
+    runtime.sync_workspace_view();
+    assert!(pane_rows(&runtime).is_empty());
+    assert_eq!(front_owner(&runtime), ("mine.md".into(), None));
+    assert!(!panes_with_views(&runtime).contains(&"w-order:t1:q".to_owned()));
+}
+
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one
 /// waiting in its pane's list is refused with `view_not_in_lane`, and nothing
 /// changes.

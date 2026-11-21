@@ -287,6 +287,10 @@ pub struct Display {
     /// A card display's card; absent for every other kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card: Option<crate::model::DetailItem>,
+    /// The terminal of a pane with no agent whose link the operator pressed
+    /// to open this (PRD lane-desk-pair-view D-54): the View is that pane's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_terminal: Option<crate::view_feedback::LinkTerminal>,
 }
 
 impl Display {
@@ -320,6 +324,29 @@ impl Display {
         self.openers.clear();
         self.operator = false;
         self.unseen = None;
+        self.link_terminal = None;
+    }
+
+    /// Records who opened this View now, at the layout's `stamp`: an agent
+    /// as `opened_by` does; the operator's own open, which leaves any
+    /// agent's mark (session-files D-10); or a pane with no agent's link,
+    /// which is the operator's open too and makes the View that pane's
+    /// newest (D-54). Whether anything changed.
+    pub fn opened_as(&mut self, by: crate::view_feedback::OpenedBy, stamp: u64) -> bool {
+        use crate::view_feedback::OpenedBy;
+        match by {
+            OpenedBy::Agent(opener) => {
+                self.opened_by(opener, stamp);
+                true
+            }
+            OpenedBy::Operator => !std::mem::replace(&mut self.operator, true),
+            OpenedBy::Terminal(terminal) => {
+                self.operator = true;
+                self.opened_stamp = stamp;
+                self.link_terminal = Some(terminal);
+                true
+            }
+        }
     }
 
     /// What this display shows, as every list that counts it once compares.
@@ -549,6 +576,7 @@ impl Layout {
             unseen: None,
             external: None,
             card: None,
+            link_terminal: None,
         }
     }
 

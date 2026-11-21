@@ -477,10 +477,11 @@ impl Runtime {
         self.focus_tab_pane(key, &pane);
     }
 
-    /// The pane of the agent a desk tab belongs to, the one rule the tab's
-    /// path line, pair view's left pane and its folded tabs read (B24,
-    /// D-41): a card's owner (`detail_owner_pane`), else the pane its
-    /// opener is in now; none for what the operator opened. `opener` is the
+    /// The pane a desk tab belongs to, the one rule the tab's path line,
+    /// pair view's left pane and its folded tabs read (B24, D-41): a card's
+    /// owner (`detail_owner_pane`), else the pane its opener is in now,
+    /// else the pane with no agent whose link opened it (D-54); none for
+    /// what the operator opened. `opener` is the
     /// opener's snapshot when the caller already holds it, and `sessions`
     /// the machine's live sessions by pane, read once by the caller.
     pub(super) fn owner_pane_of(
@@ -492,13 +493,26 @@ impl Runtime {
         if let Some(card) = display.card.as_ref() {
             return self.detail_owner_pane_among(card, sessions);
         }
-        match opener {
+        let agent = match opener {
             Some(opener) => opener.pane_id.clone(),
             None => display
                 .opener
                 .as_ref()
                 .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
+        };
+        agent.or_else(|| self.link_pane_of(display))
+    }
+
+    /// The pane with no agent whose link opened `display`, while no agent's
+    /// mark is on it (D-54).
+    fn link_pane_of(&self, display: &crate::view_layout::Display) -> Option<String> {
+        if display.opener.is_some() {
+            return None;
         }
+        display
+            .link_terminal
+            .as_ref()
+            .and_then(|terminal| self.link_terminal_pane(terminal))
     }
 
     /// The tabs of the drawn desk `root` that another agent of `pair`'s tab
@@ -535,10 +549,10 @@ impl Runtime {
             .collect()
     }
 
-    /// What pair view shows beside `pane` (B17, B19, D-49): of the Views
-    /// its agent opened and the record cards of its session the operator
-    /// put on a desk, the newest the operator has not looked at, else the
-    /// newest; none for a pane with nothing to show, such as a shell or an
+    /// What pair view shows beside `pane` (B17, B19, D-49, D-54): of the
+    /// Views its agent opened, those the operator opened from its terminal's
+    /// links, and the record cards of its session the operator put on a
+    /// desk, the newest the operator has not looked at, else the newest; none for a pane with nothing to show, such as a shell or an
     /// agent that opened nothing, which is drawn alone (D-53). No card is
     /// opened for it. `sessions` is the machine's live sessions by pane.
     fn pair_content(
@@ -555,9 +569,12 @@ impl Runtime {
                     self.detail_owner_pane_among(card, sessions).as_deref() == Some(pane)
                 }
                 Some(_) => false,
-                None => scope
-                    .as_ref()
-                    .is_some_and(|scope| display.openers.iter().any(|o| o.of_session(scope))),
+                None => {
+                    scope
+                        .as_ref()
+                        .is_some_and(|scope| display.openers.iter().any(|o| o.of_session(scope)))
+                        || self.link_pane_of(display).as_deref() == Some(pane)
+                }
             })
             .collect();
         own.iter()
@@ -567,8 +584,8 @@ impl Runtime {
             .map(|display| display.id.clone())
     }
 
-    /// The panes of `key`'s Agent tabs whose agent has a View to show
-    /// beside the desk, by `pair_content`: the pane head's ◧ cell shows on
+    /// The panes of `key`'s Agent tabs with a View to show beside the desk,
+    /// by `pair_content`: the pane head's ◧ cell shows on
     /// these only, to keep the other heads quiet (D-53). It runs on each
     /// publish of the Workspace in front: the checkout's panes times its
     /// Views (at most `MAX_TRAYS` desks of `MAX_VIEW_DISPLAYS` and the
