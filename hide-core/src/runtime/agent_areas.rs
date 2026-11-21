@@ -1192,19 +1192,12 @@ impl Runtime {
     /// automations B12), also when that folder is one of the operator's
     /// projects.
     fn automation_run_tabs(&self, key: &WorkspaceKey) -> Vec<String> {
-        let runs: HashSet<&str> = self.automation_run_panes().collect();
-        if runs.is_empty() {
-            return Vec::new();
-        }
         self.catalog_workspaces()
             .filter(|workspace| workspace.device_id == key.0)
             .flat_map(|workspace| &workspace.checkouts)
             .filter(|checkout| checkout.path == key.1)
             .flat_map(|checkout| &checkout.tabs)
-            .filter(|tab| {
-                !tab.panes.is_empty()
-                    && tab.panes.iter().all(|pane| runs.contains(pane.id.as_str()))
-            })
+            .filter(|tab| tab.automation)
             .filter_map(|tab| tab.id.clone())
             .collect()
     }

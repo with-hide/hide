@@ -2629,6 +2629,38 @@ impl Runtime {
 
     /// The panes of the runs' terminals, each run's or its opened
     /// conversation's, as the section names them.
+    /// Marks each catalog tab whose panes are all automation runs'
+    /// (`TabSnapshot::automation`), on this machine's checkouts and each
+    /// device's, so the sidebar's tree and its numbers leave it out as the tab
+    /// strip does (`Runtime::automation_run_tabs`).
+    pub(super) fn mark_automation_run_tabs(&mut self) {
+        let runs: std::collections::HashSet<String> =
+            self.automation_run_panes().map(str::to_owned).collect();
+        let sessions = self
+            .snapshot
+            .status
+            .remote
+            .iter_mut()
+            .filter_map(|remote| remote.session.as_mut())
+            .flat_map(|session| session.workspaces.iter_mut());
+        for workspace in self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .chain(sessions)
+        {
+            for tab in workspace
+                .checkouts
+                .iter_mut()
+                .flat_map(|checkout| checkout.tabs.iter_mut())
+            {
+                tab.automation =
+                    !tab.panes.is_empty() && tab.panes.iter().all(|pane| runs.contains(&pane.id));
+            }
+        }
+    }
+
     pub(super) fn automation_run_panes(&self) -> impl Iterator<Item = &str> {
         self.snapshot
             .automations

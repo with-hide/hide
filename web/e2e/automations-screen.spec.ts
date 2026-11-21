@@ -263,14 +263,15 @@ test("a run's screen draws its terminal beside the run's summary, then beside wh
     await expect(desk).toContainText("오늘의 보고서", { timeout: 30_000 }); // wait-ok: the document read from the run's checkout
     await expect(terminal).toBeVisible();
 
-    // Its tab stays out of the project's tab row (B12), and leaving the run gives the focus back to the pane the operator was on.
+    // Its tab stays out of the project's tab row and the sidebar's tree (B12), and leaving the run gives the focus back to the pane the operator was on.
     type Rest = { focused?: { pane_id?: string }; workspace_view?: { agent_layout?: { groups?: { tabs: string[] }[] } }; navigator?: { workspaces?: { checkouts: { tabs: { id?: string; panes: { id: string }[] }[] }[] }[] } };
     const runTab = (rest: Rest) => rest.navigator?.workspaces?.flatMap((workspace) => workspace.checkouts).flatMap((checkout) => checkout.tabs).find((tab) => tab.panes.some((row) => row.id === pane))?.id;
-    await withControl(stack.daemon, (control) => control.until((rest) => {
+    const hidden = await withControl(stack.daemon, (control) => control.until((rest) => {
       const tab = runTab(rest as Rest);
       const rows = (rest as Rest).workspace_view?.agent_layout?.groups?.flatMap((group) => group.tabs) ?? [];
-      return tab && rows.length > 0 && !rows.includes(tab) ? true : undefined;
+      return tab && rows.length > 0 && !rows.includes(tab) ? tab : undefined;
     }, "the run's tab left out of the tab row", 30_000));
+    await expect(page.locator(`[data-sidebar-tab-group="${hidden}"]`)).toHaveCount(0);
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await withControl(stack.daemon, (control) => control.until((rest) => ((rest as Rest).focused?.pane_id === stack.fixture.pane ? true : undefined), "the focus back on the operator's pane", 30_000));
   } finally {

@@ -29,6 +29,8 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
     byTab.set(owner, group);
   }
   return [...checkout.tabs, null].flatMap((tab) => {
+    // An automation run's tab, with its agent, is reached from the automation screen and Needs You, never the project's tree.
+    if (tab?.automation) return [];
     const members = byTab.get(tab) ?? [];
     if (!members.length && !(tab !== null && namedOnStrip(tab))) return [];
     const count = tab ? new Set(tab.panes.filter((pane) => agentPanes.has(pane.id)).map((pane) => pane.id)).size : 0;
@@ -49,7 +51,7 @@ export function sidebarNamedGroups(checkout: Checkout, segments: readonly Sideba
       if (collections.drafts.includes(id)) return [];
       const existing = segments.find((segment) => segment.tab?.id === id);
       if (existing) return [existing];
-      const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated);
+      const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated && !tab.automation);
       return tab ? [{ tab, rows: [], count: 0, glyph: true, line: true }] : [];
     });
     if (group.id === null) selected.push(...segments.filter((segment) => segment.tab === null || (!collections.groups.some((candidate) => candidate.tabs.includes(segment.tab!.id!)) && !owned.has(segment.tab!.id!))));

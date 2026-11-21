@@ -878,6 +878,8 @@ export type Tab = {
   label: string | null;
   empty: boolean;
   delegated: boolean;
+  /** Every pane is an automation run's: neither the strip nor the project's tree lists it (absent when false). */
+  automation?: boolean;
   panes: PaneRow[];
 };
 
