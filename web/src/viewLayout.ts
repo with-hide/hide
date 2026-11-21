@@ -8,7 +8,7 @@
 
 import { useExternalStore } from "./externalFiles";
 import type { TFunction } from "i18next";
-import type { ViewDisplaySnapshot, ViewLayoutSnapshot, ViewNode } from "./snapshot";
+import { sameDetailItem, type DetailItem, type ViewDisplaySnapshot, type ViewLayoutSnapshot, type ViewNode } from "./snapshot";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { translate } from "./i18n/client";
 import type { MenuEntry } from "./components/entry-menu";
@@ -293,13 +293,16 @@ export function viewAreaStepUnavailable(layout: ViewLayoutSnapshot, drawn: { geo
  * area a focus command chose, on its front tab when `tab` (the rail's desk
  * button); or a file or diff the operator opened, which
  * has no display id until the core places it; each in the Workspace it was
- * asked in.
+ * asked in. A card the operator opened names no Workspace: the core puts it
+ * on its owner's desk, which may be another tab or checkout it brings to
+ * the front in the same event, so the card itself is what is waited for.
  */
 export type ViewFocusRequest =
   | { workspace: string; displayId: string; from: { areaId: string; index: number } | null }
   | { workspace: string; areaId: string; revision?: number; tab?: boolean }
   | { workspace: string; opened: { path: string; kind: "file" | "diff"; committed: boolean | null } }
-  | { workspace: string; browserOpen: string };
+  | { workspace: string; browserOpen: string }
+  | { card: DetailItem };
 
 /** The core's answer to a `browser_open` that named itself (`status.browser_opens`). */
 export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: string | null };
@@ -309,11 +312,16 @@ export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: 
  * can follow: the named area active, the display active in the active area
  * and no longer where it stood when asked, or the opened file or diff (of
  * its own History group) the active area's view once it is past opening,
- * or the page a named browser open answered with, active in the active area.
+ * or the page a named browser open answered with, active in the active area,
+ * or the card opened, in front of the active area of the desk drawn.
  * A move or split of the active view therefore resolves once it has landed,
  * never on the frame it was asked from, and a refused one never resolves.
  */
 export function focusRequestArrived(request: ViewFocusRequest, workspace: string, layout: ViewLayoutSnapshot, opens: readonly BrowserOpenReceipt[] = []): boolean {
+  if ("card" in request) {
+    const shown = activeDisplay(layout)?.display;
+    return shown?.kind === "card" && sameDetailItem(shown.card, request.card);
+  }
   if (request.workspace !== workspace) return false;
   if ("areaId" in request) return request.revision === undefined ? layout.active_area === request.areaId : !!findArea(layout.root, request.areaId);
   if ("browserOpen" in request) {

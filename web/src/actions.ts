@@ -507,10 +507,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** The `at` an open event carries; `here` is the core's default and goes unsaid. */
   const placeOf = (at: import("./snapshot").DetailPlace) => (at === "here" ? {} : { at });
 
-  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here") => {
+  /**
+   * Every card the operator opens (`detail_open`, `pr_open`) goes out here,
+   * so the keyboard follows each kind the same way: once the core shows the
+   * card in front of the drawn desk, on whichever tab or checkout it brought
+   * forward for the card's owner, the card takes the keyboard, as an open
+   * from the Explorer or ⌘P does (B20), so the close chord closes the card
+   * rather than the agent pane the core focused with it. `keyboard: false`
+   * is a press that keeps the keys where they are (an agent pane's head,
+   * whose title keeps them in its terminal) and drops a card's earlier
+   * pending claim.
+   */
+  const sendCardOpen = (item: import("./snapshot").DetailItem, event: Parameters<DispatchFn>[0], keyboard = true) => {
+    ui().setViewFocusRequest(keyboard ? { card: item } : null);
+    dispatch(event);
+  };
+
+  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here", keyboard = true) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().setStackFront("view");
-    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
+    sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } }, keyboard);
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
@@ -2072,7 +2088,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
+      sendCardOpen({ kind: "pull_request", workspace_id: projectId, number }, { schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
     },
 
     /**
@@ -2174,7 +2190,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         state.setScreen({ kind: "workspace" });
       }
       ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, ...placeOf(at) } });
+      const item = { kind: "mission", mission: missionId } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
     },
 
     /**
@@ -3475,8 +3492,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Workspace is in front. A session with no pane on this machine opens in
      * the slot in front.
      */
-    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
-      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at);
+    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner", keyboard = true) {
+      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at, keyboard);
       // A tool's Overview page opens its own session's record in its own panel, so the press stays in the tool's cell (PRD hide-external-control B40).
       const screen = ui().screen;
       if (screen?.kind === "main" && screen.tool !== undefined && !ui().overviewOpen) {
@@ -3495,7 +3512,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openPlan(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
       leaveMissionsForSlot();
       if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...placeOf(at) } });
+      const item = { kind: "plan", session } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
     },
     /**
      * ⇧⌘U: pins the focused pane's plan chip open, or a Conductor pane's
@@ -3520,7 +3538,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         leaveMissionsForSlot();
         return this.openSessionRecord(session);
       }
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
+      const item = { kind: "record", session } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item } });
     },
     /**
      * A pane head's title (B15): its session's record opens on the pane's
@@ -3530,7 +3549,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     togglePaneRecord(session: import("./snapshot").WorkSession, paneId: string) {
       const top = frontCard(workspaceViewOf(rest()));
       if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("documents")) return setWorkspaceView({ documents: false });
-      this.openSessionRecord(session, { pane: paneId });
+      this.openSessionRecord(session, { pane: paneId }, false);
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
       dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });
