@@ -3092,3 +3092,58 @@ fn a_desk_shown_for_a_file_still_loading_floats_with_the_tool() {
     assert!(lane_documents(&runtime), "the desk is shown");
     assert!(desk_floats(&runtime), "and floats with the Explorer");
 }
+
+/// Review 3 of #2775: the operator's own tab the mode is entered on, by ⌘.
+/// on it or the desk's ◧, beside a shell with nothing of its own, stands
+/// the desk with that tab in front and shows it on the strip.
+#[test]
+fn the_operators_tab_entered_beside_a_shell_stands_the_desk_in_front() {
+    let (mut runtime, checkout, directory) = setup("pair-operator-tab-shell");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    let notes = display_id(&runtime, &directory, "notes.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": "w-order:t1:q", "display_id": notes}),
+    ));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:q");
+    assert!(
+        !pair.alone,
+        "the operator's tab stands the desk beside the shell"
+    );
+    assert_eq!(fronts(&runtime, &directory), ["notes.md"]);
+    assert!(!pair.folded.contains(&notes), "{:?}", pair.folded);
+}
+
+/// Review 3 of #2775: the operator's own tab the mode is entered on beside
+/// an agent with Views of its own stays on the strip after another tab is
+/// chosen, as one the operator opened during the mode (D-60).
+#[test]
+fn the_operators_tab_entered_beside_an_agent_stays_shown_after_another_is_chosen() {
+    let (mut runtime, checkout, directory) = setup("pair-operator-tab-agent");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    let notes = display_id(&runtime, &directory, "notes.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": "w-order:t1:p", "display_id": notes}),
+    ));
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone);
+    assert_eq!(fronts(&runtime, &directory), ["notes.md"]);
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
+    let pair = front_pair(&runtime);
+    assert!(!pair.folded.contains(&notes), "{:?}", pair.folded);
+}

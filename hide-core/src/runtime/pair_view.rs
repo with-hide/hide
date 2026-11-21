@@ -137,6 +137,16 @@ impl Runtime {
             }
             return true;
         };
+        // The operator's own tab (nobody's) the mode is entered on, by ⌘. with
+        // the keyboard on it or the desk's ◧, reads as one they opened during
+        // the mode: it stays on the strip, and it stands the desk beside a
+        // pane with nothing of its own (D-21, D-60).
+        let operator_tab = payload.display_id.as_ref().filter(|id| {
+            let sessions = self.live_sessions();
+            self.view_display(&key, id)
+                .is_some_and(|display| self.owner_pane_of(display, None, &sessions).is_none())
+        });
+        let operator_tab = operator_tab.cloned();
         // A pane with no View to show is drawn alone (D-53).
         let content = match payload.display_id {
             Some(id) if self.view_display(&key, &id).is_some() => Some(id),
@@ -192,7 +202,33 @@ impl Runtime {
         }
         self.show_pair(left, content);
         self.focus_tab_pane(&key, &pane);
+        if let Some(id) = operator_tab {
+            self.stamp_pair_shown(&key, &id);
+            self.stand_pair_desk(&key, &tab);
+        }
         true
+    }
+
+    /// Stamps `id` no earlier than the mode's start, so the strip shows it
+    /// as a tab the operator brought in front during the mode (`pair_shows`)
+    /// whichever tab is chosen after it. A tab already in front takes no new
+    /// stamp from being shown again, so the mode's own entry gives it one.
+    fn stamp_pair_shown(&mut self, key: &WorkspaceKey, id: &str) {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let since = store.pair_since;
+        let Some(display) = store
+            .views
+            .get_mut(&key.0, &key.1)
+            .and_then(|view| view.view_mut(id))
+        else {
+            return;
+        };
+        if display.last_focused_unix_ms < since {
+            display.last_focused_unix_ms = since;
+            store.generation += 1;
+        }
     }
 
     /// Draws `left` with its tab's desk, `content` in front of the desk;
@@ -697,12 +733,20 @@ impl Runtime {
         }
         let mut displays = Vec::new();
         walk(root, &mut displays);
+        // Each tab's focus stamp, read from the desk's layout once.
+        let stamps: std::collections::HashMap<&str, u64> = self
+            .view_layout_at(key, &Place::Tray(pair.tab_id.clone()))
+            .map(|layout| {
+                layout
+                    .displays()
+                    .map(|display| (display.id.as_str(), display.last_focused_unix_ms))
+                    .collect()
+            })
+            .unwrap_or_default();
         displays
             .into_iter()
             .filter(|display| {
-                let focused_at = self
-                    .view_display(key, &display.id)
-                    .map_or(0, |raw| raw.last_focused_unix_ms);
+                let focused_at = stamps.get(display.id.as_str()).copied().unwrap_or(0);
                 !self.pair_shows(&pair.pane_id, display.owner_pane.as_deref(), focused_at)
             })
             .map(|display| display.id.clone())

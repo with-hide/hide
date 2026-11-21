@@ -69,7 +69,7 @@ export function PairOthers({ hidden, label, actions }: { hidden: ViewDisplaySnap
             <DropdownMenuGroup key={owner} data-pair-others-agent={owner}>
               <DropdownMenuLabel className="flex items-center gap-xs">
                 <AgentMark kind={agent?.agent_kind} profile={agent?.profile} />
-                <span className="truncate">{owner === "" ? t("panes.pair.yours") : (agent?.identity_label ?? owner)}</span>
+                <span className="truncate">{owner === "" ? t("panes.pair.yours") : (agent?.identity_label ?? t("panes.pair.terminal"))}</span>
               </DropdownMenuLabel>
               {displays.map((display) => (
                 <DropdownMenuItem key={display.id} onSelect={() => actions.focusView(display.id)} data-pair-others-item={display.id}>
