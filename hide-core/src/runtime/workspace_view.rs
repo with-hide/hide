@@ -462,14 +462,12 @@ impl Runtime {
     }
 
     /// The operator closed a tab of the tray in front (PRD
-    /// lane-desk-pair-view B11, B26): a pair view left with nothing to draw
-    /// ends (D-46), and when no tab is left the tray folds; a tool column
+    /// lane-desk-pair-view B11, B26): a pair view stays on and its desk
+    /// settles (D-64), and when no tab is left the tray folds; a tool column
     /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        if self.end_pair_view_if_undrawn() {
-            return;
-        }
+        self.settle_pair_desk();
         let tab = self.front_tab(key);
         let Some(tray) = self
             .workspace_views

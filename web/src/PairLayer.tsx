@@ -46,7 +46,7 @@ function PairBand({ checkout, paneId, actions }: { checkout: Checkout; paneId: s
         <Columns2Icon aria-hidden="true" className="size-(--size-icon-sm)" />
         {t("panes.pair.strip")}
       </span>
-      <span className="min-w-0 flex-1 truncate font-semibold" data-pair-strip-name="true">{pane ? paneTitle(pane) : ""}</span>
+      <span className="min-w-0 flex-1 truncate font-semibold" data-pair-strip-name="true">{pane ? paneTitle(pane) : t("panes.pair.terminal")}</span>
       <Button variant="outline" size="sm" className="shrink-0" onClick={() => actions.togglePairView(paneId)} data-pair-leave="true">
         {t("panes.menu.pairOff")}
         {chord ? <Kbd>{chord}</Kbd> : null}
