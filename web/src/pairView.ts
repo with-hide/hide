@@ -44,6 +44,18 @@ export function pairBesideDesk(view: WorkspaceView | null | undefined): PairView
   return pair && pair.alone !== true ? pair : null;
 }
 
+/**
+ * Whether the front tab's desk is on screen, the web's form of the core's
+ * `pair_desk_drawn`: while focus mode draws a pane, only beside it, whatever
+ * the lane's own open state (D-53, D-57); otherwise while the lane shows the
+ * desk. A page focused there, a card read there and an area cycle over it
+ * all ask this.
+ */
+export function deskOnScreen(view: WorkspaceView | null | undefined): boolean {
+  if (!view) return false;
+  return drawnPair(view) ? pairBesideDesk(view) !== null : view.open && view.tray.shown;
+}
+
 /** Whether the window's pair view mode is on (D-45). */
 export function pairModeOn(view: WorkspaceView | null | undefined): boolean {
   return view?.pair_mode?.on === true;
