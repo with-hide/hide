@@ -4063,8 +4063,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     focusView,
     /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward; in focus mode the one focus event also stands a folded desk (D-63). */
     revealView(displayId: string) {
-      if (!drawnPair(workspaceViewOf(rest()))) showDocuments();
-      focusView(displayId, true);
+      if (!drawnPair(workspaceViewOf(rest()))) {
+        showDocuments();
+        return focusView(displayId, true);
+      }
+      // A folded desk draws no View areas, so the focus names the Workspace in front.
+      const workspace = frontViewWorkspace();
+      if (!workspace) return diagnostic("view_layout focus: no Workspace in front");
+      ui().setViewFocusRequest({ workspace: workspaceKey(workspace), displayId, from: null });
+      dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(workspace, { action: "focus", display_id: displayId }) });
     },
     focusViewArea,
     moveView,

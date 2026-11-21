@@ -510,19 +510,21 @@ impl Runtime {
 
     /// A View is opened, or chosen, onto `tab`'s desk while ⌘E folded it
     /// beside the pane focus mode draws: the desk stands again with that
-    /// View in front, and the pane stays (D-21, D-57, D-63).
-    pub(super) fn unfold_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) {
+    /// View in front, and the pane stays (D-21, D-57, D-63). Whether it was
+    /// folded.
+    pub(super) fn unfold_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) -> bool {
         let Some(store) = self.workspace_views.as_mut() else {
-            return;
+            return false;
         };
-        if store
+        let folded = store
             .pair_desk_folded
             .as_ref()
-            .is_some_and(|folded| folded.is_in(key, tab))
-        {
+            .is_some_and(|folded| folded.is_in(key, tab));
+        if folded {
             store.pair_desk_folded = None;
             store.generation += 1;
         }
+        folded
     }
 
     /// `pair_view_desk`: ⌘E in focus mode shows or folds the desk beside the

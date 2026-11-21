@@ -2894,6 +2894,17 @@ fn e_folds_and_shows_the_desk_in_focus_mode() {
     runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
 
+    // Choosing the View already in front from `N views` stands it too (D-63).
+    assert!(pair_desk_event(&mut runtime, false));
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
     // The fold is the left pane's: another pane taking the left drops it.
     assert!(pair_desk_event(&mut runtime, false));
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));

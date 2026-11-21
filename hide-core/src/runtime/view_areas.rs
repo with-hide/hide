@@ -1909,10 +1909,11 @@ impl Runtime {
                 self.follow_pair_front(&key, &display_id);
                 // A View chosen onto a desk ⌘E folded stands it, in the same
                 // event (D-63).
-                if let Place::Tray(tab) = &place {
-                    self.unfold_pair_desk(&key, tab);
-                }
-                focused.map(|changed| changed || moved)
+                let unfolded = match &place {
+                    Place::Tray(tab) => self.unfold_pair_desk(&key, tab),
+                    _ => false,
+                };
+                focused.map(|changed| changed || moved || unfolded)
             }
             ViewLayoutAction::FocusArea { area_id } => {
                 self.change_view_layout(&key, &place, |layout, stamp| {

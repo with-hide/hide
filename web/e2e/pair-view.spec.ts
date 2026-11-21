@@ -535,7 +535,7 @@ test("the rail's desk button folds and stands focus mode's desk, counting the pa
   try {
     const fixture = path.join(engine.root, "fixture");
     daemon = await startHided(engine, "pair-view-rail");
-    const [left] = engine.panes;
+    const [left, shell] = engine.panes;
     const leftAgent = await agentPane(engine, daemon.stateDir, left!);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -587,6 +587,22 @@ test("the rail's desk button folds and stands focus mode's desk, counting the pa
     })).toBe(true);
     await page.locator('[data-lane-tool="explorer"]').click();
     await expect(page.locator('aside[data-lane="explorer"]')).toHaveCount(0);
+
+    // D-60, D-63: on the shell the desk holds only the agent's a.md, which its strip folds; the core says nothing can
+    // stand, so ⌘E and the rail button ask for nothing, and the sidebar back to the agent leaves the keys in its terminal.
+    await page.keyboard.press(chord("pair_view"));
+    await expect(band(page)).toHaveCount(0);
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await paneView(page, shell!).locator("[data-terminal-host]").click();
+    await expect(paneView(page, shell!)).toHaveAttribute("data-focused", "true");
+    await page.keyboard.press(chord("pair_view"));
+    await expect(page.locator(`[data-pair-layer="${shell}"]`)).toHaveAttribute("data-pair-alone", "true");
+    await expect(deskButton).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press(chord("toggle_lane"));
+    await page.locator(`nav[data-sidebar] [data-agent-open="${left}"]`).first().click();
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
+    await expect(paneView(page, left!).locator(".xterm-helper-textarea")).toBeFocused();
   } finally {
     daemon?.stop();
     engine.stop();
