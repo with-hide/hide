@@ -9,7 +9,9 @@ import { RemoteScreens } from "./remoteScreens";
 
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
 /** What each `new WebContentsView()` gave the host, newest last. */
-const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void } }[]);
+const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean } }[]);
+/** Each session partition the host asked for, in order. */
+const partitions = vi.hoisted(() => [] as string[]);
 vi.mock("electron", () => {
   const fakeSession = {
     protocol: { handle: () => undefined },
@@ -22,7 +24,12 @@ vi.mock("electron", () => {
     ipcMain: { on: (channel: string, listener: (event: unknown, value?: unknown) => void) => ipc.set(channel, listener), handle: () => undefined },
     clipboard: { writeText: () => undefined },
     protocol: {},
-    session: { fromPartition: () => fakeSession },
+    session: {
+      fromPartition: (partition: string) => {
+        partitions.push(partition);
+        return fakeSession;
+      },
+    },
     WebContentsView: function WebContentsView() {
       const view = {
         setBackgroundColor: () => undefined,
@@ -30,11 +37,21 @@ vi.mock("electron", () => {
         setBounds: () => undefined,
         webContents: {
           sent: [] as { channel: string; value: unknown }[],
+          loaded: [] as string[],
+          closed: false,
           send(channel: string, value: unknown) {
             this.sent.push({ channel, value });
           },
-          loadURL: () => new Promise(() => undefined),
-          isDestroyed: () => false,
+          loadURL(url: string) {
+            this.loaded.push(url);
+            return new Promise(() => undefined);
+          },
+          close() {
+            this.closed = true;
+          },
+          isDestroyed() {
+            return this.closed;
+          },
           isFocused: () => false,
           focus: () => undefined,
           on: () => undefined,
@@ -48,6 +65,9 @@ vi.mock("electron", () => {
 });
 
 const DEVICE = "b2b2b2b2-0000-4000-8000-0000000000bb";
+const KEY = "a".repeat(64);
+const REPLACEMENT = "b".repeat(64);
+const RECT = { x: 0, y: 0, width: 800, height: 600 };
 
 /** The page's socket events as the host sent them to the screen's page. */
 function pageEvents(view: (typeof views)[number]): { op: string; code?: number; reason?: string }[] {
@@ -70,7 +90,32 @@ afterEach(async () => {
   server = null;
   ipc.clear();
   views.length = 0;
+  partitions.length = 0;
 });
+
+/** A host with the fakes above, its daemon at `server`'s port. */
+function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }): RemoteScreens {
+  const window = {
+    isDestroyed: () => false,
+    isFocused: () => false,
+    webContents: { getZoomFactor: () => 1, focus: () => undefined, send: () => undefined },
+    contentView: { addChildView: () => undefined, removeChildView: () => undefined },
+  };
+  const screens = new RemoteScreens({
+    window: () => window as never,
+    daemon: () => ({ origin: `http://127.0.0.1:${port}`, token: "t" }),
+    registry: () => [],
+    background: "#000000",
+    log: log as unknown as HostLog,
+  });
+  screens.listen();
+  return screens;
+}
+
+/** What the screen's page would send: its own top frame on its own origin. */
+function fromPage(view: (typeof views)[number]) {
+  return { sender: view.webContents, senderFrame: { parent: null, url: pageAddress(DEVICE) } };
+}
 
 describe("a remote screen's socket", () => {
   // PRD device-connect-iroh D-67: a host that stops reading never grows this
@@ -81,25 +126,12 @@ describe("a remote screen's socket", () => {
     await once(server, "listening");
     const held = new Promise<WebSocket>((resolve) => server!.once("connection", (socket) => resolve(socket)));
     const log = { event: vi.fn() };
-    const window = {
-      isDestroyed: () => false,
-      isFocused: () => false,
-      webContents: { getZoomFactor: () => 1, focus: () => undefined, send: () => undefined },
-      contentView: { addChildView: () => undefined, removeChildView: () => undefined },
-    };
-    const screens = new RemoteScreens({
-      window: () => window as never,
-      daemon: () => ({ origin: `http://127.0.0.1:${(server!.address() as AddressInfo).port}`, token: "t" }),
-      registry: () => [],
-      background: "#000000",
-      log: log as unknown as HostLog,
-    });
-    screens.listen();
-    screens.show({ device: DEVICE, rect: { x: 0, y: 0, width: 800, height: 600 } });
+    const screens = screensOn((server.address() as AddressInfo).port, log);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
     const view = views.at(-1)!;
-    const fromPage = { sender: view.webContents, senderFrame: { parent: null, url: pageAddress(DEVICE) } };
+    const page = fromPage(view);
 
-    ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(fromPage);
+    ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(page);
     const host = await held;
     // The host reads nothing more: what the page sends stays queued here.
     (host as unknown as { _socket: { pause(): void } })._socket.pause();
@@ -108,7 +140,7 @@ describe("a remote screen's socket", () => {
 
     const frame = new Uint8Array(MAX_SEND_BYTES);
     for (let sent = 0; sent < 4 && !pageEvents(view).some((event) => event.op === "close"); sent += 1) {
-      ipc.get(REMOTE_SOCKET_SEND_CHANNEL)!(fromPage, frame);
+      ipc.get(REMOTE_SOCKET_SEND_CHANNEL)!(page, frame);
     }
 
     expect(pageEvents(view).filter((event) => event.op === "close")).toEqual([{ op: "close", code: 1013, reason: "queue_full" }]);
@@ -118,7 +150,43 @@ describe("a remote screen's socket", () => {
     (host as unknown as { _socket: { resume(): void } })._socket.resume();
     expect(await ended).toBe(1006);
     // A send after the cut reaches no socket.
-    ipc.get(REMOTE_SOCKET_SEND_CHANNEL)!(fromPage, new Uint8Array(1));
+    ipc.get(REMOTE_SOCKET_SEND_CHANNEL)!(page, new Uint8Array(1));
     expect(pageEvents(view).filter((event) => event.op === "close")).toHaveLength(1);
+  }, 30_000);
+
+  // Security pre-review S1: a page is the screen of the key its machine was
+  // paired under when it loaded. When another host takes the same device id
+  // under a new key, the shell shows that device under the new key: the
+  // earlier page is closed, with nothing it stored, before the new host's
+  // page loads, and only the new page's socket opens, naming the new key.
+  it("closes a page loaded under one key when its device is shown under another, before the other's socket opens", async () => {
+    server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const asked: string[] = [];
+    server.on("connection", (_socket, request) => asked.push(request.url ?? ""));
+    const log = { event: vi.fn() };
+    const screens = screensOn((server.address() as AddressInfo).port, log);
+
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    const earlier = views.at(-1)!;
+    ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(fromPage(earlier));
+    await until("the first key's socket", () => asked.length === 1);
+    expect(asked).toEqual([`/peer-screen/${DEVICE}/ws?key=${KEY}`]);
+    screens.show(null);
+
+    screens.show({ device: DEVICE, key: REPLACEMENT, rect: RECT });
+    const later = views.at(-1)!;
+    expect(later).not.toBe(earlier);
+    expect(earlier.webContents.closed).toBe(true);
+    expect(later.webContents.loaded).toEqual([pageAddress(DEVICE)]);
+    expect(new Set(partitions).size).toBe(2);
+    expect(log.event).toHaveBeenCalledWith("remote.key_changed", { device: DEVICE });
+
+    // The earlier page asks for a socket again and reaches nothing; the later page's names its own key.
+    ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(fromPage(earlier));
+    ipc.get(REMOTE_SOCKET_OPEN_CHANNEL)!(fromPage(later));
+    await until("the replacement key's socket", () => asked.length >= 2);
+    expect(asked).toEqual([`/peer-screen/${DEVICE}/ws?key=${KEY}`, `/peer-screen/${DEVICE}/ws?key=${REPLACEMENT}`]);
+    expect(pageEvents(earlier).filter((event) => event.op === "open")).toHaveLength(1);
   }, 30_000);
 });

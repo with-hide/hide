@@ -357,9 +357,11 @@ export type RemoteScreensBridge = {
   /**
    * Shows that machine's screen over `rect` of the window, in the shell's CSS
    * pixels, or none. Its socket to that machine lives only while it shows
-   * (B63); a screen whose page could not load loads again when shown.
+   * (B63); a screen whose page could not load loads again when shown. `key`
+   * is the key the machine is paired under now: a page loaded under another
+   * key is closed and the machine's page loaded anew.
    */
-  show(view: { device: string; rect: BrowserRect } | null): void;
+  show(view: { device: string; key: string; rect: BrowserRect } | null): void;
   /** How the shown screen's page loaded; returns the unsubscribe. */
   onState(listener: (state: RemoteScreenState) => void): () => void;
 };

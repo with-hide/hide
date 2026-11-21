@@ -19,11 +19,14 @@
 //! changes.
 //!
 //! On the guest, the desktop app reaches the host through this daemon:
-//! `/peer-screen/<device>/…` (this machine's token) answers the page and its
-//! assets from the host's bulk streams, keeping each asset by the host's
-//! key and build,
-//! and `/peer-screen/<device>/ws` joins one socket to the host's two
-//! streams. The desktop opens that socket only while the tile shows.
+//! `/peer-screen/<device>/…?key=<host key>` (this machine's token) answers
+//! the page and its assets from the host's bulk streams, keeping each asset
+//! by the host's key and build,
+//! and `/peer-screen/<device>/ws?key=<host key>` joins one socket to the
+//! host's two streams. The desktop opens that socket only while the tile
+//! shows. Each request names the key its page was opened for, and one whose
+//! device has another host now is refused: a page one host's key loaded
+//! never reaches a host that took the same device id after it.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -33,7 +36,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -427,15 +430,26 @@ fn unavailable(reason: &str) -> Response {
         .into_response()
 }
 
-/// The live connection to the host whose device id is `device`, and its
-/// key, when this machine is that host's guest now.
-/// The link to `device` while this computer may open it, with its key and the build it says it runs.
-fn host_link(state: &AppState, device: &str) -> Result<(Link, PeerKey, String), &'static str> {
+/// The key a request's page was opened for, its query's one `key=<hex>`;
+/// `None` when it names none, or anything else.
+fn asked_key(query: Option<&str>) -> Option<PeerKey> {
+    PeerKey::from_hex(query?.strip_prefix("key=")?).ok()
+}
+
+/// The link to `device` while this computer may open it under `key`, with
+/// the build it says it runs. A device whose host has another key now is
+/// not paired under the one asked for, so a page the earlier host loaded
+/// never reaches the later one (security pre-review S1).
+fn host_link(
+    state: &AppState,
+    device: &str,
+    key: &PeerKey,
+) -> Result<(Link, String), &'static str> {
     let peers = state.peers.peers().ok_or("not_connected")?;
     let host = peers
         .hosts()
         .into_iter()
-        .find(|host| host.device == device)
+        .find(|host| host.device == device && host.key == *key)
         .ok_or("not_paired")?;
     match host.state {
         KnownState::Active => {}
@@ -450,7 +464,7 @@ fn host_link(state: &AppState, device: &str) -> Result<(Link, PeerKey, String), 
         _ => return Err("no_grant"),
     }
     let build = link.their_hello().build.clone();
-    Ok((link, host.key, build))
+    Ok((link, build))
 }
 
 /// A stream of a host's view: its two halves, which end with the grant.
@@ -471,26 +485,34 @@ async fn open_stream(link: &Link, kind: StreamKind) -> Result<ViewIo, &'static s
     Ok(tokio::io::join(stream.recv, stream.send))
 }
 
-/// `GET /peer-screen/<device>/`: the host's page, for the desktop app's
-/// view of it.
+/// `GET /peer-screen/<device>/?key=<host key>`: the host's page, for the
+/// desktop app's view of it.
 pub async fn guest_page(
     State(state): State<AppState>,
     Path(device): Path<String>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    guest_file(state, device, String::new(), headers).await
+    guest_file(state, device, String::new(), query, headers).await
 }
 
-/// `GET /peer-screen/<device>/<path>`: one of the host's assets.
+/// `GET /peer-screen/<device>/<path>?key=<host key>`: one of the host's assets.
 pub async fn guest_asset(
     State(state): State<AppState>,
     Path((device, path)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    guest_file(state, device, path, headers).await
+    guest_file(state, device, path, query, headers).await
 }
 
-async fn guest_file(state: AppState, device: String, path: String, headers: HeaderMap) -> Response {
+async fn guest_file(
+    state: AppState,
+    device: String,
+    path: String,
+    query: Option<String>,
+    headers: HeaderMap,
+) -> Response {
     if !crate::server::bearer_matches(&headers, &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -498,7 +520,10 @@ async fn guest_file(state: AppState, device: String, path: String, headers: Head
     if path != "/" && path != "/index.html" && !path.starts_with("/assets/") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let (link, host, build) = match host_link(&state, &device) {
+    let Some(host) = asked_key(query.as_deref()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let (link, build) = match host_link(&state, &device, &host) {
         Ok(found) => found,
         Err(reason) => return unavailable(reason),
     };
@@ -584,20 +609,25 @@ where
     Ok((status, kind, body))
 }
 
-/// `GET /peer-screen/<device>/ws`: the desktop app's socket to the host's
-/// view, joined from the host's two streams: the socket's frames and the
-/// file bytes beside them. It ends when either does, or the desktop's.
+/// `GET /peer-screen/<device>/ws?key=<host key>`: the desktop app's socket
+/// to the host's view, joined from the host's two streams: the socket's
+/// frames and the file bytes beside them. It ends when either does, or the
+/// desktop's.
 pub async fn guest_socket(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Path(device): Path<String>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
     if !crate::server::bearer_matches(&headers, &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let link = match host_link(&state, &device) {
-        Ok((link, ..)) => link,
+    let Some(host) = asked_key(query.as_deref()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let link = match host_link(&state, &device, &host) {
+        Ok((link, _)) => link,
         Err(reason) => return unavailable(reason),
     };
     ws.on_upgrade(move |socket| join_view(socket, link, device))

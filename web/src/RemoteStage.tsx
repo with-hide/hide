@@ -35,6 +35,8 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const device = useUiStore((s) => s.remoteScreen);
   const peer = useShellStore((s) => pairedMachines(s.rest).find((row) => row.device_id === device) ?? null);
+  // The key the machine is paired under now: a page is the screen of that key only.
+  const key = peer?.key ?? null;
   const rail = useShellStore((s) => railShown(s.rest));
   const bridge = hostBridge()?.remoteScreens ?? null;
   const stage = useRef<HTMLDivElement>(null);
@@ -67,10 +69,10 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   // The screen stands over the stage, from the rail's edge to the window's,
   // top to bottom, while its machine can show it and nothing of this window
   // is drawn over the stage; otherwise it stands aside and its socket closes.
-  const showing = bridge !== null && device !== null && state === "ready";
+  const showing = bridge !== null && device !== null && key !== null && state === "ready";
   useEffect(() => {
     if (!bridge) return undefined;
-    if (!showing || device === null) {
+    if (!showing || device === null || key === null) {
       bridge.show(null);
       return undefined;
     }
@@ -83,10 +85,10 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       const left = element.getBoundingClientRect().left;
       const rect: BrowserRect = { x: left, y: 0, width: Math.max(0, window.innerWidth - left), height: window.innerHeight };
       const covered = overlayRects().rects.some((overlay) => intersects(overlay, rect));
-      const key = covered ? "covered" : JSON.stringify(rect);
-      if (key === last) return;
-      last = key;
-      bridge.show(covered ? null : { device, rect });
+      const placed = covered ? "covered" : JSON.stringify(rect);
+      if (placed === last) return;
+      last = placed;
+      bridge.show(covered ? null : { device, key, rect });
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(place);
@@ -104,7 +106,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
       window.removeEventListener("resize", schedule);
       bridge.show(null);
     };
-  }, [bridge, showing, device, attempt]);
+  }, [bridge, showing, device, key, attempt]);
 
   const why = state !== "ready" ? state : failed ? failedState(loaded?.reason) : null;
   return (

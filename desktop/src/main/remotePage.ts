@@ -29,21 +29,30 @@ export function queueAllows(queued: number, size: number): boolean {
 /** A device id as hided names one: letters, digits and `-`, never an address. */
 const DEVICE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
-/** What the shell asks: a machine's screen over `rect`, or none. */
-export type ShowRequest = { device: string; rect: BrowserRect } | null;
+/** A machine's key as Hide spells it everywhere: 64 lower hex characters. */
+const KEY = /^[0-9a-f]{64}$/;
+
+/**
+ * What the shell asks: a machine's screen over `rect`, or none. `key` is the
+ * key that machine is paired under now; a page is kept for one key only, so
+ * a page one host loaded never reaches a host that later took the same
+ * device id (security pre-review S1).
+ */
+export type ShowRequest = { device: string; key: string; rect: BrowserRect } | null;
 
 /** The shell's request, or undefined when it is not one. */
 export function parseShow(value: unknown): ShowRequest | undefined {
   if (value === null) return null;
   if (typeof value !== "object") return undefined;
-  const { device, rect } = value as Record<string, unknown>;
+  const { device, key, rect } = value as Record<string, unknown>;
   if (typeof device !== "string" || !DEVICE.test(device)) return undefined;
+  if (typeof key !== "string" || !KEY.test(key)) return undefined;
   if (typeof rect !== "object" || rect === null) return undefined;
   const { x, y, width, height } = rect as Record<string, unknown>;
   const numbers = [x, y, width, height];
   if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value))) return undefined;
   if ((width as number) < 0 || (height as number) < 0) return undefined;
-  return { device, rect: { x: x as number, y: y as number, width: width as number, height: height as number } };
+  return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number } };
 }
 
 /** The page's first address. */
@@ -61,25 +70,31 @@ export function ofPage(url: string, device: string): boolean {
   }
 }
 
+/** The page's own address on this computer's daemon, which names the key the page was opened for. */
+export function pagePath(device: string, key: string): string {
+  return `/peer-screen/${device}/?key=${key}`;
+}
+
 /**
  * Where a load of the page is fetched from: the page, its index or an asset,
- * through this computer's daemon (`/peer-screen/<device>/...`, which the
- * host answers over the connection), or null for anything else, which is
- * refused without reaching the daemon.
+ * through this computer's daemon (`/peer-screen/<device>/...?key=<key>`,
+ * which the host answers over the connection while `device` is paired under
+ * `key`), or null for anything else, which is refused without reaching the
+ * daemon.
  */
-export function fetchPath(url: string, device: string): string | null {
+export function fetchPath(url: string, device: string, key: string): string | null {
   if (!ofPage(url, device)) return null;
   const { pathname, search } = new URL(url);
   // The page's own query (`?probe=1`) is the page's to read and never sent on; an asset takes none.
-  if (pathname === "/" || pathname === "/index.html") return `/peer-screen/${device}/`;
+  if (pathname === "/" || pathname === "/index.html") return pagePath(device, key);
   if (search) return null;
-  if (pathname.startsWith("/assets/") && !pathname.includes("..")) return `/peer-screen/${device}${pathname}`;
+  if (pathname.startsWith("/assets/") && !pathname.includes("..")) return `/peer-screen/${device}${pathname}?key=${key}`;
   return null;
 }
 
-/** The screen socket's address on this computer's daemon. */
-export function socketAddress(origin: string, device: string): string {
-  return `${origin.replace(/^http/, "ws")}/peer-screen/${device}/ws`;
+/** The screen socket's address on this computer's daemon, for the key its page was opened for. */
+export function socketAddress(origin: string, device: string, key: string): string {
+  return `${origin.replace(/^http/, "ws")}/peer-screen/${device}/ws?key=${key}`;
 }
 
 /**

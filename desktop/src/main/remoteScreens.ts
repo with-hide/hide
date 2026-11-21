@@ -17,7 +17,7 @@ import { matchHost, type Command } from "../../../web/src/shortcuts";
 import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL } from "../channel";
 import { toBounds } from "./browserSync";
 import type { HostLog } from "./log";
-import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type ShowRequest } from "./remotePage";
+import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
 export function registerRemoteScheme(): void {
@@ -32,6 +32,8 @@ export type Daemon = { origin: string; token: string };
 
 type Screen = {
   device: string;
+  /** The key its machine was paired under when the page loaded; the page reaches that key only. */
+  key: string;
   view: WebContentsView;
   socket: WebSocket | null;
   visible: boolean;
@@ -103,7 +105,15 @@ export class RemoteScreens {
       this.front = null;
       return;
     }
-    const screen = this.screens.get(request.device) ?? this.create(window, request.device);
+    let kept = this.screens.get(request.device);
+    // A machine paired under another key now is another host: the page the
+    // earlier one loaded goes before the later one's is loaded (S1).
+    if (kept && kept.key !== request.key) {
+      this.deps.log.event("remote.key_changed", { device: request.device });
+      this.destroy(kept, window);
+      kept = undefined;
+    }
+    const screen = kept ?? this.create(window, request.device, request.key);
     if (!screen) return;
     screen.view.setBounds(toBounds(request.rect, window.webContents.getZoomFactor()));
     screen.shownAt = ++this.clock;
@@ -139,10 +149,10 @@ export class RemoteScreens {
     this.front = null;
   }
 
-  private create(window: BrowserWindow, device: string): Screen | null {
+  private create(window: BrowserWindow, device: string, key: string): Screen | null {
     const view = new WebContentsView({
       webPreferences: {
-        session: this.sessionFor(device),
+        session: this.sessionFor(device, key),
         preload: path.join(__dirname, "remote-preload.js"),
         sandbox: true,
         contextIsolation: true,
@@ -156,7 +166,7 @@ export class RemoteScreens {
     // The window's own color until the page paints, so a screen never flashes white.
     view.setBackgroundColor(this.deps.background);
     view.setVisible(false);
-    const screen: Screen = { device, view, socket: null, visible: true, state: "opening", shownAt: 0 };
+    const screen: Screen = { device, key, view, socket: null, visible: true, state: "opening", shownAt: 0 };
     this.guard(screen);
     window.contentView.addChildView(view);
     this.screens.set(device, screen);
@@ -170,7 +180,8 @@ export class RemoteScreens {
     this.report(screen.device, "opening");
     screen.view.webContents.loadURL(pageAddress(screen.device)).then(
       () => {
-        if (screen.state === "failed" || !this.screens.has(screen.device)) return;
+        // A page closed meanwhile, or replaced by another key's, says nothing of the screen there now.
+        if (screen.state === "failed" || this.screens.get(screen.device) !== screen) return;
         this.report(screen.device, "shown");
         if (!screen.visible) return;
         screen.view.setVisible(true);
@@ -181,13 +192,17 @@ export class RemoteScreens {
     );
   }
 
-  /** One in-memory session per machine: nothing it stores outlives the app, and no page of another machine or of this one shares it. */
-  private sessionFor(device: string): Session {
-    const partition = `hide-remote-${device}`;
+  /**
+   * One in-memory session per machine and key: nothing it stores outlives
+   * the app, and no page of another machine, of another key of the same
+   * device, or of this one shares it.
+   */
+  private sessionFor(device: string, key: string): Session {
+    const partition = `hide-remote-${device}-${key}`;
     const pageSession = session.fromPartition(partition);
     if (this.sessions.has(partition)) return pageSession;
     this.sessions.add(partition);
-    pageSession.protocol.handle(REMOTE_SCHEME, (request) => this.fetchPage(request.url, device));
+    pageSession.protocol.handle(REMOTE_SCHEME, (request) => this.fetchPage(request.url, device, key));
     pageSession.setPermissionRequestHandler((_contents, permission, callback) => {
       this.deps.log.event("remote.permission_refused", { device, permission });
       callback(false);
@@ -203,26 +218,28 @@ export class RemoteScreens {
   }
 
   /** A load of the page: its index or an asset, from this computer's daemon, with its token, which the page never holds. */
-  private async fetchPage(url: string, device: string): Promise<Response> {
-    const where = fetchPath(url, device);
+  private async fetchPage(url: string, device: string, key: string): Promise<Response> {
+    const where = fetchPath(url, device, key);
     const daemon = this.deps.daemon();
     if (!where || !daemon) return new Response("", { status: 404 });
+    const page = where === pagePath(device, key);
     try {
       const answer = await fetch(`${daemon.origin}${where}`, { headers: { authorization: `Bearer ${daemon.token}` } });
-      if (!answer.ok && where === `/peer-screen/${device}/`) {
+      if (!answer.ok && page) {
         const reason = await answer.json().then((body: { reason?: unknown }) => (typeof body.reason === "string" ? body.reason : "not_connected"), () => "not_connected");
-        this.failed(device, reason);
+        this.failed(device, key, reason);
       }
       return new Response(answer.body, { status: answer.status, headers: { "content-type": answer.headers.get("content-type") ?? "application/octet-stream" } });
     } catch {
-      if (where === `/peer-screen/${device}/`) this.failed(device, "not_connected");
+      if (page) this.failed(device, key, "not_connected");
       return new Response("", { status: 503 });
     }
   }
 
-  private failed(device: string, reason: string): void {
+  /** The page of `device` under `key` could not load; a page of another key is not this one. */
+  private failed(device: string, key: string, reason: string): void {
     const screen = this.screens.get(device);
-    if (!screen) return;
+    if (!screen || screen.key !== key) return;
     screen.view.setVisible(false);
     this.closeSocket(screen, null);
     this.report(device, "failed", reason);
@@ -246,9 +263,9 @@ export class RemoteScreens {
     });
     contents.on("did-fail-load", (_event, code, _description, _url, mainFrame) => {
       if (!mainFrame || code === -3) return; // -3: a load another load replaced
-      if (screen.state !== "failed") this.failed(device, "not_connected");
+      if (screen.state !== "failed") this.failed(device, screen.key, "not_connected");
     });
-    contents.on("render-process-gone", () => this.failed(device, "page_gone"));
+    contents.on("render-process-gone", () => this.failed(device, screen.key, "page_gone"));
     // ⌥⌘n chooses a computer tile, which is this window's rail, not the screen's (B47).
     contents.on("before-input-event", (event, input: Input) => {
       if (input.type !== "keyDown" || input.isComposing) return;
@@ -270,7 +287,7 @@ export class RemoteScreens {
       this.toPage(screen, { op: "close", code: HIDDEN_CLOSE, reason: "hidden" });
       return;
     }
-    const socket = new WebSocket(socketAddress(daemon.origin, screen.device), { headers: { authorization: `Bearer ${daemon.token}` }, maxPayload: 64 * 1024 * 1024 });
+    const socket = new WebSocket(socketAddress(daemon.origin, screen.device, screen.key), { headers: { authorization: `Bearer ${daemon.token}` }, maxPayload: 64 * 1024 * 1024 });
     screen.socket = socket;
     socket.on("open", () => {
       if (screen.socket === socket) this.toPage(screen, { op: "open" });

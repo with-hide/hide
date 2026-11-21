@@ -42,16 +42,39 @@ async fn get(port: u16, path: &str, token: Option<&str>) -> (u16, String) {
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-/// The desktop's view socket on the guest daemon, its handshake sent as a
-/// page that holds no token of the host sends it.
-async fn open_view(port: u16, token: &str, host: &str) -> Socket {
-    let mut request = format!("ws://127.0.0.1:{port}/peer-screen/{host}/ws")
+/// The key the guest lists its one paired machine under.
+fn host_key(guest: &Terminal) -> String {
+    let peers = guest.peers();
+    let [peer] = peers.as_slice() else {
+        panic!("one paired machine: {peers:?}")
+    };
+    peer["connection_id"].as_str().unwrap().to_owned()
+}
+
+/// The desktop's view socket on the guest daemon, for the page opened under
+/// `key`: the handshake, or the status the daemon refused it with.
+async fn view_socket(port: u16, token: &str, host: &str, key: &str) -> Result<Socket, u16> {
+    let mut request = format!("ws://127.0.0.1:{port}/peer-screen/{host}/ws?key={key}")
         .into_client_request()
         .unwrap();
     request
         .headers_mut()
         .insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
-    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _)) => Ok(socket),
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            Err(response.status().as_u16())
+        }
+        Err(error) => panic!("the view socket: {error}"),
+    }
+}
+
+/// The desktop's view socket on the guest daemon, its handshake sent as a
+/// page that holds no token of the host sends it.
+async fn open_view(port: u16, token: &str, host: &str, key: &str) -> Socket {
+    let mut socket = view_socket(port, token, host, key)
+        .await
+        .unwrap_or_else(|status| panic!("the view socket was refused: {status}"));
     socket
         .send(Message::Text(
             json!({"token": "", "schema_version": 2, "client_kind": "desktop",
@@ -141,13 +164,15 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
     let (window, host_id, _) = pair_by_link(&running, &host, &guest).await;
     drop(window);
     let (port, token) = daemon_of(&guest);
+    let key = host_key(&guest);
     let before = host_clients(&running).await;
 
     // The host's page comes through the guest's daemon, for its token only;
     // the host answers nothing but its page, its assets and its socket.
-    let (status, page) = get(port, &format!("/peer-screen/{host_id}/"), Some(&token)).await;
+    let page_path = format!("/peer-screen/{host_id}/?key={key}");
+    let (status, page) = get(port, &page_path, Some(&token)).await;
     assert_eq!(status, 200, "{page}");
-    let (status, _) = get(port, &format!("/peer-screen/{host_id}/"), None).await;
+    let (status, _) = get(port, &page_path, None).await;
     assert_eq!(status, 401);
     let (status, _) = get(
         port,
@@ -156,7 +181,12 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
     )
     .await;
     assert_eq!(status, 404);
-    let (status, body) = get(port, "/peer-screen/no-such-machine/", Some(&token)).await;
+    let (status, body) = get(
+        port,
+        &format!("/peer-screen/no-such-machine/?key={key}"),
+        Some(&token),
+    )
+    .await;
     assert_eq!(status, 503, "{body}");
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap()["reason"],
@@ -165,7 +195,7 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
 
     // B17: the view is the host's screen: its daemon frame names the host,
     // and a snapshot follows. It is never sent the host's pairings.
-    let mut view = open_view(port, &token, &host_id).await;
+    let mut view = open_view(port, &token, &host_id, &key).await;
     let opened = until(&mut view, "the host's snapshot", |frame| {
         frame["type"] == "snapshot"
     })
@@ -284,10 +314,114 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
             peer["opens"] == "paused_there"
         })
         .await;
-    let (status, body) = get(port, &format!("/peer-screen/{host_id}/"), Some(&token)).await;
+    let (status, body) = get(port, &page_path, Some(&token)).await;
     assert_eq!(status, 503, "{body}");
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap()["reason"],
         "paused_there"
+    );
+}
+
+/// Security pre-review S1: a page is the screen of the key its machine was
+/// paired under. When another Hide takes the same device id under a new key
+/// (the machine lost its key and was set up again), every request that
+/// names the earlier key, its page, its assets and its socket, is refused,
+/// so a page the earlier host loaded and the desktop still holds never
+/// reaches the later host; the later key's page and socket open on the
+/// later host. A request that names no key is no request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_view_asked_under_a_device_s_earlier_key_is_refused_once_another_host_takes_it() {
+    let root = crate::fixtures::fixture_root("hk");
+    let earlier = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let earlier_host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+    let (window, device, _) = pair_by_link(&earlier, &earlier_host, &guest).await;
+    drop(window);
+    let (port, token) = daemon_of(&guest);
+    let first = host_key(&guest);
+    let (status, page) = get(
+        port,
+        &format!("/peer-screen/{device}/?key={first}"),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, 200, "{page}");
+    for query in ["", "?key=", "?key=xyz", "?other=1"] {
+        let (status, _) = get(
+            port,
+            &format!("/peer-screen/{device}/{query}"),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, 400, "{query}");
+    }
+
+    // The same machine id, a state folder of its own: another key. The
+    // earlier host keeps running, so a refusal below is the key's, not a
+    // lost connection's.
+    let other = crate::fixtures::fixture_root("hl");
+    let later = hided::start_daemon(host_env(other.path())).await.unwrap();
+    let later_host = Terminal::new(
+        other.path().join("host-home"),
+        other.path().join("host-state"),
+        None,
+    );
+    let (window, later_device, _) = pair_by_link(&later, &later_host, &guest).await;
+    drop(window);
+    assert_eq!(later_device, device, "one device id");
+    let second = host_key(&guest);
+    assert_ne!(second, first);
+
+    for path in ["", "assets/app.js"] {
+        let (status, body) = get(
+            port,
+            &format!("/peer-screen/{device}/{path}?key={first}"),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, 503, "{path}: {body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["reason"],
+            "not_paired",
+            "{path}"
+        );
+    }
+    assert_eq!(
+        view_socket(port, &token, &device, &first).await.err(),
+        Some(503),
+        "the earlier key's socket"
+    );
+
+    let (status, page) = get(
+        port,
+        &format!("/peer-screen/{device}/?key={second}"),
+        Some(&token),
+    )
+    .await;
+    assert_eq!(status, 200, "{page}");
+    let mut view = open_view(port, &token, &device, &second).await;
+    let opened = until(&mut view, "the later host's snapshot", |frame| {
+        frame["type"] == "snapshot"
+    })
+    .await;
+    let daemon = opened
+        .iter()
+        .find(|frame| frame["type"] == "daemon")
+        .expect("a daemon frame");
+    assert_eq!(
+        daemon["payload"]["state_dir"],
+        other.path().join("host-state").display().to_string(),
+        "{daemon}"
     );
 }
