@@ -168,8 +168,8 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
   try {
     await page.locator("[data-sidebar-automations]").click();
     // B2, B4: a starting point of the empty screen opens the form filled with its name, task and schedule.
-    await page.locator('[data-automation-example="issues"]').click();
-    await expect(page.locator('[data-automation-field="name"]')).toHaveValue("Morning issue triage");
+    await page.locator('[data-automation-example="briefing"]').click();
+    await expect(page.locator('[data-automation-field="name"]')).toHaveValue("Morning briefing");
     await expect(page.locator("[data-automation-preview]")).toContainText("Weekdays 09:00");
     await page.locator('[data-automation-field="name"]').fill("야간 점검");
     await page.locator('[data-automation-field="task"]').fill("의존성 점검");
