@@ -1,7 +1,6 @@
-// The pure decisions behind Settings › External tools (PRD
-// hide-external-control B2, B11, B13): what a request's and a connected
-// tool's second line say, and when a row warns that its work would become the
-// operator's. Every value is the core's `access` section; nothing here reads
+// The pure decisions behind Settings › 봇 (PRD hide-external-control B2,
+// B11, B13): what a request's and a connected bot's second line say, and when
+// a row warns that its work would become the operator's. Every value is the core's `access` section; nothing here reads
 // the store.
 
 import type { TFunction } from "i18next";
@@ -37,10 +36,10 @@ export function connectionLine(connection: AccessConnection, machine: string, no
 }
 
 /**
- * Whether the row says that disconnecting or View only hands the tool's work
- * to the operator (B13, D-14): only an Act tool's work is the tool's, so a
- * View only tool's agents are already the operator's.
+ * Whether the row says that disconnecting hands the bot's work to the
+ * operator (B13, D-14): every connected bot keeps the work it started, so a
+ * bot with agents or missions warns, whatever its mode.
  */
 export function warnsOfWork(connection: AccessConnection): boolean {
-  return connection.level === "act" && connection.agent_count + connection.mission_count > 0;
+  return connection.agent_count + connection.mission_count > 0;
 }
