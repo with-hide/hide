@@ -347,7 +347,6 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 `machines` maps an agent's id to the connected device it runs on, such as `{ "claude": "wsl-ubuntu" }` (PRD wsl-device B11); an agent with no entry runs on the core's own machine, and the field is written only when an agent runs on a device, so an older file runs everything on the core's machine.
 One item runs on one machine, so Runs on and a fallback entry never name the same item twice; `set_runs_on` keeps the place of an item that moves from the fallback list to Runs on, and `place` sets or clears it.
 `routes_like` compares the places too, so moving an item to another machine rebuilds a held router.
-An item placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
 
 ### Agent items
 
