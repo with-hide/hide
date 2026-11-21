@@ -270,19 +270,21 @@ impl Runtime {
     /// Records `tab`'s desk of `key` as pair view draws it, with how it is
     /// now, unless it is recorded already: the state it gets back (D-51).
     pub(super) fn note_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) {
+        let recorded = self.workspace_views.as_ref().is_none_or(|store| {
+            store
+                .pair_drawn
+                .iter()
+                .any(|desk| desk.key == *key && desk.tab == tab)
+        });
+        if recorded {
+            return;
+        }
         let front = self
             .view_layout_at(key, &Place::Tray(tab.to_owned()))
             .and_then(|layout| layout.active_area().active.clone());
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
-        if store
-            .pair_drawn
-            .iter()
-            .any(|desk| desk.key == *key && desk.tab == tab)
-        {
-            return;
-        }
         let view = store.views.get(&key.0, &key.1);
         let open = view.is_some_and(|view| view.open);
         let shown = view
