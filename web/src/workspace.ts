@@ -73,8 +73,8 @@ export type WorkspaceView = {
 /** `floats`: the desk floats with the tool beside it over the agents, since a View came onto it while that tool floated (D-50); a shown desk that does not float stands. */
 export type TraySnapshot = { tab_id: string; shown: boolean; count: number; floats?: boolean; pair?: PairView | null };
 export type PairMode = { on: boolean; ratio?: number | null };
-/** An Agent tab in pair view: the pane drawn beside its desk, or `alone` at the body's full width while its agent has no View to show (D-53), and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
-export type PairView = { tab_id: string; pane_id: string; alone?: boolean; folded?: string[] };
+/** An Agent tab in pair view: the pane drawn beside its desk, or `alone` at the body's full width while its desk holds no tab the strip shows (D-53, D-64) or ⌘E or the rail's desk button folded it (D-57, D-63); `shown`, the core's count of the desk's tabs the strip shows, says whether the desk can stand at all; and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
+export type PairView = { tab_id: string; pane_id: string; alone?: boolean; shown?: number; folded?: string[] };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };

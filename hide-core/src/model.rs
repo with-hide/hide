@@ -431,8 +431,13 @@ pub struct PairViewSnapshot {
     pub tab_id: String,
     pub pane_id: String,
     /// The pane is drawn alone at the body's full width, with no desk: its
-    /// agent has no View to show, or its desk is empty (D-53).
+    /// desk holds no tab the strip shows (D-53, D-64), or ⌘E or the rail's
+    /// desk button folded it (D-57, D-63).
     pub alone: bool,
+    /// How many of the desk's tabs the strip beside the pane shows, folded
+    /// or not: the desk can stand only with one, so ⌘E and the rail's desk
+    /// button ask for nothing when it is 0 (D-60, D-63).
+    pub shown: usize,
     /// The desk tabs in front of the drawn desk that another agent of the
     /// paired tab owns, which the desk folds into its `Others N` menu
     /// (D-41); bringing one in front takes its agent to the left (B24). A

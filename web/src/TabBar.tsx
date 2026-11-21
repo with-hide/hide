@@ -20,9 +20,6 @@ import { tabFit, type AreaTabInteraction } from "./AreaTree";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { TabFit } from "./areaLayout";
 import { composingKey } from "./keys";
-import { PairMark } from "./components/pair-mark";
-import { markedPairs } from "./pairView";
-import { workspaceViewOf } from "./workspace";
 
 // The sole Agent tab rendering unit, reused by every local and device area.
 const NONE: AsyncOperation[] = [];
@@ -54,10 +51,8 @@ export function AgentTab({ entry, checkout, interaction, actions, renaming, onCa
   // The core gives only agent panes an identity, on local and device tabs alike.
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
-  // A tab in pair view leads with the pair view mark and says so (PRD lane-desk-pair-view B22).
-  const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.tab_id === entry.source_id));
-  const identity = `${paired ? `${t("panes.pair.mark")} · ` : ""}${agent ? t("panes.agent.tabIdentityAgent", { kind: agentWithProfile(t, agent), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
-  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<>{paired ? <PairMark data-pair-tab={entry.source_id} /> : null}<TabMark agent={agent} /></>} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
+  const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentWithProfile(t, agent), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
+  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**

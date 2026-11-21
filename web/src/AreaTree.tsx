@@ -53,15 +53,34 @@ const TAB_SLOT = {
 
 /**
  * The width the selected tab's whole name takes, for a tab that marks its
- * title (`data-tab-title`): its drawn chrome plus the title's full text, read
- * from the title as drawn. A title its fit hides asks nothing: that fit
- * leaves the selected tab less than a title's room, which no need changes.
+ * title (`data-tab-title`): its drawn chrome plus the width of the title's
+ * text (`titleTextWidth`), not the title's box, which a wide tab stretches,
+ * so a tab once wide asks only for its name again. A title its
+ * fit hides asks nothing: that fit leaves the selected tab less than a
+ * title's room, which no need changes.
  */
 function selectedTabNeed(list: HTMLElement): number | undefined {
   const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
   if (!tab || !title || title.offsetParent === null) return undefined;
-  return Math.ceil(tab.offsetWidth - title.clientWidth + title.scrollWidth);
+  // Fractional boxes throughout, so rounding never leaves the title a pixel short of its text.
+  return Math.ceil(tab.getBoundingClientRect().width - title.getBoundingClientRect().width + titleTextWidth(title));
+}
+
+/**
+ * A title's whole text width, from a hidden copy laid out at its natural
+ * width: neither the title's box (which a wide tab stretches) nor its
+ * scroll width (whole pixels, equal to the box while the text overflows it
+ * by less than one, already cut) says it exactly.
+ */
+function titleTextWidth(title: HTMLElement): number {
+  const copy = title.cloneNode(true) as HTMLElement;
+  copy.removeAttribute("data-tab-title");
+  copy.style.cssText = "position:absolute;visibility:hidden;width:max-content;max-width:none;flex:none;overflow:visible";
+  title.parentElement!.appendChild(copy);
+  const width = copy.getBoundingClientRect().width;
+  copy.remove();
+  return width;
 }
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };
@@ -520,7 +539,30 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     apply(measure(), (update) => update());
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
-    return () => observer.disconnect();
+    // The selected name's width can change after this measure with no label or selection changing: a mark or control
+    // drawn beside it a frame later changes its room, its own style changes its text (a preview's italic name kept
+    // open), and a font that finishes loading changes the text with no box resized. Each measures again on the next
+    // frame, which settles once the title holds its name.
+    let frame = 0;
+    const again = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => apply(measure(), flushSync));
+    };
+    const title = new ResizeObserver(again);
+    const restyled = new MutationObserver(again);
+    const selectedTitle = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"] [data-tab-title]');
+    if (selectedTitle) {
+      title.observe(selectedTitle);
+      restyled.observe(selectedTitle, { attributes: true, attributeFilter: ["class", "style"], childList: true, characterData: true, subtree: true });
+    }
+    document.fonts?.addEventListener("loadingdone", again);
+    return () => {
+      observer.disconnect();
+      title.disconnect();
+      restyled.disconnect();
+      cancelAnimationFrame(frame);
+      document.fonts?.removeEventListener("loadingdone", again);
+    };
   }, [tabCount, hasSelected, selectedId, selectedLabel, fits.selected]);
   // The shown view's tab stays in sight however many tabs the area holds
   // (B20, B21): the strip scrolls itself, and nothing around it, whenever

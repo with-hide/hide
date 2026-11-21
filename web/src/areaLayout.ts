@@ -327,6 +327,8 @@ export type TabStripSizes = {
   preferred: number;
   /** `--size-tab-title-min`: the narrowest a full titled tab is. */
   titleMin: number;
+  /** `--size-tab-selected-max`: the widest the selected tab grows for its name, a little past `preferred`. */
+  selectedMax: number;
   /** `--size-tab-icon-identity`: a tab's marks alone. */
   icon: number;
   /** `--size-control-sm`: the close control. */
@@ -349,8 +351,8 @@ export type TabStripSizes = {
  *    and the strip scrolls only once even those overflow.
  *
  * With `selectedNeed`, the width the selected tab's whole name takes, the
- * selected tab grows past its stage's width to that need, up to what the
- * others' marks leave, and the others split the rest by the same stages: the
+ * selected tab grows past its stage's width to that need, up to
+ * `selectedMax` and to what the others' marks leave, a longer name cut short, and the others split the rest by the same stages: the
  * tab in front reads whole and only the others shrink (PRD lane-desk-pair-view
  * D-30); each tab's tooltip still names it whole.
  *
@@ -362,7 +364,7 @@ export function tabStripFit(room: number, count: number, hasSelected: boolean, s
   const base = stagedFit(room, count, hasSelected, sizes);
   const rest = count - 1;
   if (!hasSelected || selectedNeed === undefined || rest < 1 || base.selected.width >= selectedNeed) return base;
-  const width = Math.max(base.selected.width, Math.min(selectedNeed, room - rest * sizes.icon));
+  const width = Math.max(base.selected.width, Math.min(selectedNeed, sizes.selectedMax, room - rest * sizes.icon));
   if (width < sizes.titleMin) return base;
   return { selected: { width, fit: "titled" }, others: othersFit((room - width) / rest, sizes) };
 }

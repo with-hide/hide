@@ -3,6 +3,7 @@
 // pull request's card ask this one question before they read, and one out of
 // front keeps what it last drew, so two areas never take the read in turns.
 
+import { deskOnScreen } from "./pairView";
 import { sameDetailItem, type DetailItem, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { frontCard, workspaceViewOf } from "./workspace";
@@ -10,7 +11,7 @@ import { frontCard, workspaceViewOf } from "./workspace";
 /** Whether `item` is the card the core reads now; a folded desk's card is not, since its read would open the desk again. */
 export function isDeskFront(rest: SnapshotRest | null, item: DetailItem): boolean {
   const view = workspaceViewOf(rest);
-  return Boolean(view?.open && view.tray.shown) && sameDetailItem(frontCard(view), item);
+  return deskOnScreen(view) && sameDetailItem(frontCard(view), item);
 }
 
 export function useDeskFront(item: DetailItem): boolean {

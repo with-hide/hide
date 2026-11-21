@@ -155,6 +155,12 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
+    /// The pane focus mode draws whose desk ⌘E or the rail's desk button
+    /// folded, so the pane is drawn alone beside a desk that holds a tab the
+    /// strip shows (PRD lane-desk-pair-view D-57, D-63). Runtime only: gone
+    /// when another pane takes the left, when the mode ends, at a restart,
+    /// and when a View is opened or chosen onto that desk.
+    pub(super) pair_desk_folded: Option<super::pair_view::PairLeft>,
     /// When focus mode last came on, in the layouts' focus stamps' clock:
     /// a tab nobody's agent owns shows on the drawn desk's strip only once
     /// the operator brought it in front since then (D-60). Runtime only, so
@@ -404,6 +410,7 @@ impl WorkspaceViewStore {
                 card_read_again: false,
                 pair_left: None,
                 pair_before: None,
+                pair_desk_folded: None,
                 pair_since: unix_milliseconds(),
                 pair_drawn: Vec::new(),
                 tray_floats: None,
@@ -527,6 +534,7 @@ impl Runtime {
                     None => view.open && view.tray.shown && view.tray.count > 0,
                 }
         });
+        self.unfold_pair_desk(key, tab);
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -1457,9 +1465,11 @@ impl Runtime {
             let reads = self.pair_reads(key);
             let panes_with_views = self.panes_with_views(key, &reads);
             let pair = self.pair_left_of(key, tab).map(|pane| {
+                let shown = self.pair_shown_count(key, tab, &pane, &reads);
                 let mut pair = crate::model::PairViewSnapshot {
                     tab_id: tab.clone(),
                     alone: !self.pair_desk_beside(key, tab, &pane, &reads),
+                    shown,
                     pane_id: pane,
                     folded: Vec::new(),
                 };

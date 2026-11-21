@@ -2896,6 +2896,86 @@ fn an_open_while_a_shell_is_drawn_alone_stands_the_desk_beside_it() {
     assert_eq!(front_owner(&runtime).0, "d.md");
 }
 
+fn pair_desk_event(runtime: &mut Runtime, shown: bool) -> bool {
+    runtime.dispatch_json(&explorer_event(
+        "pair_view_desk",
+        serde_json::json!({"shown": shown}),
+    ))
+}
+
+/// D-57: in focus mode ⌘E folds the desk, which draws the pane alone at the
+/// full width, and shows it again; the mode stays on, and a desk with
+/// nothing the strip shows has nothing to stand.
+#[test]
+fn e_folds_and_shows_the_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-fold");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert!(runtime.drawn_tray_layout(&key(&directory)).is_none());
+    assert!(mode_on(&runtime));
+    assert!(!pair_desk_event(&mut runtime, false), "already folded");
+
+    assert!(pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(
+        front_pair(&runtime).shown,
+        1,
+        "the web reads what can stand"
+    );
+
+    // The left agent's open onto the folded desk stands it again (D-21).
+    assert!(pair_desk_event(&mut runtime, false));
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // Choosing the View already in front from `N views` stands it too (D-63).
+    assert!(pair_desk_event(&mut runtime, false));
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The fold is the left pane's: another pane taking the left drops it.
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The shell's desk holds only the agent's Views, which the shell's strip
+    // folds, so ⌘E has nothing to stand beside it (D-60, D-64).
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_pair(&runtime).shown, 0);
+    assert!(!pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// D-57, D-56: ⌘E on a pane whose desk holds no View has nothing to show.
+#[test]
+fn e_shows_no_empty_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-empty");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert!(!pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
 /// D-54: the last open names the owner. A file an agent opened that a
 /// shell's link opens again is the shell's, in its `N views` and beside it
 /// in focus mode, and the agent's session still counts it among its own.
