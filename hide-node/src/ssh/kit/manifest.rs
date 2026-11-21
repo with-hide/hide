@@ -12,8 +12,9 @@ use std::collections::BTreeMap;
 /// The most a manifest may be: four kits of a few files each fit many
 /// times over.
 pub(super) const MAX_MANIFEST: u64 = 64 * 1024;
-/// The most one kit may hold, its archive and its files each.
-pub(super) const MAX_KIT: u64 = 256 * 1024 * 1024;
+/// The most one kit may hold, its archive and its files each: a release
+/// kit is about 300 MB unpacked (two 145 MB programs on Windows, 1.2.11).
+pub(super) const MAX_KIT: u64 = 512 * 1024 * 1024;
 
 /// What this build was compiled as: the identity a release's manifest must
 /// name before any of its kits is fetched. The daemon passes its own
