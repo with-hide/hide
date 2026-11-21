@@ -477,6 +477,11 @@ WINDOWS_PATHS = (
     # the same code on every system, which the Linux suites run.
     "web/src/host.ts", "web/src/revealExternal.ts", "web/src/shortcuts.ts", "web/src/shortcutLabels.ts",
     "web/src/keyboard.ts", "web/src/keys.ts", "web/src/terminalLinks.ts", "web/src/terminalLinkProvider.ts",
+    # The pins a Windows leg installs or runs from: the agent CLIs (agy's
+    # Windows download among them), the journey's agents and the flags only
+    # their Windows help shows, the device kits (the Windows kit's target),
+    # and the terminal parser's build inputs.
+    "contracts/agent-clis.json", "contracts/agent-journey.json", "contracts/device-kits.json", "hide-vt/build-inputs.json",
     # The files the WSL device lane proves besides its crates (WSL_CRATE_FILES above).
     *WSL_CRATE_FILES,
 )
@@ -488,13 +493,16 @@ WINDOWS_PATHS = (
 WINDOWS_NAME = re.compile(r"(?i)(?:^|[/_.-])(?:windows|win|win32|powershell|conpty|wsl)(?:[/_.-]|$)")
 WINDOWS_SCRIPTS = (".ps1", ".psm1", ".cmd", ".bat", ".nsh")
 # A changed file that holds Windows-only code: a Rust `cfg` or target that
-# names Windows, `std::os::windows`, a `win32` branch in desktop, web or
-# script code, or a Python `os.name` or `platform.system()` branch. A test
-# tagged `@platform` is no Windows path by its tag: the Linux suite runs it,
-# and its Windows leg runs on main, as its macOS leg does.
+# names Windows (over several lines, or nested in `any`, `all` or `not`),
+# `std::os::windows`, a `win32` branch in desktop, web or script code, a
+# Python `os.name` or `platform.system()` branch, a C `_WIN32` branch, or a
+# shell's `MINGW*|MSYS*|CYGWIN*` case. A test tagged `@platform` is no
+# Windows path by its tag: the Linux suite runs it, and its Windows leg runs
+# on main, as its macOS leg does.
 WINDOWS_CODE = re.compile(
-    r'cfg(?:_attr)?!?\s*\([^)\n]*\bwindows\b|target_(?:os|family)\s*=\s*"windows"|std::os::windows'
+    r'cfg(?:_attr)?!?\s*\([^;{}\]]*?\bwindows\b|target_(?:os|family)\s*=\s*"windows"|std::os::windows'
     r'|\bwin32\b|os\.name\s*[!=]=\s*["\']nt["\']|platform\.system\(\)'
+    r'|\b_WIN(?:32|64)\b|\b_MSC_VER\b|\b__MINGW(?:32|64)__\b|\b__CYGWIN__\b|\b(?:MINGW|MSYS|CYGWIN)\*'
 )
 # The files whose code `WINDOWS_CODE` reads; a deleted one cannot be read.
 CODE_SUFFIXES = (".rs", ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".py", ".sh", ".c", ".h")
@@ -652,7 +660,7 @@ class Change:
 
     def __init__(self, base, head, root=ROOT):
         self.base, self.head, self.root = base, head, root
-        self.hunks = {}
+        self.hunks, self.texts, self.modules = {}, {}, {}
         raw = subprocess.check_output(
             ["git", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", base, head, "--", "*.rs"],
             cwd=root, stderr=subprocess.PIPE,
@@ -673,10 +681,101 @@ class Change:
                 self.hunks[name][-1][4 if row[0] == "-" else 5].append(row[1:])
 
     def text(self, side, name):
-        """The file's text at the base (`old`) or the head (`new`); empty when absent."""
-        done = subprocess.run(["git", "show", f"{self.base if side == 'old' else self.head}:{name}"],
-                              cwd=self.root, capture_output=True)
-        return done.stdout.decode("utf-8", errors="replace") if done.returncode == 0 else ""
+        """The file's text at the base (`old`) or the head (`new`); empty when
+        the commit has no such file. Raises Unreadable when git cannot read
+        the commit, which is no answer about the file."""
+        key = (side, name)
+        if key not in self.texts:
+            revision = self.base if side == "old" else self.head
+            done = subprocess.run(["git", "show", f"{revision}:{name}"], cwd=self.root, capture_output=True)
+            if done.returncode == 0:
+                self.texts[key] = done.stdout.decode("utf-8", errors="replace")
+            elif subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"],
+                                cwd=self.root, capture_output=True).returncode == 0:
+                self.texts[key] = ""
+            else:
+                raise Unreadable(f"git cannot read {revision}")
+        return self.texts[key]
+
+
+def source(name, side, root, change):
+    """A Rust file's text on one side of the change, or on disk without one; empty when absent."""
+    if change is not None:
+        return change.text(side, name)
+    try:
+        return (root / name).read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    except OSError as error:
+        raise Unreadable(f"{name}: {error.strerror}") from error
+
+
+def module_of(path, root):
+    """The module a Rust file is and the folder its module sits in, or None
+    for a crate's root (`lib.rs`, `main.rs`, `build.rs`, a binary, a test, an
+    example or a bench target)."""
+    parent = path.parent
+    if (path.name in ("lib.rs", "main.rs", "build.rs")
+            or (parent.name == "bin" and parent.parent.name == "src")
+            or (parent.name in ("tests", "examples", "benches") and (root / parent.parent / "Cargo.toml").is_file())):
+        return None
+    return (parent.name, parent.parent) if path.name == "mod.rs" else (path.stem, parent)
+
+
+def declarations(name, side, root, change):
+    """Each (file, line) in the file's crate that may declare its module: a
+    `mod` of its name in a module above its folder, or a `path` attribute
+    naming the file."""
+    path = PurePosixPath(name)
+    module, folder = module_of(path, root)
+    crate = next((str(above) for above in path.parents if (root / above / "Cargo.toml").is_file()), "")
+    pattern = (rf"mod[[:space:]]+(r#)?{module}[[:space:]]*;"
+               rf'|path[[:space:]]*=[[:space:]]*"([^"]*/)?{re.escape(path.name)}"')
+    revision = [] if change is None else [change.base if side == "old" else change.head]
+    done = subprocess.run(["git", "grep", "-n", "-I", "-E", pattern, *revision, "--", f"{crate}/*.rs" if crate else "*.rs"],
+                          cwd=root, capture_output=True)
+    if done.returncode not in (0, 1):
+        raise Unreadable("git cannot search the crate for its module")
+    found = []
+    for row in done.stdout.decode("utf-8", errors="replace").splitlines():
+        if revision:
+            row = row[len(revision[0]) + 1:]
+        other, line, text = row.split(":", 2)
+        place = PurePosixPath(other)
+        above = place.parent if place.name in ("mod.rs", "lib.rs", "main.rs") else place.parent / place.stem
+        if other != name and ("path" in text or folder == above or above in folder.parents):
+            found.append((other, int(line)))
+    return found
+
+
+def windows_module(name, side, root, change, seen=None):
+    """Why a Rust file compiles for Windows alone, because its module is
+    declared under a Windows `cfg` or inside an outer module that is, or None.
+    Raises Unreadable when no file declares it or a declaration cannot be
+    placed."""
+    if module_of(PurePosixPath(name), root) is None:
+        return None
+    if change is not None and (side, name) in change.modules:
+        return change.modules[side, name]
+    seen = seen or {name}
+    found = declarations(name, side, root, change)
+    if not found:
+        raise Unreadable("no file declares its module")
+    for parent in sorted({other for other, _ in found}):
+        text = source(parent, side, root, change)
+        lines = [line for other, line in found if other == parent]
+        if WINDOWS_CODE.search(text):
+            items = windows_items(text)
+            if any(first <= line <= last for line in lines for first, last in items):
+                return f"a Windows module: {name}, declared for Windows in {parent}"
+        if parent not in seen:
+            seen.add(parent)
+            reason = windows_module(parent, side, root, change, seen)
+            if reason:
+                return reason
+    if change is not None:
+        change.modules[side, name] = None
+    return None
 
 
 def windows_change(name, change):
@@ -691,7 +790,10 @@ def windows_change(name, change):
         for row in removed + added:
             if WINDOWS_CODE.search(row):
                 return f"Windows code changed: {name}"
-    old_text, new_text = change.text("old", name), change.text("new", name)
+    try:
+        old_text, new_text = change.text("old", name), change.text("new", name)
+    except Unreadable as error:
+        return f"Windows code it cannot place the change against ({error}): {name}"
     if not (WINDOWS_CODE.search(old_text) or WINDOWS_CODE.search(new_text)):
         return None
     try:
@@ -739,6 +841,13 @@ def windows_path(status, name, crates, root=ROOT, change=None):
         return None
     if WINDOWS_NAME.search(name) or path.suffix.lower() in WINDOWS_SCRIPTS:
         return f"Windows path: {name}"
+    if path.suffix == ".rs":
+        try:
+            inherited = windows_module(name, "old" if status == "D" else "new", root, change)
+        except Unreadable as error:
+            return f"a module it cannot show to be built off Windows too ({error}): {name}"
+        if inherited:
+            return inherited
     shared_rust = (change is not None and path.suffix == ".rs"
                    and not any(fnmatchcase(name, pattern) for pattern in WINDOWS_LAYER))
     if shared_rust:

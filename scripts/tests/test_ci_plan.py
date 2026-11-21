@@ -1519,6 +1519,15 @@ class WindowsOnPullRequests(unittest.TestCase):
             # The journey's Windows forms.
             ("scripts/tests/test_agent_live_windows.py", {"agent-journey"}),
             ("scripts/agent_live_check/windows.py", {"agent-journey", "holder-restart"}),
+            # A C `_WIN32` branch and a shell's `MINGW*` case: their lanes' Windows legs.
+            ("web/e2e/shims/spawn-provider.c", {"windows-check", "windows-e2e", "windows-desktop", "agent-journey"}),
+            ("web/e2e/shims/claude-shim.c", {"windows-check", "windows-e2e", "windows-desktop", "agent-journey"}),
+            ("web/e2e/shims/live-check.h", {"windows-check", "windows-e2e", "windows-desktop", "agent-journey"}),
+            ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
+            ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
+            # The pins a Windows leg installs or runs from.
+            ("contracts/agent-clis.json", {"agy-contract", "holder-restart", "agent-clis"}),
+            ("contracts/agent-journey.json", {"holder-restart", "agent-journey", "agent-clis"}),
             # The installer's Windows smoke: `package`, which builds and starts it.
             ("desktop/scripts/smoke-windows-installer.mjs", set()),
         ):
@@ -1576,6 +1585,10 @@ class WindowsOnPullRequests(unittest.TestCase):
                               ('#[cfg_attr(windows, path = "w.rs")]', True), ('#[cfg(target_os = "windows")]', True),
                               ('use std::os::windows::fs::OpenOptionsExt;', True), ('process.platform === "win32"', True),
                               ('if os.name == "nt":', True), ("if os.name != 'nt':", True),
+                              ('#[cfg(\n    windows\n)]', True), ('#[cfg(all(not(unix), windows))]', True),
+                              ('#ifdef _WIN32', True), ('#if defined(_MSC_VER)', True),
+                              ('case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) suffix=.exe ;; esac', True),
+                              ('#[cfg(unix)]\nfn windows() {}', False), ('cfg!(unix);\nlet windows = 1;', False),
                               ('test("x", { tag: "@platform" })', False), ('#[cfg(unix)]\nfn a() {}', False),
                               ('let windows = 2;', False), ('// Windows Terminal', False), ('windows_sys::Win32', False)):
             with self.subTest(code=code):
@@ -1731,11 +1744,15 @@ class RustChange(unittest.TestCase):
                 with self.assertRaises(ci.Unreadable):
                     ci.windows_items(text)
 
-    def plan(self, name, before, after):
-        """The plan of a pull request that changes one shared Rust file from `before` to `after`."""
+    def plan(self, name, before, after, declared=None):
+        """The plan of a pull request that changes one shared Rust file from
+        `before` to `after`, in a crate whose `lib.rs` declares its module
+        (`declared`, a plain `mod` by default)."""
+        crate, module = name.split("/")[0], PurePosixPath(name).stem
         with tempfile.TemporaryDirectory() as directory:
             pr = PullRequest(directory)
-            pr.commit("main", "base", {name: before, "docs/a.md": "one\n"})
+            pr.commit("main", "base", {name: before, "docs/a.md": "one\n", f"{crate}/Cargo.toml": "[package]\n",
+                                       f"{crate}/src/lib.rs": declared or f"mod {module};\n"})
             pr.git("checkout", "-qb", "topic")
             if after is None:
                 pr.git("rm", "-q", name)
@@ -1794,6 +1811,53 @@ class RustChange(unittest.TestCase):
         result = self.plan(name, unbalanced, unbalanced.replace('join("store")', 'join("items")'))
         self.assertIn("windows-check", result["lanes"])
         self.assertTrue(any("cannot place the change" in reason for reason in result["windows"]["why"]))
+
+    def test_a_multi_line_or_nested_windows_cfg_is_an_item(self):
+        for attribute in ("#[cfg(\n    windows\n)]", "#[cfg(all(not(unix), windows))]",
+                          '#[cfg(not(any(\n    target_os = "macos",\n    all(target_os = "linux", target_env = "gnu"),\n    windows\n)))]'):
+            with self.subTest(attribute=attribute):
+                before = f"{attribute}\nfn only_windows() {{\n    old();\n}}\n\nfn shared() {{}}\n"
+                result = self.plan("hide-core/src/conditional.rs", before, before.replace("old();", 'compile_error!("x");'))
+                self.assertIn("windows-check", result["lanes"])
+                self.assertIn("a change inside a Windows item", " ".join(result["windows"]["why"]))
+                self.assertNoWindows(self.plan("hide-core/src/conditional.rs", before, before.replace("fn shared() {}", "fn shared() { a(); }")))
+
+    def test_a_module_declared_for_windows_is_windows_whatever_line_changed(self):
+        name = "hide-core/src/console.rs"
+        plain = "fn read() {\n    one();\n}\n"
+        changed = plain.replace("one", "two")
+        for declared in ("#[cfg(windows)]\nmod console;\n", "#[cfg(windows)]\nmod sys {\n    #[path = \"../console.rs\"]\n    mod console;\n}\n"):
+            with self.subTest(declared=declared):
+                result = self.plan(name, plain, changed, declared=declared)
+                self.assertIn("windows-check", result["lanes"])
+                self.assertIn("a Windows module: hide-core/src/console.rs", " ".join(result["windows"]["why"]))
+        self.assertNoWindows(self.plan(name, plain, changed, declared="#[cfg(unix)]\nmod other;\nmod console;\n"))
+        # A file no module declares cannot be shown to build off Windows too.
+        result = self.plan(name, plain, changed, declared="mod other;\n")
+        self.assertIn("windows-check", result["lanes"])
+        self.assertIn("no file declares its module", " ".join(result["windows"]["why"]))
+        # The real one: the platform layer's console reader, declared under `cfg(windows)` in `process.rs`.
+        real = pr_plan("hide-platform/src/process/console_input.rs")
+        self.assertIn("a Windows module", real["windows"]["why"][0])
+        self.assertEqual(set(real["windows"]["lanes"]), {"windows-check", "windows-wsl", "os-contract", "omp-contract"})
+
+    def test_a_git_read_that_fails_counts_as_windows(self):
+        name = "hide-core/src/agents.rs"
+        deleted = AGENTS.replace("        return None;\n", "")
+        with tempfile.TemporaryDirectory() as directory:
+            pr = PullRequest(directory)
+            pr.commit("main", "base", {name: AGENTS, "hide-core/Cargo.toml": "[package]\n", "hide-core/src/lib.rs": "mod agents;\n"})
+            pr.git("checkout", "-qb", "topic")
+            pr.commit("topic", "change", {name: deleted})
+            base, head = pr.git("rev-parse", "main").strip(), pr.git("rev-parse", "topic").strip()
+            change = ci.Change(base, head, Path(directory))
+            self.assertIn("a change inside a Windows item", ci.windows_change(name, change))
+            # The base's blob cannot be read: no answer about the file, so Windows runs.
+            broken = ci.Change(base, head, Path(directory))
+            broken.base = "0" * 40
+            self.assertIn("cannot place the change", ci.windows_change(name, broken))
+            # A file the commit does not hold is empty, which is an answer.
+            self.assertEqual(change.text("old", "hide-core/src/none.rs"), "")
 
     def test_the_windows_layer_is_read_a_whole_file_at_a_time(self):
         # `hide-platform` writes each system's form: any change to a file with Windows code runs Windows.
