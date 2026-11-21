@@ -36,6 +36,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AppUpdater } from "electron-updater";
 import type { UpdatePhase, UpdateStatus } from "../../../web/src/host";
+import { compareVersions, parseVersion, type Version } from "../../../web/src/releases";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLog } from "./log";
 
@@ -51,23 +52,6 @@ export const LOOK_AGAIN_AFTER_MS = 60 * 60 * 1000;
 const RELEASES_TIMEOUT_MS = 30_000;
 /** A release list is a few hundred KB; more is not GitHub's answer. */
 const RELEASES_BYTES_CAP = 8 * 1024 * 1024;
-
-/** The versions a release is published under (`releaseKind` in scripts/check-release-assets.mjs). */
-const RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-rc\.([1-9]\d*))?$/;
-
-type Version = { major: number; minor: number; patch: number; rc: number | null };
-
-export function parseVersion(text: string): Version | null {
-  const match = RELEASE_VERSION.exec(text);
-  if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), rc: match[4] === undefined ? null : Number(match[4]) };
-}
-
-/** Semver order for the release shapes: a release is newer than every rc of the same version. */
-export function compareVersions(a: Version, b: Version): number {
-  const rank = (rc: number | null) => (rc === null ? Number.MAX_SAFE_INTEGER : rc);
-  return a.major - b.major || a.minor - b.minor || a.patch - b.patch || rank(a.rc) - rank(b.rc);
-}
 
 /** The system's files, as `systemFiles` in scripts/check-release-assets.mjs names them. */
 export type UpdateSystem = "macos" | "windows" | "deb" | "rpm";

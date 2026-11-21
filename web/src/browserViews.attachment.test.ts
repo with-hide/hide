@@ -29,6 +29,7 @@ const bridge: HostBridge = {
   kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {}, reportDesk() {},
   revealPath() {}, openPractice() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, openNotificationSettings() {}, reportBadge() {},
   updates: { onStatus: () => () => {}, check() {}, restart() {}, setPrerelease() {}, dismiss() {} },
+  whatsNew: { onState: () => () => {}, save() {} },
   browser: {
     sync: (state: BrowserSync) => {
       sent.push(state);

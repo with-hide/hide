@@ -69,15 +69,20 @@ function leave() {
   window.close();
 }
 
-/** `opening` is the chapter the address asks for (`practiceAddress`): the window plays it at once instead of listing the chapters. */
-export function PracticeApp({ opening = null }: { opening?: string | null }) {
+/**
+ * `opening` is the chapter the address asks for (`practiceAddress`): the window plays it at once instead of listing the chapters,
+ * or with `show` lists them with that chapter's card open.
+ */
+export function PracticeApp({ opening = null, show = false }: { opening?: string | null; show?: boolean }) {
   const { t } = useInterfaceTranslation();
   const [answer, setAnswer] = useState<ShellAnswer | null>(null);
   const [unanswered, setUnanswered] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(() => {
-    const chapter = chapterById(opening);
+    const chapter = show ? null : chapterById(opening);
     return chapter ? { chapter, resume: 0, run: 1 } : null;
   });
+  // The chapter whose card the list opens with, and a count that opens it again when the shell asks a second time.
+  const [showing, setShowing] = useState<{ id: string; run: number } | null>(() => (show && chapterById(opening) ? { id: opening!, run: 1 } : null));
   const channel = useRef<BroadcastChannel | null>(null);
   // A chapter keeps the page's copy and paste on its own clipboard; the chapter list holds them with none.
   const listing = playing === null;
@@ -98,6 +103,11 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
         // The shell brings this window forward and asks for a chapter from the start (the sidebar's invitation).
         const chapter = chapterById(event.data.chapter);
         if (chapter) start(chapter, 0);
+      } else if (event.data.kind === "show" && chapterById(event.data.chapter)) {
+        // The window after an update asks for a chapter's card: the list, with that card open.
+        const id = event.data.chapter;
+        setPlaying(null);
+        setShowing((before) => ({ id, run: (before?.run ?? 0) + 1 }));
       }
     };
     opened.postMessage({ kind: "hello" } satisfies PracticeMessage);
@@ -145,10 +155,10 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     const next = nextChapter(playing.chapter);
     return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} onLeave={leave} />;
   }
-  return <PracticeHub progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
+  return <PracticeHub key={showing?.run ?? 0} progress={progress} operator={operator} unsaved={unanswered && !answer} onStart={start} onLeave={leave} openChapter={showing?.id ?? null} />;
 }
 
-type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void };
+type HubProps = { progress: PracticeProgress; operator: OperatorChoices; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void; openChapter?: string | null };
 
 /** `id`'s chord on this host with the operator's bindings as keycap parts, or null where the host has none. */
 function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
@@ -162,12 +172,13 @@ function chordParts(id: CommandId, operator: OperatorChoices): string[] | null {
  * it, and pressing a card opens what the chapter has the learner do before it
  * starts. The cards hold still while that is open.
  */
-export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: HubProps) {
+export function PracticeHub({ progress, operator, unsaved, onStart, onLeave, openChapter = null }: HubProps) {
   const { t } = useInterfaceTranslation();
   const rows = CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]), step: progress[chapter.id]?.step ?? 0 }));
   const firstOpen = rows.findIndex((row) => row.status !== "done");
-  const [chosen, setChosen] = useState(firstOpen === -1 ? 0 : firstOpen);
-  const [opened, setOpened] = useState<number | null>(null);
+  const asked = openChapter === null ? -1 : rows.findIndex((row) => row.chapter.id === openChapter);
+  const [chosen, setChosen] = useState(asked !== -1 ? asked : firstOpen === -1 ? 0 : firstOpen);
+  const [opened, setOpened] = useState<number | null>(asked !== -1 ? asked : null);
   const cards = useRef<(HTMLButtonElement | null)[]>([]);
   const play = useCallback((at: number, fromStart: boolean) => {
     const row = rows[at]!;
@@ -224,7 +235,7 @@ export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: H
                   <span className="ph-meta">
                     <span className="ph-top">
                       <small>{t("practice.chapter", { number: row.chapter.number })}</small>
-                      <StatusChip status={row.status} step={row.step} total={row.chapter.steps.length} />
+                      <StatusChip status={row.status} step={row.step} total={row.chapter.steps.length} since={row.chapter.since} />
                     </span>
                     <b>{t(`practice.${id}.title` as never)}</b>
                     <span className="ph-sum">{t(`practice.${id}.summary` as never)}</span>
@@ -244,9 +255,10 @@ export function PracticeHub({ progress, operator, unsaved, onStart, onLeave }: H
   );
 }
 
-function StatusChip({ status, step, total }: { status: ChapterStatus; step: number; total: number }) {
+function StatusChip({ status, step, total, since }: { status: ChapterStatus; step: number; total: number; since?: string }) {
   const { t } = useInterfaceTranslation();
-  return <span className={`ph-chip ${status}`}>{status === "paused" ? t("practice.status.paused", { index: step + 1, total }) : t(`practice.status.${status}`)}</span>;
+  const label = status === "paused" ? t("practice.status.paused", { index: step + 1, total }) : status === "new" && since ? t("practice.status.newSince", { version: since }) : t(`practice.status.${status}`);
+  return <span className={`ph-chip ${status}`}>{label}</span>;
 }
 
 type HubRow = { chapter: PracticeChapter; status: ChapterStatus; step: number };
