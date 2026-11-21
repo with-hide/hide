@@ -788,7 +788,11 @@ impl Harness {
     /// its way to the saved state.
     fn resolved(&self, pane: &str) -> bool {
         let runtime = self.runtime.lock().unwrap();
-        runtime.snapshot.ui_state.resolved_sessions.contains_key(pane)
+        runtime
+            .snapshot
+            .ui_state
+            .resolved_sessions
+            .contains_key(pane)
             || runtime.pending_session_resolutions.contains_key(pane)
     }
 
@@ -1172,7 +1176,10 @@ fn opening_a_finished_run_resolves_its_row_while_a_going_run_keeps_it() {
     harness
         .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
         .unwrap();
-    assert!(harness.resolved(&pane), "opened, the finished run is dealt with");
+    assert!(
+        harness.resolved(&pane),
+        "opened, the finished run is dealt with"
+    );
 }
 
 /// B15, B17 (screen e2e): typing into a run's terminal in the automation
