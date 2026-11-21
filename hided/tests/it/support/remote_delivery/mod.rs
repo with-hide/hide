@@ -1371,15 +1371,24 @@ fn compile_stand_in(build: &Environment, scratch: &Path, program: &Path) -> Resu
 }
 
 /// Puts the stand-in agent in `home`, an account another fixture keeps, as
-/// its `claude`, first on its login shell's `PATH`, which is where that
-/// account's daemon looks for an agent. `build` compiles it, with `scratch`
+/// its `claude`, first on the `PATH` its shells start with, which is where a
+/// pane's shell finds the agent the daemon types there: the login shell's
+/// files, which the daemon reads and a pane's shell on macOS, and the files
+/// of a shell that is no login shell, which a pane's is on Linux
+/// (`hide_host::shell_integration`). `build` compiles it, with `scratch`
 /// for its source. Before the account's daemon starts: a daemon reads its
 /// account's `PATH` once.
 pub fn place_stand_in(build: &Environment, scratch: &Path, home: &Path) -> Result<()> {
     let bin = home.join("bin");
     fs::create_dir_all(&bin)?;
     let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display());
-    for file in [".zprofile", ".bash_profile", ".profile"] {
+    for file in [
+        ".zprofile",
+        ".bash_profile",
+        ".profile",
+        ".zshenv",
+        ".bashrc",
+    ] {
         fs::write(
             home.join(file),
             format!("PATH={}:\"$PATH\"\nexport PATH\n", quote(&path)),
