@@ -158,7 +158,9 @@ fn ask(env: &Env, ask: Value) -> Result<Value, Refused> {
     })
 }
 
-/// Shows the pairing QR and waits for the phone that scans it.
+/// Shows the pairing QR and waits for the phone that scans it, at most as
+/// long as the code lives.
+#[allow(clippy::disallowed_methods)] // polls a code the daemon spends or ends on its own, bounded by the code's life
 fn pair(env: &Env) -> Result<(Value, String), Refused> {
     // The daemon refuses a pane again by what the kernel says of the caller.
     if env.pane_id.is_some() || env.access.is_some() {
@@ -208,7 +210,14 @@ fn pair(env: &Env) -> Result<(Value, String), Refused> {
     );
     let _ = out.flush();
     drop(out);
+    let deadline = std::time::Instant::now()
+        + Duration::from_millis(crate::mobile::phones::CODE_TTL_MS)
+        + POLL;
     loop {
+        if std::time::Instant::now() >= deadline {
+            end();
+            return Err(Refused::code("phone_pair_ended"));
+        }
         std::thread::sleep(POLL);
         let status = ask(env, json!({"verb": "pair_status", "code_id": code_id}))?;
         match status["state"].as_str() {
