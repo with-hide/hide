@@ -3073,6 +3073,24 @@ fn desk_floats(runtime: &Runtime) -> bool {
         .floats
 }
 
+/// D-50, D-53: in focus mode a pane drawn alone has no desk on screen, so a
+/// file the operator opens from the floating Explorer floats its desk with
+/// the tool, though that file itself stands the desk (#2775 review 5).
+#[test]
+fn a_file_opened_beside_a_pane_drawn_alone_floats_with_the_tool() {
+    let (mut runtime, checkout, directory) = setup("pair-alone-floats");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert!(front_pair(&runtime).alone);
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    runtime.sync_workspace_view();
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone, "the file stands the desk");
+    assert!(desk_floats(&runtime), "the operator never saw it drawn");
+}
+
 /// D-50: a file opened while the Explorer floats shows its desk floating
 /// with the Explorer; the tool closing settles the desk, which then stands
 /// with the lane open. A tool opened beside a standing desk leaves it

@@ -521,18 +521,18 @@ impl Runtime {
         let Place::Tray(tab) = place else {
             return;
         };
-        // Whether the operator saw this desk drawn: beside the pane focus
-        // mode draws, else the view the core last published, since the View
-        // that calls this is already on the desk.
-        let drawn = self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
-            self.snapshot.workspace_view.as_ref().is_some_and(|view| {
-                view.device_id == key.0
-                    && view.path == key.1
-                    && view.open
-                    && view.tray.tab_id == *tab
-                    && view.tray.shown
-                    && view.tray.count > 0
-            })
+        // Whether the operator saw this desk drawn, read from the view the
+        // core last published, since the View that calls this is already on
+        // the desk and may itself stand it: in focus mode beside the pane
+        // drawn there (`tray.pair` not alone), else the lane showing it.
+        let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
+            view.device_id == key.0
+                && view.path == key.1
+                && view.tray.tab_id == *tab
+                && match &view.tray.pair {
+                    Some(pair) => !pair.alone,
+                    None => view.open && view.tray.shown && view.tray.count > 0,
+                }
         });
         self.unfold_pair_desk(key, tab);
         let Some(store) = self.workspace_views.as_mut() else {
