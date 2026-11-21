@@ -316,6 +316,9 @@ impl Display {
         }
         self.openers.push(opener.clone());
         self.opener = Some(opener);
+        // The last open names the owner: an agent's takes it from a pane's
+        // link (D-54).
+        self.link_terminal = None;
     }
 
     /// The View shows something else now, opened by whoever opens it.
@@ -329,9 +332,11 @@ impl Display {
 
     /// Records who opened this View now, at the layout's `stamp`: an agent
     /// as `opened_by` does; the operator's own open, which leaves any
-    /// agent's mark (session-files D-10); or a pane with no agent's link,
-    /// which is the operator's open too and makes the View that pane's
-    /// newest (D-54). Whether anything changed.
+    /// agent's mark (session-files D-10); or a pane's link, which is the
+    /// operator's open too and makes the View that pane's newest: the last
+    /// open names the owner, so it takes the View from the agent that opened
+    /// it before, whose session still counts it among its own (`openers`,
+    /// D-54). Whether anything changed.
     pub fn opened_as(&mut self, by: crate::view_feedback::OpenedBy, stamp: u64) -> bool {
         use crate::view_feedback::OpenedBy;
         match by {
@@ -341,6 +346,9 @@ impl Display {
             }
             OpenedBy::Operator => !std::mem::replace(&mut self.operator, true),
             OpenedBy::Terminal(terminal) => {
+                // The operator opened it, so it is no longer theirs to look at.
+                self.opener = None;
+                self.unseen = None;
                 self.operator = true;
                 self.opened_stamp = stamp;
                 self.link_terminal = Some(terminal);

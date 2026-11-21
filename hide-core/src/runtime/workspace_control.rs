@@ -929,14 +929,16 @@ impl Runtime {
             .map(|(place, _)| place)
     }
 
-    /// Whether the operator sees `tab`'s tray when a tab lands on it: the
-    /// lane is open, or pair view draws the desk beside the tab's pane (PRD
-    /// lane-desk-pair-view B2, D-53).
+    /// Whether the operator sees `tab`'s tray when a tab lands on it: as
+    /// focus mode draws it beside the tab's pane, else while the lane is
+    /// open (PRD lane-desk-pair-view B2, D-53).
     pub(super) fn tray_in_view(&self, key: &(String, String), tab: &str) -> bool {
-        self.workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| view.open || self.pair_desk(key, tab).is_some())
+        self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
+            self.workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .is_some_and(|view| view.open)
+        })
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of

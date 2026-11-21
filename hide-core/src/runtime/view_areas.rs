@@ -3231,9 +3231,10 @@ impl Runtime {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
         let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
-        ((view.draws_tray(&tab) || self.pair_desk(key, &tab).is_some())
-            && tray.layout.display_count() > 0)
-            .then_some(&tray.layout)
+        let drawn = self
+            .pair_desk_drawn(key, &tab)
+            .unwrap_or_else(|| view.draws_tray(&tab));
+        (drawn && tray.layout.display_count() > 0).then_some(&tray.layout)
     }
 
     /// The card in front of the area in use of the tray the front Workspace

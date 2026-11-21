@@ -365,11 +365,11 @@ impl Runtime {
         }
     }
 
-    /// A terminal link the operator clicked in an agent's pane names the
-    /// pane; the View the file lands in, now or once it is read, is that
-    /// agent's (D-02, B2). Any other open of the operator's, from the
-    /// Explorer, ⌘K or a plain shell's link, makes it the operator's (PRD
-    /// session-files D-10, D-28).
+    /// A terminal link the operator clicked in a pane names the pane; the
+    /// View the file lands in, now or once it is read, is that pane's: its
+    /// agent's (D-02, B2), or a shell's by its terminal (D-54). Any other
+    /// open of the operator's, from the Explorer, ⌘P or ⌘K, makes it the
+    /// operator's (PRD session-files D-10, D-28).
     pub(super) fn expect_view_opener(
         &mut self,
         key: &WorkspaceKey,
@@ -1726,17 +1726,12 @@ impl Runtime {
         let mut shown: Vec<(String, crate::view_layout::Shown<'_>, u64)> = Vec::new();
         for display in displays {
             let stored = self.view_display(key, &display.id);
-            // An agent's View is its pane's; one the operator opened from a
-            // pane with no agent's link is that pane's (D-54).
+            // The pane the View belongs to (`owner_pane_of`), but a record
+            // card, which is the operator's to read and no pane's open.
             let Some(pane) = display
-                .opener
-                .as_ref()
-                .and_then(|o| o.pane_id.clone())
-                .or_else(|| {
-                    stored
-                        .and_then(|stored| stored.link_terminal.as_ref())
-                        .and_then(|terminal| self.link_terminal_pane(terminal))
-                })
+                .owner_pane
+                .clone()
+                .filter(|_| display.card.is_none())
             else {
                 continue;
             };
