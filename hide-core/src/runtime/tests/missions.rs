@@ -20192,3 +20192,60 @@ fn a_report_that_cannot_be_written_ends_refused_and_its_conductor_is_told() {
     );
     assert!(runtime.missions.reports_owed.is_empty());
 }
+
+/// PRD device-connect-iroh B65 over the state folders released builds
+/// wrote: a close that owes its report, saved by this build beside the
+/// missions the release left, is read at the next start with every mission
+/// the release had, and is still owed.
+#[test]
+fn a_report_owed_over_a_released_state_folder_is_still_owed_at_the_next_start() {
+    use crate::mission_store::{MissionFiles, MissionStore, Restored};
+    use crate::missions::OriginReport;
+    use crate::node_migration::upgrade_tests::{fixtures, second_start, started};
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let store = MissionStore::new(state.path());
+        // A release before the folder book left one file, which the first
+        // save moves into the folder.
+        let restored = store.restore();
+        let (released, read) = match &restored {
+            Restored::Read(book) => (book.clone(), Some(book.clone())),
+            Restored::Moving(book) => (book.clone(), None),
+            Restored::Fresh => (Default::default(), None),
+            Restored::Unreadable(reason) => panic!("{tag}: {reason}"),
+        };
+        let fixture = started_for_another_machine();
+        let (book, id) = {
+            let mut runtime = fixture.runtime.lock().unwrap();
+            runtime.install_mission_store(MissionStore::new(state.path()), restored);
+            let id = closed_by_the_worker(&mut runtime);
+            (runtime.missions.book.clone(), id)
+        };
+        drop(fixture);
+        assert!(released.get(&id).is_none(), "{tag}: a mission of its own");
+        MissionFiles::new(store.dir().to_owned(), read.as_ref())
+            .write(&book, &mut Vec::new())
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+
+        assert_eq!(second_start(state.path()), Vec::<String>::new(), "{tag}");
+        let Restored::Read(next) = store.restore() else {
+            panic!("{tag}: the folder loads")
+        };
+        assert_eq!(
+            next.get(&id)
+                .and_then(|mission| mission.origin_report.clone()),
+            Some(OriginReport::Owed),
+            "{tag}"
+        );
+        for mission in &released.missions {
+            assert!(next.get(&mission.id).is_some(), "{tag}: {}", mission.id);
+        }
+        let fixture = started_for_another_machine();
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.install_mission_store(MissionStore::new(state.path()), Restored::Read(next));
+        assert_eq!(runtime.missions.reports_owed, [id], "{tag}");
+    }
+}

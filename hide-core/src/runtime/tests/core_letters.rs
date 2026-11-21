@@ -1067,3 +1067,134 @@ fn a_grant_taken_back_after_an_ask_was_prepared_refuses_it_where_it_applies() {
     ));
     registers().unwrap();
 }
+
+/// PRD device-connect-iroh D-71, D-72 over the state folders released
+/// builds wrote. What this build is the first to keep of another machine in
+/// the ledger is written by its own code beside what the release left: a
+/// letter that waits for an agent there, under that machine's connection id
+/// and the agent's address; a letter kept from there, under the id its own
+/// core gave it; and the start an agent asked of it. The next start is the
+/// same ledger: its conversions find nothing to do and write nothing, the
+/// store reads every record as it was written, the letter still goes out,
+/// the kept one is answered as kept and the start's report is still let in.
+#[test]
+fn what_a_ledger_keeps_of_another_machine_over_a_released_state_folder_is_the_same_at_the_next_start()
+ {
+    use crate::node_migration::upgrade_tests::{fixtures, second_start, started_at};
+    let carried = |pair: &Pair, letter: Letter| {
+        let prepared = pair
+            .mac
+            .runtime
+            .lock()
+            .unwrap()
+            .prepare_core_letter(&mini_key(), letter);
+        take(prepared, WITHIN).unwrap()
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let root = tempfile::tempdir().unwrap();
+        // Where the fixture's core keeps its state.
+        started_at(&folder, &root.path().join("state"));
+        let pair = Pair::of(Fixture::start_in(root), Fixture::start());
+        let released = letters(&pair.mac).len();
+        let mac_id = pair.mac.ids["worker"].clone();
+        let mini_id = pair.mini.ids["worker"].clone();
+
+        pair.mac
+            .agent(
+                "worker",
+                send(&agent_there(MINI, &mini_id), "waits", "request"),
+            )
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        let (client, origin) = {
+            let guard = pair.mac.runtime.lock().unwrap();
+            let ledger = guard.delivery_state().unwrap();
+            let record = ledger.agents.iter().find(|record| record.id == mac_id);
+            (
+                guard.delivery_client.clone().unwrap(),
+                record.unwrap().actor.clone(),
+            )
+        };
+        client
+            .submit(
+                Effect::CoreStart {
+                    origin,
+                    key: mini_key(),
+                    registers: None,
+                },
+                WITHIN,
+            )
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        let report = |id: &str, intent: &str| Letter {
+            id: id.into(),
+            from: agent(&pair.mini),
+            to: mac_id.clone(),
+            reply_to: None,
+            kind: "report".into(),
+            intent: intent.into(),
+            body: "the work is done".into(),
+            now: false,
+        };
+        let (first, second) = (report("letter-70", "result"), report("letter-71", "more"));
+        let taken = Outcome::Taken {
+            recipient: agent(&pair.mac),
+        };
+        assert_eq!(carried(&pair, first.clone()), taken, "{tag}");
+
+        let Pair { mac, mini, .. } = pair;
+        let before = (*mac.runtime.lock().unwrap().delivery_state().unwrap()).clone();
+        let [waiting, kept] = &before.letters[released..] else {
+            panic!("{tag}: {:?}", &before.letters[released..]);
+        };
+        assert!(waiting.recipient.core_of(&mini_key()), "{tag}");
+        assert_eq!(
+            waiting.recipient.core_address().map(|address| address.id),
+            Some(mini_id.as_str()),
+            "{tag}"
+        );
+        assert!(kept.sender.core_of(&mini_key()), "{tag}");
+        assert_eq!(kept.core_id.as_deref(), Some("letter-70"), "{tag}");
+        let starts: Vec<(&str, &str)> = before
+            .core_starts
+            .iter()
+            .map(|start| (start.origin.as_str(), start.key.as_str()))
+            .collect();
+        assert_eq!(starts, [(mac_id.as_str(), mini_key().as_str())], "{tag}");
+
+        // The next start, as `hided` runs it before the core reads the
+        // folder, and the ledger as the store then reads it.
+        let root = mac.stop();
+        let state = root.path().join("state");
+        assert_eq!(second_start(&state), Vec::<String>::new(), "{tag}");
+        let after = crate::delivery::store::load(&hide_kit::layout::delivery_store(&state))
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal}"));
+        assert_eq!(after.letters, before.letters, "{tag}");
+        assert_eq!(after.agents, before.agents, "{tag}");
+        assert_eq!(after.core_starts, before.core_starts, "{tag}");
+
+        // The core that starts over it is the same to the other machine.
+        let pair = Pair::of(Fixture::start_in(root), mini);
+        assert_eq!(pair.mac.ids["worker"], mac_id, "{tag}");
+        let leaving = outbox(&pair.mac, &mini_key());
+        assert_eq!(leaving.len(), 1, "{tag}: {leaving:?}");
+        assert_eq!(leaving[0].id, waiting.id, "{tag}");
+        assert_eq!(leaving[0].to, mini_id, "{tag}");
+        assert_eq!(leaving[0].from, agent(&pair.mac), "{tag}");
+        assert_eq!(
+            pair.mac_to_mini(),
+            [Outcome::Taken {
+                recipient: agent(&pair.mini)
+            }],
+            "{tag}"
+        );
+        assert_eq!(carried(&pair, first), taken, "{tag}");
+        assert_eq!(
+            letters(&pair.mac).len(),
+            before.letters.len(),
+            "{tag}: kept once"
+        );
+        assert_eq!(carried(&pair, second), taken, "{tag}");
+    }
+}
