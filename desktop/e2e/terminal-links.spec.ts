@@ -333,7 +333,7 @@ test("a file a link in a shell pane opens is that pane's: its views chip lists i
   const point = await pointOf(page, right!, "linked.md", { offset: 2 });
   await hoverLink(page, right!, point);
   await page.mouse.click(point.x, point.y);
-  await expect(viewTab(page, "linked.md")).toBeVisible({ timeout: 20_000 });
+  await expect(viewTab(page, "linked.md")).toBeVisible({ timeout: 20_000 }); // wait-ok: the core read the linked file and placed its View
   // The right shell's views chip counts it, with no unseen dot, and the left shell, which held nothing, has none.
   const views = page.locator(`[data-pane-views="${right}"]`);
   await expect(views).toHaveAttribute("aria-label", "1 view");
