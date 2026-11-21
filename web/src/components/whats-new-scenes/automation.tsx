@@ -1,6 +1,7 @@
 // What's new scene for automations (1.2.11): the sidebar and the automation
 // screen at their real size, playing one automation from its making to the
-// operator reading what it found. A starting point is pressed and becomes the
+// operator reading what it found. The starting points are read first; the first,
+// a morning briefing, is pressed and becomes the
 // list's row; the night passes and the clock reaches its time; the row runs,
 // its terminal reading the issues; the run ends with its ✓ and the corner
 // notice, and what it wrote stands in Needs You as To look at; pressing that
@@ -11,9 +12,8 @@
 
 import { CheckIcon, FileTextIcon, MoonIcon, RepeatIcon, SunIcon, WaypointsIcon } from "lucide-react";
 import { agentProductName } from "../../agentAdapters";
-import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES } from "../../automationDraft";
-import { EXAMPLE_WORDS } from "../../AutomationForm";
 import { scheduleText } from "../../automationWords";
+import type { AutomationSchedule } from "../../snapshot";
 import { useInterfaceTranslation } from "../../i18n/translator";
 import { cn } from "../../lib/utils";
 import { AgentLogo } from "../agent-logo";
@@ -25,30 +25,37 @@ import { ScenePointer } from "./pointer";
 import { SCENE_CSS, type SceneProps } from "./scene";
 
 /** One loop, in ms: the beats below fall inside it. */
-export const AUTOMATION_LOOP_MS = 15_000;
-/** When the pointer sets off toward the first starting point, and presses it. */
-const POINT = 400;
-const PRESS = 1_100;
-const MADE = 1_800;
-const NIGHT = 3_000;
-const MORNING = 4_000;
+export const AUTOMATION_LOOP_MS = 17_500;
+/** The starting points are read first; then the pointer sets off, rests on the first one, and presses it. */
+const POINT = 1_600;
+const HOVER = 2_400;
+const PRESS = 3_200;
+const MADE = 3_900;
+const NIGHT = 5_100;
+const MORNING = 6_100;
 const LINE_EVERY = 650;
-const DONE = 7_700;
+const DONE = 9_800;
 /** When the pointer sets off toward the Needs You row, presses it, and the report opens. */
-const LOOK_POINT = 9_200;
-const LOOK_PRESS = 10_000;
-const LOOKED = 10_400;
+const LOOK_POINT = 11_400;
+const LOOK_PRESS = 12_300;
+const LOOKED = 12_700;
 const LINES = ["line1", "line2", "line3", "line4", "line5"] as const;
 /** How long the example run took, as its row and notice say it. */
 const TOOK_MS = 12 * 60_000;
 /** The agent the example automation runs. */
 const AGENT = "claude";
+/** The starting points the scene offers, everyday work rather than code; the first is the one made. */
+const EXAMPLES: { key: "briefing" | "sales" | "mail"; schedule: AutomationSchedule }[] = [
+  { key: "briefing", schedule: { kind: "weekdays", time: "08:00" } },
+  { key: "sales", schedule: { kind: "weekly", days: ["mon"], time: "09:00" } },
+  { key: "mail", schedule: { kind: "daily", time: "18:00" } },
+];
 
 export function AutomationScene({ at }: SceneProps) {
   const { t, i18n } = useInterfaceTranslation();
   const language = i18n.language as Parameters<typeof scheduleText>[1];
-  const example = AUTOMATION_EXAMPLE_KEYS[0]!;
-  const name = t(EXAMPLE_WORDS[example].name);
+  const example = EXAMPLES[0]!;
+  const name = t(`whatsNewScene.automation.${example.key}.name`);
   const made = at >= MADE;
   const night = at >= NIGHT && at < MORNING;
   const morning = at >= MORNING;
@@ -92,7 +99,7 @@ export function AutomationScene({ at }: SceneProps) {
           </div>
           <span className={cn("flex shrink-0 items-center gap-xs rounded-md border px-sm py-xxs font-mono text-caption tabular-nums transition-colors", morning ? "border-primary text-foreground" : "border-border text-muted-foreground")}>
             {morning ? <SunIcon className="size-(--size-icon-sm)" /> : <MoonIcon className="size-(--size-icon-sm)" />}
-            {morning ? "09:00" : "08:59"}
+            {morning ? "08:00" : "07:59"}
           </span>
         </div>
         {made ? (
@@ -112,9 +119,9 @@ export function AutomationScene({ at }: SceneProps) {
                 </span>
                 <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
                   <RepeatIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-                  <span className="shrink-0">{scheduleText(AUTOMATION_EXAMPLES[example], language, t)}</span>
+                  <span className="shrink-0">{scheduleText(example.schedule, language, t)}</span>
                   <span className="text-muted-foreground">·</span>
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{t(EXAMPLE_WORDS[example].task)}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{t("whatsNewScene.automation.briefing.task")}</span>
                 </span>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-xxs">
@@ -136,11 +143,11 @@ export function AutomationScene({ at }: SceneProps) {
           </div>
         ) : (
           <div className="flex flex-col overflow-hidden rounded-md border border-border">
-            {AUTOMATION_EXAMPLE_KEYS.map((key, index) => (
-              <div key={key} className={cn("flex items-center gap-sm px-md py-sm transition-colors", index > 0 && "border-t border-border", index === 0 && at >= PRESS && "bg-accent")}>
+            {EXAMPLES.map(({ key, schedule }, index) => (
+              <div key={key} className={cn("wns-rise flex items-center gap-sm px-md py-sm transition-colors", index > 0 && "border-t border-border", index === 0 && at >= HOVER && (at >= PRESS ? "bg-selected" : "bg-accent"))} style={{ animationDelay: `${index * 180}ms` }}>
                 <RepeatIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-body">{t(EXAMPLE_WORDS[key].name)}</span>
-                <span className="shrink-0 text-caption text-subtle-foreground">{scheduleText(AUTOMATION_EXAMPLES[key], language, t)}</span>
+                <span className="min-w-0 flex-1 truncate text-body">{t(`whatsNewScene.automation.${key}.name`)}</span>
+                <span className="shrink-0 text-caption text-subtle-foreground">{scheduleText(schedule, language, t)}</span>
               </div>
             ))}
           </div>
@@ -164,7 +171,7 @@ export function AutomationScene({ at }: SceneProps) {
 /** What the run wrote, opened beside the list as the View it opened: the counts, then the first items. */
 function Report() {
   const { t } = useInterfaceTranslation();
-  const counts = [["bugs", 4], ["requests", 7], ["duplicates", 3]] as const;
+  const counts = [["read", 30], ["important", 5], ["todo", 2]] as const;
   return (
     <div className="wns-rise absolute inset-y-md right-md left-xl flex flex-col overflow-hidden rounded-md border border-border bg-popover shadow-overlay">
       <div className="flex items-center gap-xs border-b border-border px-md py-xs text-caption text-subtle-foreground">
