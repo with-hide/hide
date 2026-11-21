@@ -194,8 +194,9 @@ pub struct Tray {
 
 /// Pair view (PRD lane-desk-pair-view D-08, D-45, D-47): one mode for the
 /// window, not a tab's. While it is on, the pane the operator is on is drawn
-/// beside its tab's desk wherever they go; a pane with nothing to show draws
-/// its tab's own layout and the mode stays on. The left pane is never saved:
+/// beside its tab's desk wherever they go; a pane with nothing to show is
+/// drawn alone at the body's full width and the mode stays on (D-53). The
+/// left pane is never saved:
 /// it is the pane the operator is on (`runtime::pair_view`). A file an
 /// earlier build wrote with a pair view on a tray (D-15) loads with the mode
 /// off, the tray's `pair` ignored.

@@ -148,12 +148,13 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   );
 
 
-  // Pair view (PRD lane-desk-pair-view D-41, D-42): the strip folds the tabs
-  // of another agent of the paired tab into one menu at its end; the ◧
-  // beside ✕ only enters it and is not drawn while it is on.
+  // Focus mode (PRD lane-desk-pair-view D-41, D-42, D-60): the strip folds
+  // every tab the left pane does not own, but for what the operator opened
+  // since the mode came on, into one menu at its end; the ◧ beside ✕ only
+  // enters it and is not drawn while it is on.
   const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
   const front = findArea(layout.root, layout.active_area)?.active ?? null;
-  // The core names the tabs another agent of the paired tab owns (D-41); the strip leaves them out and nothing else.
+  // The core names the folded tabs (D-60); the strip leaves them out and nothing else.
   const folded = pair?.folded ?? [];
   const inStrip = folded.length > 0 ? (display: ViewDisplaySnapshot) => !folded.includes(display.id) : undefined;
   const adapter: AreaAdapter<ViewDisplaySnapshot> = {

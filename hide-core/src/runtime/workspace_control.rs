@@ -437,12 +437,15 @@ impl Runtime {
                 self.make_view_room(&key, &place);
             }
             // The View comes in front only on a tray the operator sees now:
-            // the lane open, or the tab in pair view. A closed lane stays
-            // closed, and the tray's count and the To look at mark say a tab
-            // came (B2).
+            // the lane open, or the tab in pair view, where the paired pane's
+            // own View stands the desk beside it even while it is drawn
+            // alone (D-53). A closed lane stays closed, and the tray's count
+            // and the To look at mark say a tab came (B2).
             let in_view = match &place {
                 Place::Tray(tab) => {
-                    self.watched_caller(&key, pane_id) && self.tray_in_view(&key, tab)
+                    self.watched_caller(&key, pane_id)
+                        && (self.tray_in_view(&key, tab)
+                            || self.pair_left_of(&key, tab).as_deref() == Some(pane_id))
                 }
                 Place::Shelf => false,
             };
@@ -887,10 +890,10 @@ impl Runtime {
                     .map_err(layout_refusal)?;
                 }
                 // An agent's close leaves the desk shown as it was (PRD
-                // right-lane B12, lane-desk-pair-view B33); a pair view left
-                // with nothing to draw ends (D-46).
+                // right-lane B12, lane-desk-pair-view B33); a pair view stays
+                // on and its desk settles (D-64).
                 if matches!(at, Some(Place::Tray(_))) {
-                    self.end_pair_view_if_undrawn();
+                    self.keep_pair_front_shown();
                 }
                 (view_id.clone(), true, area)
             }
@@ -940,13 +943,16 @@ impl Runtime {
             .map(|(place, _)| place)
     }
 
-    /// Whether the operator sees `tab`'s tray when a tab lands on it: the
-    /// lane is open, or the tab is in pair view (PRD lane-desk-pair-view B2).
+    /// Whether the operator sees `tab`'s tray when a tab lands on it: as
+    /// focus mode draws it beside the tab's pane, else while the lane is
+    /// open (PRD lane-desk-pair-view B2, D-53).
     pub(super) fn tray_in_view(&self, key: &(String, String), tab: &str) -> bool {
-        self.workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| view.open || self.drawn_pair(key, tab).is_some())
+        self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
+            self.workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .is_some_and(|view| view.open)
+        })
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of

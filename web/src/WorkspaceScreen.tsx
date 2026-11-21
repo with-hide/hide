@@ -21,8 +21,8 @@ import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
 import { PairLayer } from "./PairLayer";
-import { drawnPair } from "./pairView";
-import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
+import { drawnPair, pairBesideDesk } from "./pairView";
+import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type PairView, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -78,10 +78,12 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
   // The viewing column draws the front tab's desk (PRD lane-desk-pair-view
-  // D-06); pair view draws it whatever the lane's own state, with a tool only
-  // when the lane is open (D-46).
+  // D-06); pair view draws it beside the pane whatever the lane's own state,
+  // and none beside a pane drawn alone (D-53), with a tool only when the
+  // lane is open (D-46).
   const pair = drawnPair(view);
-  const laneView = pair !== null ? "documents" : laneViewOf(view, hasViews);
+  const desk = pairBesideDesk(view);
+  const laneView = desk !== null ? "documents" : pair !== null ? "none" : laneViewOf(view, hasViews);
   const front = view ? workspaceKey(view) : null;
   // A page's widening is drawn from the frame that asks for it until the
   // core acknowledges that request, or the stored width moves for any other
@@ -103,7 +105,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     panelWidth: view?.panel_width ?? null,
     expanded,
     floats: view?.tray.floats === true,
-    pair: pair !== null,
+    pair: desk !== null,
     pairRatio: view?.pair_mode?.ratio ?? null,
     front: stackFront,
     body: width,
@@ -196,7 +198,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} body={body} width={width} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair?.pane_id ?? null} />
+      <LaneRow view={view} frame={frame} documents={documents} body={body} width={width} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
@@ -266,7 +268,7 @@ function onRelease(done: () => void): void {
  * desk keeps its width free at Agent Views' right, so the panes narrow
  * beside it rather than under it (D-50).
  */
-function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
+function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: PairView | null }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // A terminal click leaves the desk where it is, closing only a floating
@@ -293,7 +295,7 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
         {/* The terminals attach once the body is measured, so a standing desk's reserve is in their first grid (D-50). */}
         {width > 0 ? <AgentArea checkout={checkout} actions={actions} /> : null}
       </div>
-      {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
+      {pair !== null ? <PairLayer paneId={pair.pane_id} alone={pair.alone === true} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its

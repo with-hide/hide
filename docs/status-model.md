@@ -309,7 +309,7 @@ Regression owners: `a_descendants_demand_or_completion_turns_every_ancestor_unre
 ## A View to look at
 
 An agent that opens a View with `hide file open`, `hide diff open` or `hide browser open` opens it to show the operator, so the View is unseen until the operator looks at it (PRD unseen-agent-views D-05, D-06).
-A View the operator opened, from the Explorer, ⌘P, a new tab's address field or a path or address clicked in a terminal, is never unseen, and an agent's `hide browser snapshot`, `click` or other command on a page leaves the View as it was.
+A View the operator opened, from the Explorer, ⌘P, a new tab's address field or a path or address clicked in a terminal, is never unseen, even where the click makes it that pane's (PRD lane-desk-pair-view D-54), and an agent's `hide browser snapshot`, `click` or other command on a page leaves the View as it was.
 A new target a page opens on its own (a link to a new tab) is the page's, not a new open.
 The record is the View's own (`Display::unseen` in `view_layout.rs`, `Unseen` in `view_feedback.rs`): when the open happened, as a generation that moves on each open, and whether an ancestor has read it; it is stored with the checkout's View layout, so it survives a restart, and it goes with the View, so there are never more records than open Views (D-09, D-12).
 A stored record that does not read leaves the View unseen and the load's repair says so in the diagnostic log; a View stored before the record existed reads as seen (D-27, B18, B33).

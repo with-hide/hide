@@ -149,6 +149,11 @@ pub(super) struct ExternalOpenPayload {
     pane_id: Option<String>,
     #[serde(default)]
     reveal: bool,
+    /// The pane whose terminal link was pressed: the View is that pane's,
+    /// its agent's or, for a shell, its terminal's (D-54). Absent for an
+    /// open nobody's link made.
+    #[serde(default)]
+    opener_pane: Option<String>,
     /// Names the receipt in `status.browser_opens` the sender waits for.
     #[serde(default)]
     request_id: Option<String>,
@@ -679,10 +684,10 @@ impl Runtime {
         }
         store.generation += 1;
         self.persist_workspace_views();
-        // A pair view the move left with nothing to draw ends, as one does
-        // when its View closes (B26, D-46).
+        // A pair view the move left with nothing to show stays on, its desk
+        // settled as after a close (D-64).
         if matches!(from, Place::Tray(_)) {
-            self.end_pair_view_if_undrawn();
+            self.keep_pair_front_shown();
         }
         true
     }
@@ -2009,7 +2014,9 @@ impl Runtime {
         } = payload;
         let opener = opener_pane
             .as_deref()
-            .and_then(|pane| self.opener_of_pane(pane));
+            .map_or(crate::view_feedback::OpenedBy::Operator, |pane| {
+                self.link_owner(pane)
+            });
         let outcome = self.place_browser(
             &url,
             workspace,
@@ -2042,7 +2049,7 @@ impl Runtime {
             device_id: key.0,
             path: key.1,
         };
-        self.place_browser(url, Some(workspace), None, None, None, true, opener)
+        self.place_browser(url, Some(workspace), None, None, None, true, opener.into())
             .map(|(_, display_id)| display_id)
             .map_err(|refusal| refusal.kind)
     }
@@ -2089,11 +2096,16 @@ impl Runtime {
             workspace,
             pane_id,
             reveal,
+            opener_pane,
             request_id,
         } = payload;
         let outcome = ExternalFile::admitted(&grant, &name, kind)
             .map_err(external_refusal)
             .and_then(|file| self.place_external(file, workspace, pane_id.as_deref(), reveal));
+        if let (Ok((key, display_id)), Some(pane)) = (&outcome, opener_pane.as_deref()) {
+            let by = self.link_owner(pane);
+            self.stamp_view_opener(key, display_id, by);
+        }
         crate::diagnostic!(serde_json::json!({
             "component": "view_areas",
             "kind": "external.open",
@@ -2323,7 +2335,7 @@ impl Runtime {
         area_id: Option<&str>,
         beside_display: Option<&str>,
         reveal: bool,
-        opener: Option<crate::view_feedback::Opener>,
+        opener: crate::view_feedback::OpenedBy,
     ) -> Result<(WorkspaceKey, String), LayoutRefusal> {
         if !self.separate_view_areas() {
             return Err(browser_refusal("This shell does not draw View areas"));
@@ -2409,10 +2421,15 @@ impl Runtime {
                 // (PRD session-files D-10, D-30).
                 let parent = beside_display
                     .and_then(|id| layout.display(id))
-                    .map(|page| (page.openers.clone(), page.operator, page.opener.clone()));
+                    .map(|page| {
+                        let owners = (page.opener.clone(), page.link_terminal.clone());
+                        (page.openers.clone(), page.operator, owners)
+                    });
                 let own = |display: &mut Display| match (&opener, &parent) {
-                    (Some(opener), _) => display.opened_by(opener.clone(), stamp),
-                    (None, Some((openers, operator, mark))) => {
+                    (
+                        crate::view_feedback::OpenedBy::Operator,
+                        Some((openers, operator, (mark, terminal))),
+                    ) => {
                         // The page's own new tab is its sessions' newest View.
                         display.opened_stamp = stamp;
                         for known in openers {
@@ -2422,8 +2439,12 @@ impl Runtime {
                         }
                         display.operator |= *operator;
                         display.opener = display.opener.take().or_else(|| mark.clone());
+                        display.link_terminal =
+                            display.link_terminal.take().or_else(|| terminal.clone());
                     }
-                    (None, None) => display.operator = true,
+                    (by, _) => {
+                        display.opened_as(by.clone(), stamp);
+                    }
                 };
                 if let Some((display_id, _)) = &existing {
                     if at == place {
@@ -3213,19 +3234,19 @@ impl Runtime {
     }
 
     /// The tray the Workspace `key` draws: the one of its Agent tab in
-    /// front, while the open lane shows it, the tab is in pair view (PRD
-    /// lane-desk-pair-view D-06, D-16), or the automation screen shows a run
-    /// of that tab beside its desk (operator decision 2026-11-21). A tray
-    /// with no tab draws nothing.
+    /// front, while the open lane shows it or pair view draws it beside the
+    /// tab's pane (PRD lane-desk-pair-view D-06, D-16, D-53), or the
+    /// automation screen shows a run of that tab beside its desk (operator
+    /// decision 2026-11-21). A tray with no tab draws nothing.
     pub(super) fn drawn_tray_layout(&self, key: &WorkspaceKey) -> Option<&Layout> {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
         let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
-        ((view.draws_tray(&tab)
-            || self.drawn_pair(key, &tab).is_some()
-            || self.viewed_run_tab(key, &tab))
-            && tray.layout.display_count() > 0)
-            .then_some(&tray.layout)
+        let drawn = self
+            .pair_desk_drawn(key, &tab)
+            .unwrap_or_else(|| view.draws_tray(&tab))
+            || self.viewed_run_tab(key, &tab);
+        (drawn && tray.layout.display_count() > 0).then_some(&tray.layout)
     }
 
     /// Whether `tab` of the Workspace `key` holds the terminal of a run the
