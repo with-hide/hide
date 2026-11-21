@@ -49,6 +49,16 @@ pub struct Environment {
 }
 
 impl Environment {
+    /// The account whose home is `home`, a folder another fixture keeps and
+    /// runs its own daemon in: what a stand-in agent started in one of that
+    /// daemon's panes is found by (`Agent::start`, [`place_stand_in`]).
+    pub fn of_home(home: &Path) -> Self {
+        Self {
+            home: home.to_path_buf(),
+            values: BTreeMap::from([("HOME".into(), home.as_os_str().to_owned())]),
+        }
+    }
+
     pub fn new(root: &Path, state_dir: Option<&Path>) -> Result<Self> {
         let home = root.join("home");
         for folder in [
@@ -436,7 +446,7 @@ impl Agent {
     /// Starts the stand-in on `session` in the account's project, as the
     /// start panel resumes a session, and registers it as `name`.
     #[allow(clippy::too_many_arguments)]
-    fn start(
+    pub fn start(
         daemon: &Daemon,
         commands: PathBuf,
         environment: Environment,
@@ -848,14 +858,7 @@ impl Fixture {
         for name in SHIPPED {
             super::shipped::place(&source_cli.join(name), &cli.join(name), &local_env)?;
         }
-        fs::write(root.join("provider.c"), SHIM)?;
-        let mut compiler = local_env.command("/usr/bin/cc");
-        compiler
-            .arg("-O1")
-            .arg(root.join("provider.c"))
-            .arg("-o")
-            .arg(local_env.home.join("bin/claude"));
-        successful(compiler)?;
+        compile_stand_in(&local_env, &root, &local_env.home.join("bin/claude"))?;
         fs::copy(
             local_env.home.join("bin/claude"),
             remote_env.home.join("bin/claude"),
@@ -1354,6 +1357,35 @@ impl Drop for Fixture {
             eprintln!("private delivery fixture cleanup failed, evidence retained: {error}");
         }
     }
+}
+
+/// Compiles the stand-in agent ([`SHIM`]) to `program`, with `scratch` for
+/// its source.
+fn compile_stand_in(build: &Environment, scratch: &Path, program: &Path) -> Result<()> {
+    let source = scratch.join("provider.c");
+    fs::write(&source, SHIM)?;
+    let mut compiler = build.command("/usr/bin/cc");
+    compiler.arg("-O1").arg(&source).arg("-o").arg(program);
+    successful(compiler)?;
+    Ok(())
+}
+
+/// Puts the stand-in agent in `home`, an account another fixture keeps, as
+/// its `claude`, first on its login shell's `PATH`, which is where that
+/// account's daemon looks for an agent. `build` compiles it, with `scratch`
+/// for its source. Before the account's daemon starts: a daemon reads its
+/// account's `PATH` once.
+pub fn place_stand_in(build: &Environment, scratch: &Path, home: &Path) -> Result<()> {
+    let bin = home.join("bin");
+    fs::create_dir_all(&bin)?;
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display());
+    for file in [".zprofile", ".bash_profile", ".profile"] {
+        fs::write(
+            home.join(file),
+            format!("PATH={}:\"$PATH\"\nexport PATH\n", quote(&path)),
+        )?;
+    }
+    compile_stand_in(build, scratch, &bin.join("claude"))
 }
 
 /// The stand-in agent: it reads its terminal raw, draws Claude Code's empty

@@ -12,8 +12,8 @@
 //! was, says why on its window, and its core goes on working on it; the
 //! operator's disconnect is kept across the daemon's start; and once the
 //! connection can be made the node becomes its own core, paired both ways
-//! with the machine that kept the moved core. It ends there: the core's
-//! terminal, agent, letter and mission after the split are not run yet.
+//! with the machine that kept the moved core, whose terminal, agent, letter
+//! and mission go on as they were.
 //!
 //! The two endpoints bind loopback with no relay (`HIDE_PEER_DIRECT`). The
 //! node's is told an address no machine has until the last part, which is
@@ -27,9 +27,11 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::guest_work::{Machine, PROGRAMS, WITHIN, free_port, left, types};
+use super::guest_work::{Machine, PROGRAMS, WITHIN, free_port, left, place_build, types};
 use super::{Terminal, Window, moved_off_dials_in};
-use crate::support::remote_delivery::{Environment, end_holders, successful, wait_within};
+use crate::support::remote_delivery::{
+    Agent, Environment, end_holders, place_stand_in, quote, successful, wait_within,
+};
 use crate::support::shipped;
 use crate::support::sshd::Sshd;
 
@@ -219,31 +221,51 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
             .args(["init", "-q"]);
         successful(init).unwrap();
     };
-    let machine = |home: &str, state: &str, id: &'static str, hide: PathBuf, direct: String| {
+    // `project` is the folder of the machine's own project in its home.
+    let machine = |home: &str,
+                   state: &str,
+                   id: &'static str,
+                   hide: PathBuf,
+                   direct: String,
+                   project: &str| {
         hide_platform::fs::private::create_dir_all(&at(state)).unwrap();
-        checkout(&at(home).join("own"));
+        checkout(&at(home).join(project));
         // A pane's shell starts with the account's own files, never a first
         // run's questions.
         std::fs::write(at(home).join(".zshrc"), "PS1='moved-core> '\n").unwrap();
+        // The agent the account runs is the fixture's stand-in, found on its
+        // login shell's `PATH` before its daemon first reads that.
+        place_stand_in(&environment, &at("e"), &at(home)).unwrap();
         Machine {
             // A fixture HOME: a paired core keeps no login item under it.
             terminal: Terminal::new(at(home), at(state), Some(id)),
             hide,
             direct,
-            project: at(home).join("own"),
+            project: at(home).join(project),
         }
     };
     // Declared before the machines, so it ends the holders after their
     // daemons stopped.
     let _holders = EndsHolders(hide_kit::layout::device_node_state(&at("mh")));
     let core_direct = format!("127.0.0.1:{}", free_port());
-    let mut core = machine("ch", "c", CORE, old.join("hide"), core_direct.clone());
+    // The core's own project is where its lead agent works; the original
+    // machine's `project` is the core's work there, and `own` its own once
+    // it is a core.
+    let mut core = machine(
+        "ch",
+        "c",
+        CORE,
+        old.join("hide"),
+        core_direct.clone(),
+        "project",
+    );
     let mut original = machine(
         "mh",
         "m",
         ORIGINAL,
         at("p").join("hide"),
         NO_ADDRESS.to_owned(),
+        "own",
     );
 
     // What the move left on each machine. The core's: the machine it was
@@ -315,6 +337,16 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
     )
     .unwrap();
 
+    // The core's key is its machine's, made before its daemon first reads
+    // it.
+    let key = hide_peer::key::MachineKey::load_or_create(
+        &hide_kit::layout::machine_key(&core.terminal.state),
+        CORE,
+    )
+    .unwrap()
+    .0
+    .public();
+
     // The core runs the build it was moved under.
     let started = core
         .command(&["connect"])
@@ -352,6 +384,19 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
     let updated = PathBuf::from(placement().program);
     assert_ne!(updated, old.join("hided"));
     core.hide = updated.with_file_name("hide");
+    // The update put the whole build there, the pane holder with the
+    // programs: the core runs its own panes from it, and it is the build
+    // the original machine starts the core's node from once that machine is
+    // a core itself. The journey places it there, as every journey between
+    // two Hides does: a development build is larger than a build one
+    // machine sends another.
+    for name in PROGRAMS {
+        assert!(
+            updated.with_file_name(name).is_file(),
+            "the update left no {name}"
+        );
+    }
+    place_build(updated.parent().unwrap(), &original.terminal.state, &key);
     let release = health(core.screen().port).unwrap()["release"].clone();
     assert_ne!(release["version"], OLD_VERSION, "{release}");
     assert!(!kept.join("core-placement.json").exists());
@@ -415,11 +460,11 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
     still_its_node("the node after its reconnect");
 
     // The moved core's work on the original machine, while that machine is
-    // still its node: a terminal the core opened there. What becomes of it
-    // after the split is not run here yet: the core's node on the original
-    // machine starts from the core's build, which a development build is
-    // too large to send and this journey does not place.
-    let project = at("mh").join("project");
+    // still its node: a terminal, an agent of the core, a letter it sent and
+    // a mission of the core. Folders are named as each machine names them,
+    // links followed, which is how a core lists a checkout.
+    let home_of = |home: &str| at(home).canonicalize().unwrap();
+    let project = home_of("mh").join("project");
     checkout(&project);
     let screen = core.screen();
     let mut last = Value::Null;
@@ -437,7 +482,7 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
     screen
         .event(
             "create_workspace",
-            json!({"device_id": ORIGINAL, "path": project, "label": "On the MacBook",
+            json!({"device_id": ORIGINAL, "path": project, "label": "On the laptop",
                 "initialize_git": false}),
         )
         .unwrap();
@@ -445,10 +490,77 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
         Ok(pane_on_the_node(&screen.snapshot()?))
     })
     .unwrap();
-    // The shell answers there, so the split that follows has a running
-    // terminal of the core to hand over.
-    types(&core, &pane, &format!("echo $$ > {}", at("f1").display())).await;
-    assert!(!left(&at("f1")).is_empty());
+    // The line that leaves the shell's own process id: the same id later is
+    // the same shell, in the same holder, whatever started anew around it.
+    let itself = |file: &str| format!("echo $$ > {}", at(file).display());
+    types(&core, &pane, &itself("f1")).await;
+    let shell = left(&at("f1"));
+
+    // The core's two agents, each the account's stand-in in a pane of its
+    // own, registered from inside it as an agent registers itself: the lead
+    // on the core's machine, the worker on the original one.
+    let commands = |name: &str| {
+        let folder = at("r").join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    };
+    let own_hide = at("p").join("hide");
+    let mut lead = Agent::start(
+        &screen,
+        commands("l"),
+        Environment::of_home(&home_of("ch")),
+        None,
+        core.hide.clone(),
+        core.hide.with_file_name("hide-agent-hooks"),
+        "moved-lead-session",
+        "moved-lead",
+        // The core's own engine is named by its folder in the daemon's
+        // state (`hide_kit::layout::engine_dir`).
+        &core.terminal.state.join("engine").to_string_lossy(),
+    )
+    .unwrap();
+    let mut worker = Agent::start(
+        &screen,
+        commands("w"),
+        Environment::of_home(&home_of("mh")),
+        Some(ORIGINAL),
+        own_hide.clone(),
+        own_hide.with_file_name("hide-agent-hooks"),
+        "moved-worker-session",
+        "moved-worker",
+        // A device's agents are scoped by the device.
+        ORIGINAL,
+    )
+    .unwrap();
+    assert!(
+        worker.pane.starts_with(&format!("remote:{ORIGINAL}:pane:")),
+        "{}",
+        worker.pane
+    );
+    let created = lead
+        .run_in_pane(&format!(
+            "{} mission create --title Kept",
+            quote(&core.hide)
+        ))
+        .unwrap()
+        .json()
+        .unwrap();
+    let mission = created["mission"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the mission's answer names it: {created}"))
+        .to_owned();
+    let sends = |intent: &str, body: &str| {
+        format!(
+            "{} request send moved-lead --intent {intent} --body {}",
+            quote(&own_hide),
+            quote(body)
+        )
+    };
+    let before = worker
+        .run_in_pane(&sends("before-the-split", "sent before the split"))
+        .unwrap()
+        .json()
+        .unwrap();
 
     // The connection can be made: the daemon starts anew with an address it
     // can bind. One sign-in at its window carries the whole split, and the
@@ -501,6 +613,104 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
             && dials_in() == Some(false))
         .then_some(())
     });
+
+    // The core's node on the original machine starts from the core's build
+    // there and takes up the panes it held: the row says ready again, on
+    // the connection the two Hides made.
+    let mut last = Value::Null;
+    wait_within("the core's node on the original machine", WITHIN, || {
+        last = screen.snapshot()?;
+        let ready = last
+            .pointer("/navigator/devices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|row| {
+                row["id"] == ORIGINAL && row["dials_in"] == false && row["host"]["state"] == "ready"
+            });
+        Ok(ready.then_some(()))
+    })
+    .unwrap_or_else(|error| panic!("{error:#}: {}", last["navigator"]["devices"]));
+
+    // The terminal is the one it was: the moved core types into the same
+    // shell, under the address it had, through its own node on the
+    // original machine, and that machine lists it as the core's work. The
+    // operator brings its tab forward first, since the worker's took the
+    // front when its agent started and a pane is drawn for the tab in
+    // front.
+    screen
+        .event(
+            "remote_control",
+            json!({"target_id": ORIGINAL, "request_id": "the-shell", "focus_device": true,
+                "action": "focus_pane", "pane_id": pane}),
+        )
+        .unwrap();
+    types(&core, &pane, &itself("f2")).await;
+    assert_eq!(left(&at("f2")), shell);
+    let local = pane
+        .strip_prefix(&format!("remote:{ORIGINAL}:pane:"))
+        .unwrap();
+    let as_guest = |pane: &str| format!("guest:{CORE}:pane:{pane}");
+    let worker_here = worker
+        .pane
+        .strip_prefix(&format!("remote:{ORIGINAL}:pane:"))
+        .unwrap()
+        .to_owned();
+    // Both of the core's panes here: the shell and the worker's.
+    let listed_here = original.lists("the core's work on the original machine", |listed| {
+        let panes: Vec<String> = listed["guest_panes"]
+            .as_array()?
+            .iter()
+            .filter(|guest| guest["id"] == CORE)
+            .flat_map(|guest| guest["panes"].as_array().cloned().unwrap_or_default())
+            .map(|pane| pane["id"].as_str().unwrap().to_owned())
+            .collect();
+        [local, worker_here.as_str()]
+            .iter()
+            .all(|pane| panes.contains(&as_guest(pane)))
+            .then(|| as_guest(local))
+    });
+    types(&original, &listed_here, &itself("f3")).await;
+    assert_eq!(left(&at("f3")), shell);
+
+    // The worker is the moved core's agent as before: the same stand-in in
+    // the same pane, whose own `hide` still reaches that core, which knows
+    // it by the registration it had, takes its next letter, and holds the
+    // letter and the mission from before.
+    let agents = worker
+        .run_in_pane(&format!("{} agent list", quote(&own_hide)))
+        .unwrap();
+    assert_eq!(agents.status, 0, "{} {}", agents.stdout, agents.stderr);
+    assert!(
+        agents.stdout.contains(&worker.registration),
+        "{}",
+        agents.stdout
+    );
+    let after = worker
+        .run_in_pane(&sends("after-the-split", "sent after the split"))
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_ne!(after, before);
+    let inbox = lead
+        .run_in_pane(&format!("{} inbox", quote(&core.hide)))
+        .unwrap()
+        .json()
+        .unwrap()
+        .to_string();
+    for letter in [&before, &after] {
+        let id = letter["id"].as_str().expect("the letter's id");
+        assert!(
+            inbox.contains(id),
+            "the lead's inbox holds no {id}: {inbox}"
+        );
+    }
+    let missions = lead
+        .run_in_pane(&format!("{} mission list", quote(&core.hide)))
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(missions.to_string().contains(&mission), "{missions}");
 
     drop(original);
     drop(core);
