@@ -12,7 +12,7 @@
 # the measured workspace and, with MEASURE_SCALE=operator or double, fills the
 # session to that scale (fixture.mjs, which reports no agents and starts the
 # scale's printing panes); it then records idle resources, one echo trial,
-# and the split, zoom, close, new tab, tab switch and resize latencies
+# and the split, focus mode (sampled as zoom), close, new tab, tab switch and resize latencies
 # (topology.mjs) while it counts the layout saves (save-watch.py).
 # `keys` (PRD core-host-node-terminal D-07, D-08, B2, B4, B5, B19, B21) is
 # the measured pane and four splits in one tab, five attached panes: idle
@@ -287,7 +287,7 @@ if [[ "$scenario" == topology ]]; then
   note "echo at the $scale scale (50 samples)"
   MEASURE_ECHO_REPEATS=50 node "$measure_dir/key-echo.mjs" > "$MEASURE_RUN_DIR/echo-1.json"
   python3 "$measure_dir/summarize.py" echo "$MEASURE_RUN_DIR/echo-1.json" > "$MEASURE_RUN_DIR/echo-summary.json"
-  note "topology: ${MEASURE_TOPOLOGY_ROUNDS:-20} rounds of split, zoom, unzoom, close, new tab, tab switch and resize"
+  note "topology: ${MEASURE_TOPOLOGY_ROUNDS:-20} rounds of split, focus mode on and off, close, new tab, tab switch and resize"
   spawn_owned save-watch python3 "$measure_dir/save-watch.py" "${save_groups[@]}"
   save_pid=$owned_pid
   node "$measure_dir/topology.mjs" > "$MEASURE_RUN_DIR/topology.json"

@@ -7,9 +7,9 @@
 //! no View to show (a shell, an agent that opened none), and beside the
 //! desk once its agent opens one (D-53). Going to another pane by any way (a
 //! pane chord, the sidebar, a tab switch) takes the mode with it
-//! (`follow_pair_focus`, `follow_pair_look`). The engine's layout, zoom and
+//! (`follow_pair_focus`, `follow_pair_look`). The engine's layout and
 //! focus are not touched, and the shell draws the pane's terminal over them
-//! (D-26). It ends only on ⌘., the pressed ◧ or the strip's way back
+//! (D-26). It ends only on ⌘., ⇧⌘↩ on the pane or the pressed ◧
 //! (`PairEnd::Left`), when the drawn pane closes (`end_pairs_of_gone_panes`)
 //! or when the drawn desk's last View closes or moves away (D-46). Every
 //! desk the mode leaves, by a move or its end, gets back the lane as it was
@@ -64,7 +64,7 @@ impl PairLeft {
 /// whether the keyboard goes back to the pane that held it before (B26).
 #[derive(Clone, Copy, Debug)]
 pub(super) enum PairEnd {
-    /// The operator left: the strip's way back, ⌘., the pressed ◧.
+    /// The operator left: ⌘., ⇧⌘↩ on the pane, the pressed ◧.
     Left,
     /// The drawn desk's last View closed or moved away.
     Emptied,
@@ -522,7 +522,7 @@ impl Runtime {
 
     /// `pair_view_desk`: ⌘E in focus mode shows or folds the desk beside the
     /// pane it draws (D-57); folded, the pane is drawn alone at the body's
-    /// full width, as a zoom was. A desk with no View has nothing to show,
+    /// full width, the screen pane zoom drew. A desk with no View has nothing to show,
     /// which the log records. Whether anything changed.
     pub(super) fn set_pair_desk(&mut self, payload: PairDeskPayload) -> bool {
         let Some(key) = self.front_workspace_key() else {

@@ -587,7 +587,7 @@ Record that mode with the load, and do not focus or move the operator's windows 
 
 ### Pane topology latency
 
-`MEASURE_SCENARIO=topology` measures how long a split, a zoom and unzoom, a pane close, a new tab, a tab switch and a window resize take to reach the screen (PRD instant-pane-topology D-15, B23; PRD engine-bundle-3-core-owns B43).
+`MEASURE_SCENARIO=topology` measures how long a split, focus mode on and off by ⇧⌘↩ (sampled as `zoom` and `unzoom`, the names pane zoom had before focus mode took its place, PRD lane-desk-pair-view D-57), a pane close, a new tab, a tab switch and a window resize take to reach the screen (PRD instant-pane-topology D-15, B23; PRD engine-bundle-3-core-owns B43).
 `fixture.mjs` makes the whole topology with the web shell's own events on the daemon's WebSocket (`create_workspace` with the confirmation Add project sends, `create_tab`, and `focus_pane` then `create_pane` for a split, which acts on the current pane), and every key the run types goes through the page (`type.mjs`, `key-echo.mjs`, CDP), so a pair of runs differs in the build alone.
 It adds a second tab to the measured workspace, and with `MEASURE_SCALE=operator` or `double` first fills the session to that scale (D-18): 43 workspaces, 62 tabs and 66 panes, 5 of which print a line every 50 ms once the idle sample is taken, or twice each (86, 124, 132, 10); every other workspace is its own Git checkout.
 No pane reports an agent and no agent state changes, because a report has no daemon event, so the echo and the rounds carry no agent-status churn, and a figure from the series before 2026-11-02, which did, is not compared with one from this.
@@ -598,7 +598,7 @@ While the rounds run, `save-watch.py` reads every 10 ms the files the layout is 
 The initial resource sample precedes topology churn, while `memory-after-topology.json` and `resources-after-topology.json` follow the driven phase.
 This scenario collects no continuously sampled driven CPU interval; its initial resource result is not driven CPU evidence.
 Keys are CDP `Input.dispatchKeyEvent` events, which Chrome delivers to the focused terminal as an ordinary renderer keydown, so each chord takes the web shell's own keydown path and its browser chord; a tab switch is a click on the tab.
-Every time is on the page's clock from the chord's first keydown (or the click): `screen_ms` is the first animation frame whose DOM shows the change (the canvas's pane count, its zoom flag or the shown tab), and `frame_ms` the first frame after it in which the terminal the change is about shows it (text in a new pane, a new grid in a resized one).
+Every time is on the page's clock from the chord's first keydown (or the click): `screen_ms` is the first animation frame whose DOM shows the change (the canvas's pane count, focus mode's layer or the shown tab), and `frame_ms` the first frame after it in which the terminal the change is about shows it (text in a new pane, a new grid in a resized one).
 `topology-summary.json` gives each operation's p50, p95 and max to screen and to frame.
 `MEASURE_HIDED_BIN` points the run at another hided, such as a baseline built from the merge base with its `hide-holder` beside it, so baseline and candidate share the fixture; run both headless (`--isolated-headless`) under the same scale and report the load beside each.
 The stage times are read from the candidate's `pane_op.timing` lines in the run's `hide-state` diagnostic log (`summarize.py timing`, Drawn ahead of the engine in [ARCHITECTURE.md](ARCHITECTURE.md#drawn-ahead-of-the-engine)).
@@ -627,7 +627,7 @@ The memory of panes no screen shows and the sum of holders' memory are recorded 
 | 6 to 9 (B40) | Key to frame latency alone, beside one and eight flooding panes, and beside a slow consumer, with a slow consumer's holder at most 6 MiB | `scripts/holder-perf.py` |
 | 10 to 15 (B41) | A flood: bytes per frame, time to drain, the path's CPU, reattach time, frames per pane at most 62.5 a second | `scripts/holder-perf.py` |
 | 16 to 21, 31 (B40, B41, B42) | The app end to end: echo idle and with five panes printing, CPU while printing, idle CPU, CPU with no window, hided's and Chrome's largest RSS, and their RSS after the scale | `scripts/web-shell-measure/run.sh` with `MEASURE_SCENARIO=keys` |
-| 22 to 27 (B43) | A new tab, a split, zoom and unzoom, a pane close, a tab switch and a resize, to screen and to frame, p50 and p95 | `MEASURE_SCENARIO=topology` ([Pane topology latency](#pane-topology-latency)) |
+| 22 to 27 (B43) | A new tab, a split, focus mode on and off, a pane close, a tab switch and a resize, to screen and to frame, p50 and p95 | `MEASURE_SCENARIO=topology` ([Pane topology latency](#pane-topology-latency)) |
 | 28 (B40) | Echo at the operator's scale | the same topology run's `echo-summary.json` |
 | 29 (B44) | Layout save writes, at most one per operation | the same run's `save-summary.json` |
 | 30 (B44) | After every process was killed: the tab list, the front tab drawn, every shell answering | `MEASURE_SCENARIO=restore` ([Restore after a reboot](#restore-after-a-reboot)) |
@@ -654,7 +654,7 @@ The fixture is the measurement's identity, so it is fixed:
 | Printing | No agent is reported; 5 panes print a line every 50 ms after the idle sample |
 | Idle resources | `resources-idle.json`: 20 one-second samples of the owned `hided` and Chrome trees before anything moves |
 | Echo | One trial of 50 screen keys on the measured pane, renderer keydown to xterm write on the page's clock |
-| Topology | 20 rounds of split, zoom, unzoom, close and new tab by chord, two tab switches by click and two resizes, each to screen and to terminal, with the stage times from `pane_op.timing`, and the layout saves the rounds made |
+| Topology | 20 rounds of split, focus mode on and off, close and new tab by chord, two tab switches by click and two resizes, each to screen and to terminal, with the stage times from `pane_op.timing`, and the layout saves the rounds made |
 | Memory | `memory-settled.json` and `memory-after-topology.json` |
 | Browser and runner | Headless Google Chrome at 1280 × 900 on the `macos-15` hosted image |
 | Driver | `scripts/web-shell-measure/` at the run's commit |
