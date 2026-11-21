@@ -1877,6 +1877,13 @@ impl Runtime {
             *mission = self
                 .mission_spawn_admission(&actor, &worker, &mut picked, intent, brief.is_some())?
                 .map(Box::new);
+            if mission
+                .as_ref()
+                .is_some_and(|admission| admission.node_worker)
+                && let Some(text) = brief.as_mut()
+            {
+                self.brief_round_line(&actor, intent, text, earlier);
+            }
             *pick = picked.map(|request| crate::coordination::Picked(Box::new(request)));
         }
         // Only the pane's own session proves its composer was submitted, so a

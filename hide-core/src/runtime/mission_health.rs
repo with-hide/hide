@@ -32,9 +32,6 @@ pub(super) const ATTENTION_LIMIT: usize = 16;
 /// How old a project's pull request read must be before a mission's ask
 /// reads it again (D-09).
 const MISSION_READ_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
-/// Wakes for workers one mission keeps waiting; a new one past it is
-/// refused and logged (B28).
-pub(super) const WORKER_WAKE_LIMIT: usize = 16;
 /// Mission notices one delivery pass claims (B5); the human notices of the
 /// ledger keep their own cap.
 const MISSION_NOTICE_LIMIT: usize = 8;
@@ -198,6 +195,7 @@ pub(super) fn raise_for(
                 since_unix_ms: None,
                 notified: false,
                 opened_seq: None,
+                round: None,
             },
         );
     }
@@ -297,6 +295,7 @@ pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
                 since_unix_ms: Some(since),
                 notified: false,
                 opened_seq: None,
+                round: None,
             },
         );
     }
@@ -415,6 +414,7 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 since_unix_ms: None,
                 notified: false,
                 opened_seq: None,
+                round: None,
             };
             // A full queue refuses the rest too; it is logged once a pass.
             if super::missions::push_wake(mission, wake).is_none() {
@@ -1308,8 +1308,12 @@ impl Runtime {
                     pr,
                     why,
                     head,
+                    asleep,
                 } => {
-                    changed |= self.hide_wake(id, node, pr, why, head, now, &mut events);
+                    changed |= self.hide_wake(id, node, (pr, why, head), asleep, now, &mut events);
+                }
+                Act::Unconflicted { node, pr } => {
+                    changed |= self.conflict_gone(id, node, pr);
                 }
                 Act::Close => close = true,
             }
@@ -1453,16 +1457,17 @@ impl Runtime {
         true
     }
 
-    /// Wakes node `at`'s sleeping worker with a letter naming `pr` and
-    /// `why` (B10), once per pull request, reason and head.
-    #[allow(clippy::too_many_arguments)]
+    /// Gives node `at`'s worker its cell naming `pr` and `why`: a sleeping
+    /// worker is woken by it (B10), once per pull request, reason and head;
+    /// one at work (`asleep` false) is told of a conflict once while it
+    /// lasts (PRD mission-speed-2 B11), which the node's history does not
+    /// show as a wake.
     fn hide_wake(
         &mut self,
         id: &str,
         at: usize,
-        pr: u32,
-        why: FixReason,
-        head: Option<String>,
+        (pr, why, head): (u32, FixReason, Option<String>),
+        asleep: bool,
         now: u64,
         events: &mut Vec<MissionEvent>,
     ) -> bool {
@@ -1472,18 +1477,6 @@ impl Runtime {
         let Some(agent) = mission.nodes[at].agent_id.clone() else {
             return false;
         };
-        let waiting = mission
-            .wakes
-            .iter()
-            .filter(|wake| wake.to.is_some())
-            .count();
-        if waiting >= WORKER_WAKE_LIMIT {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.worker_wake_refused",
-                "mission": id, "node": mission.nodes[at].key, "cap": WORKER_WAKE_LIMIT,
-            }));
-            return false;
-        }
         let key = mission.nodes[at].key.clone();
         // One wake per pull request and reason is remembered, at its
         // newest head: a wake about an older head cannot come again once
@@ -1530,6 +1523,7 @@ impl Runtime {
                 since_unix_ms: None,
                 notified: false,
                 opened_seq: None,
+                round: None,
             },
         );
         if pushed.is_none() {
@@ -1544,6 +1538,13 @@ impl Runtime {
         node.woken
             .retain(|woken| !(woken.pr == pr && woken.why == why));
         node.woken.push(Woken { pr, why, head });
+        if !asleep {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.worker_told_conflict",
+                "mission": id, "node": key, "pr": pr,
+            }));
+            return true;
+        }
         let mark = HideMark {
             action: HideAction::Woke,
             pr: Some(pr),
@@ -1559,6 +1560,38 @@ impl Runtime {
             "mission": id, "node": key, "pr": pr, "why": why.as_str(),
         }));
         true
+    }
+
+    /// Takes back what node `at`'s worker was told of `pr`'s conflict once
+    /// GitHub reads it gone (B11): its mark, so a later conflict is told
+    /// again, and its cell if not read yet. Whether either went.
+    fn conflict_gone(&mut self, id: &str, at: usize, pr: u32) -> bool {
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
+        let Some(node) = mission.nodes.get_mut(at) else {
+            return false;
+        };
+        let key = node.key.clone();
+        let before = node.woken.len() + mission.wakes.len();
+        let node = &mut mission.nodes[at];
+        node.woken
+            .retain(|woken| !(woken.pr == pr && woken.why == FixReason::Conflict));
+        mission.wakes.retain(|wake| {
+            !(wake.node == key
+                && wake.to.is_some()
+                && wake.event == WakeEvent::Fix
+                && wake.pr == Some(pr)
+                && wake.why == Some(FixReason::Conflict))
+        });
+        let after = mission.nodes[at].woken.len() + mission.wakes.len();
+        if after != before {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.conflict_gone",
+                "mission": id, "node": key, "pr": pr,
+            }));
+        }
+        after != before
     }
 
     /// Closes a mission whose every node finished (B18), through the gate
@@ -1613,6 +1646,7 @@ impl Runtime {
                         since_unix_ms: None,
                         notified: false,
                         opened_seq: None,
+                        round: None,
                     },
                 );
                 vec![MissionEvent::new(now, EventKind::HideClosed)]
@@ -1969,6 +2003,7 @@ impl Runtime {
                     since_unix_ms: None,
                     notified: false,
                     opened_seq: None,
+                    round: None,
                 },
             );
         }

@@ -816,7 +816,9 @@ pub struct PendingWake {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiNews>,
     /// The finish line a `line_met` or `line_reopened` wake is about,
-    /// `<node>:<line>`.
+    /// `<node>:<line>`; for a `checker_needed` round wake, the checker line of
+    /// its node that has no live checker (`<node>:review`), none when both
+    /// its review and its verification have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<Dependency>,
     /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
@@ -843,6 +845,10 @@ pub struct PendingWake {
     /// which rings again). None on a book from before it: its own `seq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_seq: Option<u64>,
+    /// What a `new_head` wake is about when it is about a node's review
+    /// round or its place in the plan (`RoundWake`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<RoundWake>,
 }
 
 impl PendingWake {
@@ -870,6 +876,15 @@ impl PendingWake {
     /// node (or the mission itself) and the worker it goes to, if any.
     pub(crate) fn same_cell(&self, other: &Self) -> bool {
         self.node == other.node && self.to == other.to
+    }
+
+    /// Whether the wake's cell reaches its receiver while it works, at the
+    /// point a `--now` letter does (its next tool use), rather than at its
+    /// next turn: a wake to a node's worker or checker asks it to act on
+    /// its node now (a check to review, a result to fix, a conflict); the
+    /// Conductor's cells wait for its turn.
+    pub(crate) fn mid_turn(&self) -> bool {
+        self.to.is_some()
     }
 }
 
@@ -927,6 +942,45 @@ pub enum WakeEvent {
     /// check passed on a commit its work folder left, `Criterion::shown`)
     /// after nodes that wait on it started; they go on.
     LineReopened,
+}
+
+/// A wake about a node's review round or its place in the plan (PRD
+/// mission-speed-2), kept as `PendingWake::round` beside the event
+/// `new_head`, which every build reads and words as news to read the
+/// mission by: a build before these wakes ignores the field and loads the
+/// book, and a build after them that adds another kind reads it as
+/// `unknown` here rather than refusing the book.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundWake {
+    /// The node's worker recorded its check (`MissionNode::check_signal`):
+    /// its checker (`to`) reviews or verifies the commit `head` now (D-01,
+    /// D-05).
+    CheckAsked,
+    /// The node's worker recorded its check while a checker line of it
+    /// (`line`) has no live checker: the Conductor binds a fresh one (D-05).
+    CheckerNeeded,
+    /// A checker of the node failed it in the round of its last check: its
+    /// worker (`to`) starts fixing (D-02, D-04).
+    Checked,
+    /// The plan makes a change node wait for the whole of another change
+    /// node: the Conductor may start it sooner on one of its lines (D-07).
+    WholeNodeWait,
+    /// A kind a later build wrote.
+    #[serde(other)]
+    Unknown,
+}
+
+impl RoundWake {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::CheckAsked => "check_asked",
+            Self::CheckerNeeded => "checker_needed",
+            Self::Checked => "checked",
+            Self::WholeNodeWait => "whole_node_wait",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl WakeEvent {
@@ -1711,6 +1765,62 @@ impl MissionNode {
             })
             .or_else(|| lines().max_by_key(|line| line.rounds))
     }
+
+    /// The worker's signal that its work is ready for its checkers (PRD
+    /// mission-speed-2 D-01), as the book holds it now: a node with a
+    /// `check` line signals with that line passed, at its record and on its
+    /// commit; a node without one when every line its worker answers for
+    /// passed or was skipped, at the newest of their records, on no commit.
+    /// A push alone is no signal. Each new signal opens a round: the
+    /// checkers' answers from before it are the round before's
+    /// (`Criterion::round_state`).
+    pub(crate) fn check_signal(&self) -> Option<CheckSignal> {
+        use crate::mission_criteria::{CriterionKind, CriterionState};
+        if let Some(check) = self
+            .criteria
+            .iter()
+            .find(|line| line.kind == CriterionKind::Check)
+        {
+            return (check.state == CriterionState::Pass)
+                .then(|| {
+                    Some(CheckSignal {
+                        at_unix_ms: check.by.as_ref()?.at_unix_ms,
+                        commit: check.commit.clone(),
+                    })
+                })
+                .flatten();
+        }
+        if !self.own_lines_met() {
+            return None;
+        }
+        self.criteria
+            .iter()
+            .filter(|line| line.kind.worker_answers())
+            .filter_map(|line| line.by.as_ref().map(|by| by.at_unix_ms))
+            .max()
+            .map(|at_unix_ms| CheckSignal {
+                at_unix_ms,
+                commit: None,
+            })
+    }
+
+    /// The node's review and verification lines, the lines its checkers
+    /// judge.
+    pub(crate) fn checker_lines(
+        &self,
+    ) -> impl Iterator<Item = &crate::mission_criteria::Criterion> {
+        self.criteria
+            .iter()
+            .filter(|line| line.kind.checker_judges())
+    }
+}
+
+/// When and on which commit a node's worker last signalled its work ready
+/// for its checkers (`MissionNode::check_signal`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CheckSignal {
+    pub(crate) at_unix_ms: u64,
+    pub(crate) commit: Option<String>,
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -1974,6 +2084,25 @@ impl Mission {
 
     pub(crate) fn node(&self, key: &str) -> Option<&MissionNode> {
         self.nodes.iter().find(|node| node.key == key)
+    }
+
+    /// The pull-request changes pull-request change `key` waits for whole,
+    /// by their plain key, where one of their finish lines
+    /// (`<node>:<line>`) might start it sooner, stacked on their branch
+    /// (PRD mission-speed-2 D-07); none for any other node.
+    pub(crate) fn whole_node_waits(&self, key: &str) -> Vec<&str> {
+        let Some(node) = self.node(key).filter(|node| node.runs_elsewhere()) else {
+            return Vec::new();
+        };
+        node.depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_none())
+            .filter(|dependency| {
+                self.node(&dependency.node)
+                    .is_some_and(MissionNode::runs_elsewhere)
+            })
+            .map(|dependency| dependency.node.as_str())
+            .collect()
     }
 
     /// Whether the operator, not the Conductor, merges `node`'s pull

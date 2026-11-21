@@ -24,7 +24,7 @@ use crate::missions::{
     AnswerFailure, AttentionTo, Blocked, CI_FAILED_NAMED, Candidate, Checks, CiNews, CiResult,
     Conductor, ConductorSettings, Delivery, External, Mission, MissionBook, MissionCommand,
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
-    PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
+    PendingWake, PrSeen, Question, RoundWake, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
 use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -1117,7 +1117,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             mission.id, mission.title, wake.node, mission.id
         )
     };
-    match wake.event {
+    // A wake about a node's review round or the plan rides `new_head`,
+    // which a build before it words as news (`RoundWake`).
+    if let Some(round) = wake.round {
+        return round_body(mission, wake, node, round, &news);
+    }
+    let body = match wake.event {
         WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
         WakeEvent::ChangesRequested => {
             news(format!("{pr} received a review asking for changes"), PR_ACT)
@@ -1319,8 +1324,16 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 None => "needs your work",
             };
+            // A conflict stops the pull request's CI, so it is told to a
+            // worker at work too (B11).
+            let act = match wake.why {
+                Some(crate::missions::FixReason::Conflict) => {
+                    "Its CI does not run until the conflict is gone: merge the base branch into your branch (never rebase), push, and go on"
+                }
+                _ => "Fix it on your branch and push, then report to your Conductor as before",
+            };
             format!(
-                "{pr} {what} (mission {} \"{}\", node {}).\nFix it on your branch and push, then report to your Conductor as before.",
+                "{pr} {what} (mission {} \"{}\", node {}).\n{act}.",
                 mission.id, mission.title, wake.node
             )
         }
@@ -1401,6 +1414,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 wake.node, mission.id, mission.title
             )
         }
+    };
+    // A worker's one cell about its node keeps a round failure this fact
+    // replaced unread, and `tell_worker` leaves this cell standing.
+    match (&wake.to, node.map(|node| round_facts(mission, node))) {
+        (Some(_), Some((line, true, _))) => format!("{body}\nIts review round: {line}."),
+        _ => body,
     }
 }
 
@@ -1535,6 +1554,188 @@ fn start_words(mission: &Mission, node: Option<&MissionNode>) -> String {
     )
 }
 
+/// The cell of a wake about a node's review round or its place in the
+/// plan (PRD mission-speed-2), each ending with the line its receiver acts
+/// on at that moment (D-06).
+fn round_body(
+    mission: &Mission,
+    wake: &PendingWake,
+    node: Option<&MissionNode>,
+    round: RoundWake,
+    news: &dyn Fn(String, &str) -> String,
+) -> String {
+    let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
+    let place = format!(
+        "Node {} of mission {} \"{}\"",
+        wake.node, mission.id, mission.title
+    );
+    let show = format!("`hide mission show {} --mission {}`", wake.node, mission.id);
+    match (round, node) {
+        (RoundWake::CheckAsked, Some(node)) => {
+            let agent = wake.to.as_deref().unwrap_or("-");
+            let mine = |line: &&Criterion| {
+                line.checkers
+                    .iter()
+                    .any(|checker| checker.agent_id.as_deref() == Some(agent))
+            };
+            let lines: Vec<&str> = node
+                .checker_lines()
+                .filter(mine)
+                .map(|line| line.key.as_str())
+                .collect();
+            let lines = lines.join(" and ");
+            let signal = wake.head.as_deref().map_or_else(
+                || "its worker recorded every one of its lines passed".to_owned(),
+                |head| format!("its worker recorded its check on commit {}", short(head)),
+            );
+            // The commit this checker last answered on, if it answered.
+            let last = node
+                .checker_lines()
+                .flat_map(|line| &line.checkers)
+                .filter(|checker| checker.agent_id.as_deref() == Some(agent))
+                .filter(|checker| checker.at_unix_ms.is_some())
+                .max_by_key(|checker| checker.at_unix_ms)
+                .map(|checker| checker.commit.as_deref());
+            let confirm = "When the worker asks you to confirm its plan for a serious finding, answer only OK or what to change.";
+            match last {
+                None => format!(
+                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {confirm}"
+                ),
+                Some(last) => format!(
+                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {confirm}",
+                    last.map_or_else(
+                        || "after your last answer".to_owned(),
+                        |commit| format!("you last checked commit {}", short(commit))
+                    )
+                ),
+            }
+        }
+        (RoundWake::CheckerNeeded, _) => {
+            let (what, flag) = match wake.line.as_ref().and_then(|line| line.line.as_deref()) {
+                Some("verify") => ("verification", "--verifier <agent-id>"),
+                Some(_) => ("review", "--reviewer <agent-id>"),
+                None => (
+                    "review and verification",
+                    "--reviewer <agent-id> --verifier <agent-id>",
+                ),
+            };
+            news(
+                format!(
+                    "Node {} is ready for its {what}, and no live checker holds it",
+                    wake.node
+                ),
+                &format!(
+                    "start a checker for it and bind it with `hide mission node {} {flag}`, which takes an ended checker's place",
+                    wake.node
+                ),
+            )
+        }
+        (RoundWake::Checked, Some(node)) => {
+            let (line, failed, running) = round_facts(mission, node);
+            let act = match (failed, running) {
+                (true, true) => {
+                    "Start fixing now; record your next check once both results are in (after 30 minutes without the other, go on)."
+                }
+                (true, false) => {
+                    "Confirm your plan for each serious finding with the checker that raised it (go on with it if no answer comes in 10 minutes, or with the changes it asks for), and fix the rest at once. Look for the same kind of problem elsewhere and fix it together."
+                }
+                _ => "",
+            };
+            format!(
+                "Your node {} of mission {} \"{}\": {line}.\nRead the findings in {show}. {act}",
+                wake.node, mission.id, mission.title
+            )
+        }
+        (RoundWake::WholeNodeWait, _) => {
+            let waits = mission.whole_node_waits(&wake.node);
+            let suggest: Vec<String> = waits
+                .iter()
+                .map(|other| {
+                    let line = mission
+                        .node(other)
+                        .and_then(|other| {
+                            other
+                                .criteria
+                                .iter()
+                                .find(|line| line.kind == CriterionKind::Own)
+                        })
+                        .map_or("<line>", |line| line.key.as_str());
+                    format!("`\"{other}:{line}\"`")
+                })
+                .collect();
+            news(
+                format!(
+                    "Node {} waits for the whole of node {}",
+                    wake.node,
+                    waits.join(", ")
+                ),
+                &format!(
+                    "if it needs only that node's contract, wait on one of its lines instead ({} in `depends_on`) and it starts as soon as that line passes",
+                    suggest.join(", ")
+                ),
+            )
+        }
+        _ => news(
+            format!("Node {} moved", wake.node),
+            "read what changed in it",
+        ),
+    }
+}
+
+/// What a node's worker reads of its round (D-09), from the lines the book
+/// holds: `review FAIL · verify running · round 2 of 3 · conflicts with its
+/// base`, whether a line failed in the round and whether one still runs. A
+/// line's state counts once a checker bound to it answered since the
+/// node's last check (`MissionNode::check_signal`), on its commit when both
+/// name one; before that it runs.
+pub(super) fn round_facts(mission: &Mission, node: &MissionNode) -> (String, bool, bool) {
+    let signal = node.check_signal();
+    let in_round = |checker: &crate::mission_criteria::Checker| {
+        signal.as_ref().is_none_or(|signal| {
+            checker.at_unix_ms.is_some_and(|at| at >= signal.at_unix_ms)
+                && match (&signal.commit, &checker.commit) {
+                    (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
+                    _ => true,
+                }
+        })
+    };
+    let (mut failed, mut running) = (false, false);
+    let mut parts = Vec::new();
+    for line in node.checker_lines() {
+        let bound: Vec<_> = line
+            .checkers
+            .iter()
+            .filter(|checker| checker.agent_id.is_some())
+            .collect();
+        let state = match line.state {
+            CriterionState::Skipped => "skipped",
+            _ if bound.is_empty() => "no checker",
+            _ if !bound.iter().any(|checker| in_round(checker)) => "running",
+            CriterionState::Fail => "FAIL",
+            CriterionState::Pass => "PASS",
+            CriterionState::Open => "running",
+        };
+        failed |= state == "FAIL";
+        running |= state == "running";
+        parts.push(format!("{} {state}", line.key));
+    }
+    let limit = crate::mission_health::review_limit(mission);
+    if let Some(line) = node.review_line(limit) {
+        parts.push(format!("round {} of {limit}", line.rounds));
+    }
+    if node
+        .woken
+        .iter()
+        .any(|woken| woken.why == crate::missions::FixReason::Conflict)
+    {
+        parts.push(
+            "conflicts with its base: merge the base branch into your branch (never rebase)"
+                .to_owned(),
+        );
+    }
+    (parts.join(" · "), failed, running)
+}
+
 /// What a Conductor woken about a pull request of its own does.
 const PR_ACT: &str = "move a stacked PR above it onto the change, or answer the review";
 
@@ -1565,7 +1766,7 @@ pub(super) fn record_line_wake(
 }
 
 /// A wake for the Conductor about `event`, numbered when it is recorded.
-fn wake_about(
+pub(super) fn wake_about(
     node: String,
     pr: Option<u32>,
     event: WakeEvent,
@@ -1589,12 +1790,13 @@ fn wake_about(
         since_unix_ms: None,
         notified: false,
         opened_seq: None,
+        round: None,
     }
 }
 
 /// Numbers `wake` as the mission's next and records it (`push_wake`); a
 /// refused wake takes no number.
-fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
+pub(super) fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
     wake.seq = mission.wake_seq + 1;
     let intent = push_wake(mission, wake)?;
     mission.wake_seq += 1;
@@ -1610,8 +1812,9 @@ fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
 /// resolves the node's standing CI and review facts. With
 /// `PENDING_WAKE_LIMIT` cells already standing for the Conductor a new
 /// subject is refused and logged, and every cell keeps its place
-/// (engineering #15). A worker's cells are capped apart
-/// (`WORKER_WAKE_LIMIT`). A wake with no key of its own gets one from what
+/// (engineering #15). A worker's or checker's cells are one per node and
+/// receiver, and a cell for an agent the node no longer holds goes first,
+/// so a node keeps at most one per agent it holds and the newest. A wake with no key of its own gets one from what
 /// it is about.
 pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
     if wake.key.is_none() {
@@ -1643,10 +1846,35 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.wake_refused_full",
                 "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
+                "round": wake.round.map(RoundWake::as_str),
                 "cap": PENDING_WAKE_LIMIT,
             }));
             return None;
         }
+    }
+    // A worker's or checker's cells are one per node and receiver, so a
+    // node holds at most one for its worker and one for each checker its
+    // lines can bind (engineering #15).
+    if wake.to.is_some() {
+        // A cell for an agent the node no longer holds as its worker or a
+        // checker is finished: it goes first.
+        let held: Vec<String> = mission
+            .node(&wake.node)
+            .map(|node| {
+                node.agent_id
+                    .iter()
+                    .map(String::as_str)
+                    .chain(node.checker_agents())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        mission.wakes.retain(|kept| {
+            kept.node != wake.node
+                || kept.to.as_ref().is_none_or(|to| {
+                    Some(to) == wake.to.as_ref() || held.iter().any(|agent| agent == to)
+                })
+        });
     }
     // A standing fact that updates the node's standing cell keeps when the
     // cell began and whether the operator was told of it (D-23).
@@ -2495,6 +2723,32 @@ impl Runtime {
                 } = &mut next;
                 for node in nodes.iter_mut() {
                     super::mission_outside::begin_round(round_seq, current.node(&node.key), node);
+                }
+                // A change node the plan newly makes wait for the whole of
+                // another change node gets its Conductor a suggestion to
+                // wait on one of that node's lines (PRD mission-speed-2
+                // D-07, B14); the plan itself is taken as written.
+                let hinted: Vec<(String, Vec<String>)> = next
+                    .nodes
+                    .iter()
+                    .filter_map(|node| {
+                        let before = current.whole_node_waits(&node.key);
+                        let waits: Vec<String> = next
+                            .whole_node_waits(&node.key)
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect();
+                        waits
+                            .iter()
+                            .any(|other| !before.contains(&other.as_str()))
+                            .then(|| (node.key.clone(), waits))
+                    })
+                    .collect();
+                for (node, waits) in hinted {
+                    let key = format!("whole_node_wait:{node}:{}", waits.join("+"));
+                    let mut wake = wake_about(node, None, WakeEvent::NewHead, None, Some(key));
+                    wake.round = Some(RoundWake::WholeNodeWait);
+                    record(&mut next, wake);
                 }
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
                 let events = super::mission_events::plan_events(
