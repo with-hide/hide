@@ -1,6 +1,6 @@
 //! What the own engine holds of its session (PRD engine-bundle-3-core-owns
 //! D-3): its workspaces in order, each workspace's tabs in order and the
-//! checkout it is bound to, each tab's pane tree, focus and panes, the
+//! checkout it is bound to, each tab's pane tree, focus, zoom and panes, the
 //! keyboard's workspace, Hide's tokens, and the counters ids are given from.
 //! It is plain data behind the engine's own lock, never the runtime's, and
 //! starts and ends no program: the engine reserves an id here, starts the
@@ -58,6 +58,7 @@ const NOMINAL_AREA: SessionLayoutRect = SessionLayoutRect {
 /// Why a pane move changed nothing: the caller reads it as a move declined,
 /// not failed.
 const SAME_TAB: &str = "same_tab";
+const ZOOMED_TAB: &str = "zoomed_tab";
 
 #[derive(Default)]
 pub(super) struct Topology {
@@ -105,6 +106,7 @@ struct Tab {
     label: String,
     root: PaneLayoutNodeSnapshot,
     focused: String,
+    zoomed: bool,
     panes: BTreeMap<String, Pane>,
 }
 
@@ -454,6 +456,8 @@ impl Topology {
         let tab = &mut workspace.tabs[tab_index];
         split_leaf_at(&mut tab.root, target, direction, created, ratio);
         tab.panes.insert(created.to_owned(), pane);
+        // A split shows its new pane, so no zoom survives it.
+        tab.zoomed = false;
         if focus {
             tab.focused = created.to_owned();
             workspace.active_tab = tab.id.clone();
@@ -483,6 +487,7 @@ impl Topology {
         if let Some(sibling) = remove_leaf(&mut tab.root, pane) {
             if tab.focused == pane {
                 tab.focused = sibling;
+                tab.zoomed = false;
             }
             return (taken, Closed::default());
         }
@@ -723,6 +728,23 @@ impl Topology {
         Ok(())
     }
 
+    /// Zooms `pane`'s tab onto it, or ends the zoom; `None` turns it the
+    /// other way. Either way the pane takes the tab's focus, as the drawing
+    /// ahead predicts. A tab of one pane is never zoomed; the call answers it
+    /// unchanged. Whether anything changed.
+    pub(super) fn zoom(&mut self, pane: &str, zoomed: Option<bool>) -> Result<bool, EngineError> {
+        let (workspace, index) = self.position(pane)?;
+        let tab = &mut self.workspaces[workspace].tabs[index];
+        if matches!(tab.root, PaneLayoutNodeSnapshot::Pane { .. }) {
+            return Ok(false);
+        }
+        let zoomed = zoomed.unwrap_or(!tab.zoomed);
+        let changed = tab.zoomed != zoomed || tab.focused != pane;
+        tab.zoomed = zoomed;
+        tab.focused = pane.to_owned();
+        Ok(changed)
+    }
+
     /// Moves `pane`'s edge by `amount` toward `direction` (layout's
     /// `resized`): whether a split moved.
     pub(super) fn resize(
@@ -766,6 +788,7 @@ impl Topology {
     }
 
     /// Moves `pane`, unfocused, into a new tab of `workspace` named `label`.
+    /// A pane of a zoomed tab is not moved: the answer says so.
     pub(super) fn move_to_new_tab(
         &mut self,
         pane: &str,
@@ -774,6 +797,9 @@ impl Topology {
     ) -> Result<PaneJoinResult, EngineError> {
         let (from_workspace, from_tab) = self.position(pane)?;
         let previous = self.place_of(from_workspace, from_tab, pane);
+        if self.workspaces[from_workspace].tabs[from_tab].zoomed {
+            return Ok(unchanged(previous, ZOOMED_TAB));
+        }
         let tab = self.reserve_tab_only(workspace)?;
         let moved = self.workspaces[from_workspace].tabs[from_tab].panes[pane].clone();
         // The new tab comes first, so a pane alone in its workspace's last
@@ -792,8 +818,8 @@ impl Topology {
     }
 
     /// Moves `pane`, unfocused, beside `target_pane` in `target_tab`, to its
-    /// right or `down` at half. A pane already in that tab is not moved: the
-    /// answer says so.
+    /// right or `down` at half. A pane already in that tab, or a move out of
+    /// or into a zoomed tab, is not moved: the answer says so.
     pub(super) fn move_beside(
         &mut self,
         pane: &str,
@@ -806,6 +832,11 @@ impl Topology {
         let (to_workspace, to_tab) = self.tab_position(target_tab)?;
         if (to_workspace, to_tab) == (from_workspace, from_tab) {
             return Ok(unchanged(previous, SAME_TAB));
+        }
+        if self.workspaces[from_workspace].tabs[from_tab].zoomed
+            || self.workspaces[to_workspace].tabs[to_tab].zoomed
+        {
+            return Ok(unchanged(previous, ZOOMED_TAB));
         }
         if !self.workspaces[to_workspace].tabs[to_tab]
             .panes
@@ -853,6 +884,7 @@ impl Topology {
         Ok(ClosedLayout {
             workspace_id: workspace.id.clone(),
             tab_id: tab.id.clone(),
+            zoomed: tab.zoomed,
             focused_pane_id: tab.focused.clone(),
             root: closed_node(&tab.root, &tab.panes)?,
         })
@@ -1011,6 +1043,7 @@ impl Topology {
             label: planned.label,
             root: planned.root,
             focused,
+            zoomed: false,
             panes,
         });
         found.active_tab = planned.tab.clone();
@@ -1208,7 +1241,7 @@ impl Topology {
                             id: tab.id.clone(),
                             label: tab.label.clone(),
                             focused: tab.focused.clone(),
-                            zoomed: false,
+                            zoomed: tab.zoomed,
                             root: saved_node(&tab.root),
                             panes: tab
                                 .panes
@@ -1316,6 +1349,7 @@ impl Topology {
                     label: tab.label,
                     root,
                     focused: tab.focused,
+                    zoomed: tab.zoomed,
                     panes,
                 });
             }
@@ -1635,6 +1669,7 @@ impl Tab {
                 pane_id: pane_id.to_owned(),
             },
             focused: pane_id.to_owned(),
+            zoomed: false,
             panes: BTreeMap::from([(pane_id.to_owned(), pane)]),
         }
     }
@@ -1653,6 +1688,7 @@ impl Tab {
         Ok(SessionLayoutPayload {
             workspace_id: workspace.to_owned(),
             tab_id: self.id.clone(),
+            zoomed: self.zoomed,
             area: NOMINAL_AREA,
             focused_pane_id: focused,
             panes,
@@ -2341,6 +2377,24 @@ mod tests {
     }
 
     #[test]
+    fn a_zoom_takes_the_focus_ends_on_a_split_and_never_zooms_a_lone_pane() {
+        let mut topology = Topology::default();
+        let first = workspace(&mut topology);
+        assert!(!topology.zoom(&first.pane, None).unwrap());
+        assert!(!topology.pane_layout(&first.pane).unwrap().zoomed);
+
+        let beside = split(&mut topology, &first.pane, PaneLayoutDirection::Right);
+        assert!(topology.zoom(&beside, None).unwrap());
+        let zoomed = topology.pane_layout(&beside).unwrap();
+        assert!(zoomed.zoomed);
+        assert_eq!(zoomed.focused_pane_id, beside);
+        assert!(!topology.zoom(&beside, Some(true)).unwrap());
+
+        split(&mut topology, &first.pane, PaneLayoutDirection::Down);
+        assert!(!topology.pane_layout(&beside).unwrap().zoomed);
+    }
+
+    #[test]
     fn a_resize_moves_the_split_the_drawing_ahead_predicts_and_stops_at_its_limit() {
         let mut topology = Topology::default();
         let first = workspace(&mut topology);
@@ -2471,6 +2525,14 @@ mod tests {
         assert_eq!(
             (same.changed, same.reason.as_deref()),
             (false, Some("same_tab"))
+        );
+        topology.zoom(&first.pane, Some(true)).unwrap();
+        let zoomed = topology
+            .move_to_new_tab(&beside, &first.workspace, "x")
+            .unwrap();
+        assert_eq!(
+            (zoomed.changed, zoomed.reason.as_deref()),
+            (false, Some("zoomed_tab"))
         );
     }
 

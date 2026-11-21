@@ -4,7 +4,7 @@ import { neighbourBox, type Edge } from "./areaLayout";
 export function adjacentPane(paneId: string, direction: Edge): string | null {
   const pane = document.querySelector(`[data-pane-view="${CSS.escape(paneId)}"]`);
   const canvas = pane?.closest<HTMLElement>("[data-canvas]");
-  if (!canvas) return null;
+  if (!canvas || canvas.dataset.zoomed === "true") return null;
   const boxes = Array.from(canvas.querySelectorAll<HTMLElement>("[data-layout-pane]"))
     .map((element) => ({ id: element.dataset.layoutPane!, rect: element.getBoundingClientRect() }))
     .filter(({ rect }) => rect.width > 0 && rect.height > 0);

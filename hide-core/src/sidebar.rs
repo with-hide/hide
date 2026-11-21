@@ -121,6 +121,7 @@ pub struct SessionTabPayload {
 pub struct SessionLayoutPayload {
     pub workspace_id: String,
     pub tab_id: String,
+    pub zoomed: bool,
     pub area: SessionLayoutRect,
     pub focused_pane_id: String,
     pub panes: Vec<SessionLayoutPanePayload>,

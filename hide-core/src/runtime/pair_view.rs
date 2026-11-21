@@ -583,7 +583,7 @@ impl Runtime {
 
     /// `pair_view_desk`: ⌘E in focus mode shows or folds the desk beside the
     /// pane it draws (D-57); folded, the pane is drawn alone at the body's
-    /// full width, the screen pane zoom drew. A desk with no View has nothing to show,
+    /// full width. A desk with nothing the strip shows has nothing to stand,
     /// which the log records. Whether anything changed.
     pub(super) fn set_pair_desk(&mut self, payload: PairDeskPayload) -> bool {
         let Some(key) = self.front_workspace_key() else {

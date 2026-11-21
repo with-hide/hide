@@ -98,11 +98,8 @@ fn answer(
 }
 
 /// `payload` with a second pane, `<tab>:q`, split to the right of `<tab>:p` in
-/// `tab_id`.
-pub(super) fn with_second_pane(
-    mut payload: SessionSnapshotPayload,
-    tab_id: &str,
-) -> SessionSnapshotPayload {
+/// `tab_id`, so a zoom there has a pane to hide.
+fn with_second_pane(mut payload: SessionSnapshotPayload, tab_id: &str) -> SessionSnapshotPayload {
     let first = format!("{tab_id}:p");
     let second = format!("{tab_id}:q");
     let pane = payload
@@ -794,7 +791,10 @@ fn a_tab_move_queued_on_an_earlier_connection_is_not_sent() {
 /// in progress (#438 review: a close that "waits behind" the lane).
 #[test]
 fn a_pane_close_starts_while_an_unanswered_tab_focus_holds_the_lane() {
-    let fake = FakeEngine::start(|_, _| reply(()));
+    let fake = FakeEngine::start(|method, _| match method {
+        "toggle_zoom" => reply(true),
+        _ => reply(()),
+    });
     let (mut runtime, checkout_id) = runtime_on(&fake, "/private/tmp/hide-control-order-close");
     assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
     assert!(
@@ -817,17 +817,17 @@ fn a_pane_close_starts_while_an_unanswered_tab_focus_holds_the_lane() {
     );
 }
 
-/// A resize is a pane operation on its own worker, like a close: a pane
-/// focus that has not been answered holds the lane and nothing else (the s2
-/// journey sends these right after clicks).
+/// Zoom and resize are pane operations on their own worker, like a
+/// close: a pane focus that has not been answered holds the lane and nothing
+/// else (the s2 journey sends these right after clicks).
 #[test]
-fn resizes_in_other_tabs_start_while_an_unanswered_pane_focus_holds_the_lane() {
+fn a_zoom_and_resize_in_other_tabs_start_while_an_unanswered_pane_focus_holds_the_lane() {
     let (mut runtime, _checkout_id) =
-        live_tab_order_runtime("/private/tmp/hide-control-order-resize-while-focus");
+        live_tab_order_runtime("/private/tmp/hide-control-order-zoom-while-focus");
     let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
     runtime.ingest_session(Ok(with_second_pane(
         tab_order_payload(
-            "/private/tmp/hide-control-order-resize-while-focus",
+            "/private/tmp/hide-control-order-zoom-while-focus",
             &tabs,
             &tabs,
             "w-order:t1",
@@ -841,7 +841,7 @@ fn resizes_in_other_tabs_start_while_an_unanswered_pane_focus_holds_the_lane() {
     );
 
     for (index, event) in [
-        r#"{"schema_version":2,"kind":"resize_pane","payload":{"pane_id":"w-order:t2:p","direction":"right","amount":0.1}}"#,
+        r#"{"schema_version":2,"kind":"toggle_zoom","payload":{"pane_id":"w-order:t2:p"}}"#,
         r#"{"schema_version":2,"kind":"resize_pane","payload":{"pane_id":"w-order:t3:p","direction":"right","amount":0.1}}"#,
     ]
     .into_iter()
@@ -860,15 +860,15 @@ fn resizes_in_other_tabs_start_while_an_unanswered_pane_focus_holds_the_lane() {
 
 /// The engine's session update that shows a pane operation's effect can reach the
 /// runtime before the answer to the request does: the two travel on different
-/// threads, and on a slow runner the update wins (s2's resize on Windows).
-/// The answer then has to settle the operation from the topology it
+/// threads, and on a slow runner the update wins (s2's zoom and resize on
+/// Windows). The answer then has to settle the operation from the topology it
 /// already holds, because the engine sends nothing more once the layout stops
-/// moving, and an unsettled operation turns away every later split, resize
-/// and close in its tab until the deadline.
+/// moving, and an unsettled operation turns away every later zoom, resize and
+/// close in its tab until the deadline.
 #[test]
 fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answer() {
     let fake = FakeEngine::start(|method, _| match method {
-        "resize_pane" => reply(true),
+        "toggle_zoom" => reply(true),
         other => panic!("unexpected {other}"),
     });
     let checkout_path = "/private/tmp/hide-control-order-early-topology";
@@ -881,30 +881,26 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
         )
     };
     runtime.ingest_session(Ok(split()));
-    let resize = r#"{"schema_version":2,"kind":"resize_pane","payload":{"pane_id":"w-order:t2:p","direction":"right","amount":0.1}}"#;
+    let zoom = r#"{"schema_version":2,"kind":"toggle_zoom","payload":{"pane_id":"w-order:t2:p"}}"#;
 
-    runtime.dispatch_json(resize.as_bytes());
+    runtime.dispatch_json(zoom.as_bytes());
     assert_eq!(runtime.pane_operations.len(), 1);
     fake.wait_for_calls(1, Duration::from_secs(5));
 
-    // The engine's update with the resized layout arrives while the request
-    // is still unanswered.
+    // The engine's update with the zoomed layout arrives while the request is
+    // still unanswered.
     let mut payload = split();
     payload
         .layouts
         .iter_mut()
         .find(|layout| layout.tab_id == "w-order:t2")
-        .expect("the resized tab has a layout")
-        .panes[0]
-        .rect
-        .width += 2;
+        .expect("the zoomed tab has a layout")
+        .zoomed = true;
     runtime.ingest_session(Ok(payload));
 
     assert!(runtime.ingest_pane_control_result(
-        PaneControlAction::Resize {
+        PaneControlAction::ToggleZoom {
             pane_id: "w-order:t2:p".to_owned(),
-            direction: PaneResizeDirection::Right,
-            amount: 0.1,
         },
         Ok(PaneControlOutcome::Acknowledged {
             created_pane_id: None,
@@ -913,15 +909,51 @@ fn a_pane_operation_whose_topology_arrived_before_its_answer_settles_on_the_answ
     ));
     assert!(
         runtime.pane_operations.is_empty(),
-        "the answer settled the resize from the topology already received"
+        "the answer settled the zoom from the topology already received"
     );
     assert_eq!(
         diagnostic_messages(&runtime, "pane.operation.topology_confirmed"),
-        ["Confirmed pane.resize for w-order:t2:p from fresh topology"]
+        ["Confirmed pane.zoom for w-order:t2:p from fresh topology"]
     );
 
-    // The next resize in the tab is sent, not turned away as already running.
-    runtime.dispatch_json(resize.as_bytes());
+    // The next zoom in the tab is sent, not turned away as already running.
+    runtime.dispatch_json(zoom.as_bytes());
     fake.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(runtime.pane_operations.len(), 1);
+}
+
+/// Zoom has nothing to hide on a tab's only pane: the engine answers it unchanged
+/// (`single_pane`), so no topology would ever confirm it, and the operation
+/// left waiting turned away every later split, zoom and close in the tab
+/// (⌘D did nothing in a tab zoomed hours earlier). Such a zoom is not sent;
+/// once the tab holds a second pane, it is.
+#[test]
+fn a_zoom_on_a_tabs_only_pane_is_not_sent_and_leaves_the_tab_free() {
+    let fake = FakeEngine::start(|method, _| match method {
+        "toggle_zoom" => reply(true),
+        other => panic!("unexpected {other}"),
+    });
+    let checkout_path = "/private/tmp/hide-control-order-zoom-single-pane";
+    let (mut runtime, _checkout_id) = runtime_on(&fake, checkout_path);
+    let zoom = r#"{"schema_version":2,"kind":"toggle_zoom","payload":{"pane_id":"w-order:t2:p"}}"#;
+
+    runtime.dispatch_json(zoom.as_bytes());
+    assert!(
+        runtime.pane_operations.is_empty(),
+        "nothing waits on the tab"
+    );
+    assert!(fake.methods().is_empty(), "Herdr was not asked");
+    assert_eq!(
+        diagnostic_messages(&runtime, "pane.zoom.single_pane"),
+        ["Pane w-order:t2:p is its tab's only pane; zoom was not sent"]
+    );
+
+    let tabs = ["w-order:t1", "w-order:t2", "w-order:t3"];
+    runtime.ingest_session(Ok(with_second_pane(
+        tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1"),
+        "w-order:t2",
+    )));
+    runtime.dispatch_json(zoom.as_bytes());
+    fake.wait_for_calls(1, Duration::from_secs(5));
+    assert_eq!(fake.methods(), ["toggle_zoom"]);
 }

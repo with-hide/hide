@@ -204,6 +204,7 @@ fn remote_pane_move_uses_device_catalog_and_native_layout_identity() {
             workspace_id: "remote:mini:workspace:w9".into(),
             tab_id: tab.into(),
             focused_pane_id: pane_id.into(),
+            zoomed: false,
             frames: vec![crate::model::RemotePaneLayoutFrame {
                 pane_id: pane_id.into(),
                 x: 0.0,

@@ -463,8 +463,9 @@ export function restoreFocus(previous: HTMLElement | null) {
 
 /**
  * Whether the pane's terminal is on this window's screen now: in a pane
- * host, not parked. Only the shown tab's panes get a host, so a pane kept
- * attached behind another tab, another screen or focus mode has none.
+ * host, not parked. Only the shown tab's panes get a host (only the zoomed
+ * one under a zoom), so a pane kept attached behind another tab, another
+ * screen or a zoom has none.
  */
 export function terminalShown(paneId: string): boolean {
   return instances.get(paneId)?.host?.isConnected ?? false;

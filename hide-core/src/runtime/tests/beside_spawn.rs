@@ -675,6 +675,7 @@ pub(super) fn local_spawner() -> Spawner {
             workspace_id: "workspace".into(),
             tab_id: "t1".into(),
             focused_pane_id: "sender".into(),
+            zoomed: false,
             root: crate::model::PaneLayoutNodeSnapshot::Pane {
                 pane_id: "sender".into(),
             },

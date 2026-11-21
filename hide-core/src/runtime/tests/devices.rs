@@ -526,6 +526,7 @@ fn an_input_report_for_a_pane_the_core_does_not_project_moves_nothing() {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
         focused_pane_id: "w1:p1".to_owned(),
+        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w1:p1".to_owned(),
         },
@@ -562,6 +563,7 @@ fn returning_to_this_machine_gives_the_keyboard_back_to_the_local_pane() {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
         focused_pane_id: "w1:p1".to_owned(),
+        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w1:p1".to_owned(),
         },
@@ -615,6 +617,7 @@ fn removing_the_selected_device_keeps_the_local_tabs_and_keyboard() {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
         focused_pane_id: "w1:p1".to_owned(),
+        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w1:p1".to_owned(),
         },

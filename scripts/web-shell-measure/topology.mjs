@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 // Pane topology latency on the product web shell (PRD instant-pane-topology
-// D-15, B23): split, focus mode on and off (⇧⌘↩, which took pane zoom's
-// place and keeps its sample names `zoom` and `unzoom`, PRD
-// lane-desk-pair-view D-57), pane close and new tab, each started by the
+// D-15, B23): split, zoom, unzoom, pane close and new tab, each started by the
 // operator's own chord, plus a tab switch by click (B24), and a window resize
 // (PRD engine-bundle-3-core-owns B43, perf-gate row 27): the page's width set
 // with CDP `Emulation.setDeviceMetricsOverride`, 1280 to 1100 and back.
@@ -15,7 +13,7 @@
 // - `key_ms`: the first keydown of the chord (a capture listener), the click,
 //   or, for a resize, the moment before the width is set.
 // - `screen_ms`: the first animation frame whose DOM shows the change (the
-//   pane count, focus mode's layer or the shown tab moved).
+//   pane count, the zoom flag or the shown tab moved).
 // - `frame_ms`: the first animation frame after that in which the terminal
 //   the change is about shows it: a new pane's terminal has text, or the
 //   resized pane's xterm has a new grid; for a resize, every shown pane's.
@@ -54,7 +52,7 @@ await page.evaluate(`(() => {
   const panes = () => [...(canvas()?.querySelectorAll("[data-pane-view]") ?? [])].map((el) => el.dataset.paneView);
   const focused = () => document.querySelector('[data-pane-view][data-focused="true"]')?.dataset.paneView ?? null;
   const grid = (id) => { const g = window.__hideProbe.paneGrid(id); return g ? g.cols + "x" + g.rows : null; };
-  const look = () => ({ tab: canvas()?.dataset.canvas ?? null, zoomed: document.querySelector("[data-pair-layer]") !== null, panes: panes(), focused: focused(), width: Math.round(canvas()?.getBoundingClientRect().width ?? 0) });
+  const look = () => ({ tab: canvas()?.dataset.canvas ?? null, zoomed: canvas()?.dataset.zoomed === "true", panes: panes(), focused: focused(), width: Math.round(canvas()?.getBoundingClientRect().width ?? 0) });
   window.__topology = {
     look,
     grid,

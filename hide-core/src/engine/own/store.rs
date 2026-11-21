@@ -78,10 +78,6 @@ pub(super) struct SavedTab {
     pub(super) id: String,
     pub(super) label: String,
     pub(super) focused: String,
-    /// Format 1 carries a tab's zoom, which focus mode replaced (PRD
-    /// lane-desk-pair-view D-57): written false and ignored when read, so
-    /// a saved session and an earlier build of format 1 still read each
-    /// other. It leaves with the next format number.
     pub(super) zoomed: bool,
     pub(super) root: SavedNode,
     pub(super) panes: Vec<SavedPane>,

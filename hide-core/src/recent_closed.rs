@@ -126,6 +126,7 @@ impl ClosedPane {
 pub struct ClosedLayout {
     pub workspace_id: String,
     pub tab_id: String,
+    pub zoomed: bool,
     pub focused_pane_id: String,
     pub root: ClosedLayoutNode,
 }
@@ -566,6 +567,7 @@ mod tests {
             layout: ClosedLayout {
                 workspace_id: "w1".into(),
                 tab_id: "w1:t1".into(),
+                zoomed: false,
                 focused_pane_id: "terminal".into(),
                 root: ClosedLayoutNode::Split {
                     direction: ClosedSplitDirection::Right,

@@ -34,6 +34,8 @@ describe("directional terminal navigation", () => {
     expect(adjacentPane("top", "down")).toBe("bottom");
     expect(adjacentPane("bottom", "left")).toBe("left");
     expect(adjacentPane("bottom", "right")).toBeNull();
+    tab.dataset.zoomed = "true";
+    expect(adjacentPane("bottom", "left")).toBeNull();
   });
 
   it("crosses fractional edges at page zoom, but never jumps a pane-sized gap", () => {

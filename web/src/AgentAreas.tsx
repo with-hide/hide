@@ -63,6 +63,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
       ? remoteSessions?.find(row => row.target_id === device)?.session?.pane_layouts.find(row => row.tab_id === tabId)
       : paneLayouts?.find(row => row.tab_id === tabId);
     if (!geometry) return [];
+    if (geometry.zoomed) return [geometry.focused_pane_id];
     return checkout.tabs.find(tab => tab.id === tabId)?.panes.map(pane => pane.id) ?? [];
   });
   const workspace = { device_id: device, path: checkout.path };

@@ -326,14 +326,14 @@ test("expand takes the whole body over the standing desk and returns on Escape w
     await page.locator('[data-lane-frame] [data-view-area="true"] .cm-content').click();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
-    // ⇧⌘↩, pressed in the document, expands the lane and back; no pane enters focus mode (D-57).
+    // The pane zoom's chord, pressed in the document, expands the lane and back; no pane zooms.
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await quietFor(page, 500, "no terminal was fitted again while the lane expanded");
     expect(resizes(lane)).toBe(before);
-    expect(lane.sent.get("pair_view") ?? 0).toBe(0);
+    expect(lane.sent.get("toggle_zoom") ?? 0).toBe(0);
   } finally {
     lane.daemon.stop();
     lane.fixture.stop();

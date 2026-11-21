@@ -8,7 +8,7 @@ const lead = agent({ pane_id: "lead", identity_label: "Lead", group: "working", 
 const child = (id: string) => agent({ pane_id: id, identity_label: id, group: "working", mark: "going", status_code: "working", elapsed: "1m", delegated: true, lineage_parent_pane_id: "lead" });
 const pane = (id: string, row: PracticePane["agent"]): PracticePane => ({ id, agent: row, title: id });
 const tab = (id: string, ...panes: string[]) => ({
-  id, name: null, focused: panes[0]!,
+  id, name: null, focused: panes[0]!, zoomed: false,
   root: panes.length === 1 ? { type: "pane" as const, pane_id: panes[0]! } : { type: "split" as const, direction: "right" as const, ratio: 0.5, first: { type: "pane" as const, pane_id: panes[0]! }, second: { type: "pane" as const, pane_id: panes[1]! } },
 });
 

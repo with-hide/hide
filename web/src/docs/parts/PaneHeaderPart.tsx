@@ -52,7 +52,7 @@ export default function PaneHeaderPart({ state }: PartProps) {
   return (
     <PartFrame part="pane-header">
       <div className="h-[calc(var(--size-pane-header)*2)] min-w-0 overflow-hidden rounded-md border border-border">
-        <PaneView pane={row} transport={undefined} focused={false} scale={1} actions={actions} agentKind="claude" markSymbol={pane.mark} markTone={markTone(pane)} />
+        <PaneView pane={row} transport={undefined} focused={false} scale={1} actions={actions} agentKind="claude" markSymbol={pane.mark} markTone={markTone(pane)} paneCount={2} zoomed={false} />
       </div>
     </PartFrame>
   );

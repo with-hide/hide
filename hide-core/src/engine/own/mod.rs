@@ -8,7 +8,7 @@
 //! ([`Engine::session`]); there is no event stream to replay.
 //!
 //! It makes workspaces, tabs and panes and lays them out by the rules of
-//! [`layout`] (split, close, resize, swap, move, a saved layout given
+//! [`layout`] (split, close, zoom, resize, swap, move, a saved layout given
 //! back), binds workspaces to checkouts and makes worktrees ([`worktrees`]),
 //! keeps focus, names and Hide's tokens, and reads (plain or styled), types
 //! into and lists the processes of a pane. It starts agents by their
@@ -37,7 +37,7 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
-    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake,
+    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -2170,6 +2170,23 @@ impl<'g> Engine for OwnEngine<'g> {
         self.check()?;
         self.topology().rename_pane(pane, label)?;
         self.changed();
+        Ok(())
+    }
+
+    fn toggle_zoom(&self, _wait: Wait, pane: &str) -> Answer<bool> {
+        self.check()?;
+        let changed = self.topology().zoom(pane, None)?;
+        if changed {
+            self.changed();
+        }
+        Ok(changed)
+    }
+
+    fn set_zoom(&self, _wait: Wait, pane: &str, zoom: Zoom) -> Answer<()> {
+        self.check()?;
+        if self.topology().zoom(pane, Some(zoom == Zoom::On))? {
+            self.changed();
+        }
         Ok(())
     }
 

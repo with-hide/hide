@@ -97,7 +97,7 @@ mod tests {
             project(&fast, "local"),
             project(&serde_json::to_value(&first).unwrap(), "local")
         );
-        snapshot.ime.marked_text = "あ".to_owned();
+        snapshot.zoomed = Some("fixture:p1".to_owned());
         let selected = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
         let retained = fast.clone();
         assert!(!update_inputs(&mut fast, &selected, 1).unwrap());

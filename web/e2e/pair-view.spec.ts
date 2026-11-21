@@ -436,9 +436,9 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     const opened = await leftAgent(["file", "open", "a.md"]);
     expect(opened.status, opened.out).toBe(0);
     await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
-    // B20, B21, D-43: ◧ stands left of the pane menu, and stays drawn on a pane that does not hold the keyboard.
-    const [pairBox, menuBox] = await Promise.all([pairButton(page, left!).boundingBox(), paneView(page, left!).locator("[data-pane-menu]").boundingBox()]);
-    expect(pairBox!.x + pairBox!.width).toBeLessThanOrEqual(menuBox!.x + 1);
+    // B20, B21, D-43: ◧ stands left of the zoom, and stays drawn on a pane that does not hold the keyboard.
+    const [pairBox, zoomBox] = await Promise.all([pairButton(page, left!).boundingBox(), paneView(page, left!).locator('[data-pane-zoom="false"]').boundingBox()]);
+    expect(pairBox!.x + pairBox!.width).toBeLessThanOrEqual(zoomBox!.x + 1);
     await paneView(page, shell).locator("[data-terminal-host]").click();
     await page.mouse.move(1, 1);
     await expect(pairButton(page, left!)).toHaveCSS("opacity", "1");
@@ -448,6 +448,11 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await expect(deskTabs(page)).toHaveCount(1);
+    // D-65: ⇧⌘↩ on the pane is the tab's zoom, which focus mode leaves alone: nothing moves and the mode stays.
+    await page.keyboard.press(chord("toggle_zoom"));
+    await quietFor(page, 300, "a zoom or a mode change would have redrawn by now");
+    await expect(page.locator('[data-canvas][data-zoomed="true"]')).toHaveCount(0);
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
 
     // D-57: ⌘E folds the desk, drawing the pane alone as a pane zoom did, and stands it again; the mode stays on.
     await page.keyboard.press(chord("toggle_lane"));
@@ -455,38 +460,9 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await expect(band(page)).toBeVisible();
     await screenshot(page, "pair-desk-folded");
-    // D-61: a tool floating over the pane drawn alone stands under the band, so its way back is never covered.
-    await showTool(page, "explorer");
-    const leave = band(page).locator("[data-pair-leave]");
-    await expect.poll(() => leave.evaluate((button) => {
-      const rect = button.getBoundingClientRect();
-      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-    })).toBe(true);
-    await page.locator('[data-lane-tool="explorer"]').click();
-    await expect(page.locator('aside[data-lane="explorer"]')).toHaveCount(0);
     await page.keyboard.press(chord("toggle_lane"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
     await expect(deskTabs(page)).toHaveCount(1);
-    // D-63: the sidebar and the rail stay; the rail's desk button is ⌘E here, pressed while the desk stands and,
-    // folded, counting the left pane's Views; choosing one from the pane's `N views` stands the desk again.
-    const deskButton = page.locator('[data-tool-rail] [data-lane-tool="documents"]');
-    await expect(page.locator("nav[data-sidebar]")).toBeVisible();
-    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
-    await expect(deskButton.locator("[data-lane-badge]")).toHaveCount(0);
-    await deskButton.click();
-    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
-    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
-    await expect(deskButton).toHaveAttribute("aria-pressed", "false");
-    await expect(deskButton.locator('[data-lane-badge="1"]')).toBeVisible();
-    await deskButton.click();
-    await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
-    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
-    await page.keyboard.press(chord("toggle_lane"));
-    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
-    await paneView(page, left!).locator("[data-pane-views]").click();
-    await page.locator(`[data-pane-views-list="${left}"] [role="menuitem"]`).first().click();
-    await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
-    await expect(front(page)).toHaveAttribute("aria-label", /a\.md/);
     // D-46: Escape in the desk only moves the keyboard.
     await front(page).click();
     await page.keyboard.press("Escape");
@@ -521,7 +497,6 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
     await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveCount(1);
-    await screenshot(page, "pair-desk-expanded");
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
     await chooseExpand(page);
@@ -553,6 +528,71 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await quietFor(page, 300, "a hidden pair view would have been drawn by now");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect(band(page)).toHaveCount(0);
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("the rail's desk button folds and stands focus mode's desk, counting the pane's Views while folded, and a tool stands under the band (D-61, D-63)", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const fixture = path.join(engine.root, "fixture");
+    daemon = await startHided(engine, "pair-view-rail");
+    const [left] = engine.panes;
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    const opened = await leftAgent(["file", "open", "a.md"]);
+    expect(opened.status, opened.out).toBe(0);
+    await paneView(page, left!).locator("[data-terminal-host]").click();
+    const tabRow = (await page.locator("[data-tab-bar]").first().boundingBox())!;
+    const agents = (await page.locator("[data-agent-area]").boundingBox())!;
+    await page.keyboard.press(chord("pair_view"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await expect(deskTabs(page)).toHaveCount(1);
+    // D-61: the band takes the tab row's place and height, so the body is as tall as outside the mode.
+    const bandBox = (await band(page).boundingBox())!;
+    const paneBox = (await paneView(page, left!).boundingBox())!;
+    expect(Math.abs(bandBox.y - tabRow.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bandBox.height - tabRow.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(paneBox.y - (tabRow.y + tabRow.height))).toBeLessThanOrEqual(1);
+    expect(Math.abs(paneBox.y + paneBox.height - (agents.y + agents.height))).toBeLessThanOrEqual(1);
+
+    // D-63: the sidebar and the rail stay; the rail's desk button is ⌘E here, pressed while the desk stands and,
+    // folded, counting the left pane's Views; choosing one from the pane's `N views` stands the desk again.
+    const deskButton = page.locator('[data-tool-rail] [data-lane-tool="documents"]');
+    await expect(page.locator("nav[data-sidebar]")).toBeVisible();
+    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
+    await expect(deskButton.locator("[data-lane-badge]")).toHaveCount(0);
+    await deskButton.click();
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await expect(deskButton).toHaveAttribute("aria-pressed", "false");
+    await expect(deskButton.locator('[data-lane-badge="1"]')).toBeVisible();
+    await deskButton.click();
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
+    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
+    await paneView(page, left!).locator("[data-pane-views]").click();
+    await page.locator(`[data-pane-views-list="${left}"] [role="menuitem"]`).first().click();
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).not.toHaveAttribute("data-pair-alone", "true");
+    await expect(front(page)).toHaveAttribute("aria-label", /a\.md/);
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
+    // D-61: a tool floating over the pane drawn alone stands under the band, so its way back is never covered.
+    await showTool(page, "explorer");
+    const leave = band(page).locator("[data-pair-leave]");
+    await expect.poll(() => leave.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    })).toBe(true);
+    await page.locator('[data-lane-tool="explorer"]').click();
+    await expect(page.locator('aside[data-lane="explorer"]')).toHaveCount(0);
   } finally {
     daemon?.stop();
     engine.stop();

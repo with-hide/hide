@@ -702,7 +702,8 @@ mod tests {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                             "area": {"x":0,"y":0,"width":80,"height":24},
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
@@ -910,7 +911,8 @@ mod tests {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                             "area": {"x":0,"y":0,"width":80,"height":24},
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
@@ -1113,7 +1115,8 @@ mod tests {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                     "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                             "area": {"x":0,"y":0,"width":80,"height":24},
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
@@ -1245,7 +1248,8 @@ mod tests {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                         "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                             "area": {"x":0,"y":0,"width":80,"height":24},
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]
@@ -1337,7 +1341,8 @@ mod tests {
                 match method {
                     "session" => reply(session(json!({"type": "session_snapshot", "snapshot": {
                                                 "workspaces": [], "tabs": [], "panes": [], "agents": [],
-                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                             "area": {"x":0,"y":0,"width":80,"height":24},
+                        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                            "area": {"x":0,"y":0,"width":80,"height":24},
                             "focused_pane_id": "parent-pane",
                             "panes": [{"pane_id":"parent-pane", "focused":true,
                                 "rect":{"x":0,"y":0,"width":80,"height":24}}], "splits": []}]

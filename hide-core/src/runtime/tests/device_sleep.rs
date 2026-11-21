@@ -176,7 +176,8 @@ fn engine_session(seq: u64) -> SessionSnapshotPayload {
             "state_change_seq": seq,
             "agent_session": {"kind": "id", "value": SESSION}}],
         "workspaces": [{"workspace_id": "w1", "label": "repo"}],
-        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",             "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": DEVICE_PANE,
+        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": DEVICE_PANE,
             "panes": [{"pane_id": DEVICE_PANE, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
             "splits": []}]
     }))

@@ -15,18 +15,20 @@ fn tab_layouts_update_only_the_tab_whose_layout_changed() {
     ))));
     let before = runtime.snapshot().pane_layouts.clone();
 
-    let next = super::control_order::with_second_pane(
-        tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1"),
-        "w-order:t2",
-    );
+    let mut next = tab_order_payload(checkout_path, &tabs, &tabs, "w-order:t1");
+    next.layouts
+        .iter_mut()
+        .find(|layout| layout.tab_id == "w-order:t2")
+        .expect("the second tab's layout")
+        .zoomed = true;
     assert!(runtime.ingest_session(Ok(next)));
 
     let after = runtime.snapshot().pane_layouts.clone();
     assert_eq!(after.len(), before.len());
     for (was, now) in before.iter().zip(after.iter()) {
         if now.tab_id == "w-order:t2" {
-            assert_eq!(was.pane_ids().len(), 1);
-            assert_eq!(now.pane_ids().len(), 2);
+            assert!(!was.zoomed);
+            assert!(now.zoomed);
         } else {
             assert_eq!(was, now);
         }
@@ -534,6 +536,7 @@ fn a_closed_projected_pane_retargets_to_the_remaining_pane_in_its_checkout() {
         workspace_id: "w-close".to_owned(),
         tab_id: "w-close:t1".to_owned(),
         focused_pane_id: "w-close:p1".to_owned(),
+        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w-close:p1".to_owned(),
         },
@@ -548,6 +551,7 @@ fn a_closed_projected_pane_retargets_to_the_remaining_pane_in_its_checkout() {
         "layouts": [{
             "workspace_id": "w-close",
             "tab_id": "w-close:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w-close:p2",
             "panes": [{
@@ -617,7 +621,8 @@ fn read_record_change_leaves_remote_and_editor_zoom_alone() {
             }],
             "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
             "layouts": [{
-                "workspace_id": "w1", "tab_id": "t1",                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w1:p1",
                 "panes": [{"pane_id": "w1:p1",
                            "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],

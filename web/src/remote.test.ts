@@ -85,7 +85,7 @@ function session(overrides: Partial<RemoteSession> = {}): RemoteSession {
         workspace_id: "remote:studio:workspace:w9",
         tab_id: "remote:studio:tab:w9:t1",
         focused_pane_id: PANE_A,
-       
+        zoomed: false,
         frames: [
           { pane_id: PANE_A, x: 0, y: 0, width: 0.5, height: 1 },
           { pane_id: PANE_B, x: 0.5, y: 0, width: 0.5, height: 1 },
@@ -199,7 +199,7 @@ describe("remote view", () => {
   });
 
   it("draws another Agent area's tab of a node with its own panes and layout, the keyboard left on the front tab", () => {
-    const second = { workspace_id: "remote:studio:workspace:w9", tab_id: "remote:studio:tab:w9:t2", focused_pane_id: "remote:studio:pane:w9:p3", frames: [{ pane_id: "remote:studio:pane:w9:p3", x: 0, y: 0, width: 1, height: 1 }] };
+    const second = { workspace_id: "remote:studio:workspace:w9", tab_id: "remote:studio:tab:w9:t2", focused_pane_id: "remote:studio:pane:w9:p3", zoomed: false, frames: [{ pane_id: "remote:studio:pane:w9:p3", x: 0, y: 0, width: 1, height: 1 }] };
     const host = session({ pane_layouts: [...session().pane_layouts, second] });
     const front = remoteView(host)!;
     expect(remoteTabView(host, front, null)).toBe(front);
@@ -236,21 +236,23 @@ describe("commands with an SSH device selected", () => {
     useUiStore.setState({ notices: [], pendingClose: null });
   });
 
-  it("splits and focuses the host's exact pane and sends nothing local", () => {
+  it("splits, zooms and focuses the host's exact pane and sends nothing local", () => {
     seed(rest("studio"));
     expect(useShellStore.getState().focusedPaneId).toBe(PANE_A);
     const { sent, actions } = recorder();
     actions.split("right");
+    actions.toggleZoom();
     actions.focusPane(PANE_B);
     actions.focusTab("remote:studio:tab:w9:t2");
     actions.createTab();
-    expect(sent.map((event) => event.kind)).toEqual(["remote_control", "remote_control", "remote_control", "remote_control"]);
-    expect(sent.map((event) => event.payload.target_id)).toEqual(["studio", "studio", "studio", "studio"]);
+    expect(sent.map((event) => event.kind)).toEqual(["remote_control", "remote_control", "remote_control", "remote_control", "remote_control"]);
+    expect(sent.map((event) => event.payload.target_id)).toEqual(["studio", "studio", "studio", "studio", "studio"]);
     expect(sent[0]?.payload).toMatchObject({ action: "split_pane", pane_id: PANE_A, direction: "right", cwd: "/home/remote/app" });
-    expect(sent[1]?.payload).toMatchObject({ action: "focus_pane", pane_id: PANE_B });
-    expect(sent[2]?.payload).toMatchObject({ action: "focus_tab", tab_id: "remote:studio:tab:w9:t2" });
-    expect(sent[3]?.payload).toMatchObject({ action: "create_tab", workspace_id: "remote:studio:workspace:w9", checkout_id: "remote:studio:checkout:w9", cwd: "/home/remote/app", label: "3" });
-    expect(new Set(sent.map((event) => event.payload.request_id)).size).toBe(4);
+    expect(sent[1]?.payload).toMatchObject({ action: "toggle_pane_zoom", pane_id: PANE_A });
+    expect(sent[2]?.payload).toMatchObject({ action: "focus_pane", pane_id: PANE_B });
+    expect(sent[3]?.payload).toMatchObject({ action: "focus_tab", tab_id: "remote:studio:tab:w9:t2" });
+    expect(sent[4]?.payload).toMatchObject({ action: "create_tab", workspace_id: "remote:studio:workspace:w9", checkout_id: "remote:studio:checkout:w9", cwd: "/home/remote/app", label: "3" });
+    expect(new Set(sent.map((event) => event.payload.request_id)).size).toBe(5);
   });
 
   it("asks before closing working remote work and closes it on that host after confirming", () => {

@@ -1441,6 +1441,7 @@ fn read_record_follows_a_tab_switch_the_operator_made() {
             serde_json::json!({
                 "workspace_id": "w-order",
                 "tab_id": tab_id,
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": format!("{tab_id}:p"),
                 "panes": [{
@@ -1568,6 +1569,7 @@ fn read_record_is_released_and_not_raised_by_a_checkout_switch() {
             serde_json::json!({
                 "workspace_id": workspace_id,
                 "tab_id": tab_id,
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": focused,
                 "panes": pane_ids.iter().enumerate().map(|(index, pane_id)| serde_json::json!({
@@ -1704,6 +1706,7 @@ fn a_remote_pane_left_in_the_selection_does_not_block_local_projection() {
         "layouts": [{
             "workspace_id": "wL",
             "tab_id": "wL:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "wL:p1",
             "panes": [{"pane_id": "wL:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -2321,6 +2324,7 @@ fn read_record_reaches_the_pane_tree_and_not_only_the_agent_rows() {
         serde_json::json!({
             "workspace_id": "ws-remote",
             "tab_id": format!("ws-remote:t{index}"),
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": pane_id,
             "panes": [{"pane_id": pane_id,

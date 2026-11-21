@@ -2952,13 +2952,8 @@ fn connected_device_runtime() -> Runtime {
 }
 
 /// `target`'s engine as it reports one workspace with the tabs `tabs`, tab
-/// `t1` holding a second pane (`t1b`) until it is `t1b_closed`.
-fn device_report(
-    target: &str,
-    path: &str,
-    tabs: &[&str],
-    t1b_closed: bool,
-) -> RemoteSessionSnapshot {
+/// `t1` holding a second pane (`t1b`) for a zoom to hide, zoomed or not.
+fn device_report(target: &str, path: &str, tabs: &[&str], zoomed: bool) -> RemoteSessionSnapshot {
     let tabs = tabs.iter().map(|tab| (*tab, path)).collect::<Vec<_>>();
     let mut raw = session(vec![engine_workspace(target, "w1", path, &tabs)]);
     let t1 = format!("remote:{target}:tab:t1");
@@ -2966,7 +2961,6 @@ fn device_report(
         .tabs
         .iter_mut()
         .find(|tab| tab.id.as_deref() == Some(t1.as_str()))
-        && !t1b_closed
     {
         tab.panes
             .push(pane(&format!("remote:{target}:pane:t1b"), path));
@@ -2976,21 +2970,24 @@ fn device_report(
             workspace_id: format!("remote:{target}:workspace:w1"),
             tab_id: format!("remote:{target}:tab:t1"),
             focused_pane_id: format!("remote:{target}:pane:t1"),
+            zoomed,
             frames: Vec::new(),
         });
     raw
 }
 
-/// Asks the mini for `request` and returns what a caller sees of it: whether
-/// it was turned away.
-fn ask_mini(runtime: &mut Runtime, request_id: &str, request: RemoteControlRequest) -> bool {
+/// Starts a zoom of the mini's pane `t1` and returns what a caller sees of the
+/// next one: whether it was turned away.
+fn zoom_t1(runtime: &mut Runtime, request_id: &str) -> bool {
     runtime.snapshot.status.last_error = None;
     runtime.request_remote_control(RemoteControlPayload {
         target_id: TARGET.to_owned(),
         request_id: request_id.to_owned(),
         report_pane_focus_outcome: false,
         focus_device: false,
-        request,
+        request: RemoteControlRequest::TogglePaneZoom {
+            pane_id: format!("remote:{TARGET}:pane:t1"),
+        },
     });
     runtime
         .snapshot
@@ -3000,27 +2997,12 @@ fn ask_mini(runtime: &mut Runtime, request_id: &str, request: RemoteControlReque
         .is_some_and(|error| error.kind == "remote.control.in_progress")
 }
 
-fn close_t1b() -> RemoteControlRequest {
-    RemoteControlRequest::ClosePane {
-        pane_id: format!("remote:{TARGET}:pane:t1b"),
-        confirmed: true,
-    }
-}
-
-fn split_t1() -> RemoteControlRequest {
-    RemoteControlRequest::SplitPane {
-        pane_id: format!("remote:{TARGET}:pane:t1"),
-        direction: PaneSplitDirection::Right,
-        cwd: None,
-    }
-}
-
-fn answer_close_t1b(runtime: &mut Runtime, request_id: &str) {
+fn answer_zoom_t1(runtime: &mut Runtime, request_id: &str) {
     assert!(runtime.ingest_remote_control_result(
         TARGET,
         request_id,
-        RemoteControlAction::Pane(PaneControlAction::Close {
-            pane_id: "t1b".to_owned(),
+        RemoteControlAction::Pane(PaneControlAction::ToggleZoom {
+            pane_id: "t1".to_owned(),
         }),
         Ok(RemoteControlOutcome::Acknowledged {
             created_tab_id: None,
@@ -3067,6 +3049,34 @@ fn close_pane_t2() -> RemoteControlRequest {
     }
 }
 
+/// Zoom has nothing to hide on a tab's only pane: the device's engine answers
+/// it unchanged (`single_pane`), so no session would confirm it, and the
+/// operation left waiting turned away every later split, zoom and close in
+/// the tab. Such a zoom is not sent, and the tab stays free.
+#[test]
+fn a_zoom_on_a_device_tabs_only_pane_is_not_sent() {
+    let t = tree();
+    let mut runtime = connected_device_runtime();
+    let mut report = device_report(TARGET, &t.main, &["t1"], false);
+    report.workspaces[0].checkouts[0].tabs[0].panes.truncate(1);
+    runtime.ingest_remote_session(TARGET, Ok(report));
+    let requests = recording_device(&mut runtime);
+
+    assert!(!zoom_t1(&mut runtime, "zoom-1"));
+    assert!(
+        runtime.remote_operations.is_empty(),
+        "nothing waits on the tab"
+    );
+    assert!(
+        requests.lock().unwrap().is_empty(),
+        "the device was not asked"
+    );
+    assert_eq!(
+        diagnostic_messages(&runtime, "remote.control.zoom_single_pane"),
+        ["Pane remote:mini:pane:t1 on mini is its tab's only pane; zoom was not sent"]
+    );
+}
+
 /// A device's session update that shows a pane operation's effect can reach
 /// the runtime before the answer to the request does, because the two come from
 /// different threads. The update finds the operation still transmitting and
@@ -3081,41 +3091,41 @@ fn a_device_pane_operation_whose_session_arrived_before_its_answer_settles_on_th
     runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
     let _requests = recording_device(&mut runtime);
 
-    assert!(!ask_mini(&mut runtime, "close-1", close_t1b()));
+    assert!(!zoom_t1(&mut runtime, "zoom-1"));
     assert_eq!(runtime.remote_operations.len(), 1);
 
-    // The device's update without the closed pane arrives while the request
+    // The device's update with the zoomed layout arrives while the request
     // is still unanswered.
     runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], true)));
     assert_eq!(runtime.remote_operations.len(), 1);
 
-    answer_close_t1b(&mut runtime, "close-1");
+    answer_zoom_t1(&mut runtime, "zoom-1");
     assert!(
         runtime.remote_operations.is_empty(),
-        "the answer settled the close from the session already received"
+        "the answer settled the zoom from the session already received"
     );
     assert_eq!(
         diagnostic_messages(&runtime, "remote.control.topology_confirmed"),
         [
-            "Confirmed pane.close for remote:mini:pane:t1b on mini from the session received before it waited"
+            "Confirmed pane.zoom for remote:mini:pane:t1 on mini from the session received before it waited"
         ]
     );
 
     // The next operation in the tab is sent, not turned away as running.
-    assert!(!ask_mini(&mut runtime, "split-1", split_t1()));
+    assert!(!zoom_t1(&mut runtime, "zoom-2"));
     assert_eq!(
         pending_remote(&runtime),
         [(
             TARGET.to_owned(),
-            "split-1".to_owned(),
+            "zoom-2".to_owned(),
             "transmitting".to_owned()
         )]
     );
 }
 
-/// The held session counts only for what it shows: one that still holds the
-/// closed pane leaves the operation waiting and the tab refusing, until the
-/// device reports the effect itself.
+/// The held session counts only for what it shows: one that does not show the
+/// zoom leaves the operation waiting and the tab refusing, until the device
+/// reports the effect itself.
 #[test]
 fn a_held_device_session_that_does_not_show_the_effect_leaves_the_operation_waiting() {
     let t = tree();
@@ -3123,19 +3133,16 @@ fn a_held_device_session_that_does_not_show_the_effect_leaves_the_operation_wait
     runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], false)));
     let _requests = recording_device(&mut runtime);
 
-    assert!(!ask_mini(&mut runtime, "close-1", close_t1b()));
-    answer_close_t1b(&mut runtime, "close-1");
+    assert!(!zoom_t1(&mut runtime, "zoom-1"));
+    answer_zoom_t1(&mut runtime, "zoom-1");
     assert_eq!(pending_remote(&runtime)[0].2, "awaiting_topology");
-    assert!(
-        ask_mini(&mut runtime, "split-1", split_t1()),
-        "the tab still refuses"
-    );
+    assert!(zoom_t1(&mut runtime, "zoom-2"), "the tab still refuses");
 
     runtime.ingest_remote_session(TARGET, Ok(device_report(TARGET, &t.main, &["t1"], true)));
     assert!(runtime.remote_operations.is_empty());
     assert_eq!(
         diagnostic_messages(&runtime, "remote.control.topology_confirmed"),
-        ["Confirmed pane.close for remote:mini:pane:t1b on mini from fresh topology"]
+        ["Confirmed pane.zoom for remote:mini:pane:t1 on mini from fresh topology"]
     );
 }
 

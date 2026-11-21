@@ -1914,7 +1914,8 @@ mod worktree_observer_tests {
                 "tabs": [{"workspace_id": "w1", "tab_id": "w1:t1"}],
                 "panes": [{"pane_id": "w1:p1", "cwd": path}],
                 "layouts": [{
-                    "workspace_id": "w1", "tab_id": "w1:t1",                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                    "workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                    "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                     "focused_pane_id": "w1:p1",
                     "panes": [{"pane_id": "w1:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                     "splits": []

@@ -989,7 +989,8 @@ pub(super) fn split_lineage_json() -> serde_json::Value {
         ],
         "tabs": [{"workspace_id":"w1","tab_id":"t1","label":""}],
         "layouts": [{
-            "workspace_id":"w1","tab_id":"t1",            "area":{"x":0,"y":0,"width":80,"height":24},
+            "workspace_id":"w1","tab_id":"t1","zoomed":false,
+            "area":{"x":0,"y":0,"width":80,"height":24},
             "focused_pane_id":"w1:p1",
             "panes":[
                 {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":40,"height":24}},
@@ -1260,7 +1261,8 @@ pub(super) fn ingest_lineage(runtime: &mut Runtime, rows: &[(&str, Option<&str>,
         .enumerate()
         .map(|(index, (pane, _, _, _))| {
             serde_json::json!({
-                "workspace_id":"w1","tab_id":format!("t{index}"),                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":format!("t{index}"),"zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":pane,
                 "panes":[{"pane_id":pane,"rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
@@ -1960,7 +1962,8 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
         ],
         "tabs": [{"workspace_id":"w1","tab_id":"t1","label":""}],
         "layouts": [{
-            "workspace_id":"w1","tab_id":"t1",            "area":{"x":0,"y":0,"width":80,"height":24},
+            "workspace_id":"w1","tab_id":"t1","zoomed":false,
+            "area":{"x":0,"y":0,"width":80,"height":24},
             "focused_pane_id":"w1:p1",
             "panes":[
                 {"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":40,"height":24}},
@@ -2369,37 +2372,43 @@ fn a_delegation_session_projects_every_state_the_operator_has_to_tell_apart() {
         ],
         "layouts": [
             {
-                "workspace_id":"w1","tab_id":"t1",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t1","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p1",
                 "panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
             },
             {
-                "workspace_id":"w1","tab_id":"t2",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t2","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p2",
                 "panes":[{"pane_id":"w1:p2","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
             },
             {
-                "workspace_id":"w1","tab_id":"t6",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t6","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p3",
                 "panes":[{"pane_id":"w1:p3","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
             },
             {
-                "workspace_id":"w1","tab_id":"t3",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t3","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p4",
                 "panes":[{"pane_id":"w1:p4","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
             },
             {
-                "workspace_id":"w1","tab_id":"t4",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t4","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p5",
                 "panes":[{"pane_id":"w1:p5","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]
             },
             {
-                "workspace_id":"w1","tab_id":"t5",                "area":{"x":0,"y":0,"width":120,"height":40},
+                "workspace_id":"w1","tab_id":"t5","zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},
                 "focused_pane_id":"w1:p6",
                 "panes":[{"pane_id":"w1:p6","rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]

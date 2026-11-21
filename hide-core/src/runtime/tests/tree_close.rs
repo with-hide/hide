@@ -55,6 +55,7 @@ fn tree_payload_in(
             layouts.push(serde_json::json!({
                 "workspace_id": workspace,
                 "tab_id": tab,
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": pane,
                 "panes": in_tab,
@@ -481,6 +482,7 @@ fn wide_payload(children: usize, present: &[String]) -> SessionSnapshotPayload {
         layouts.push(serde_json::json!({
             "workspace_id": "w1",
             "tab_id": tab,
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": pane,
             "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],

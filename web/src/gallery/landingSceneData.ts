@@ -375,7 +375,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
     ...scene.rest,
     ui_state: { ...scene.rest.ui_state!, sidebar_lens: lens },
     navigator: { ...navigator, devices, focused_workspace_id: project.id, focused_checkout_id: main.id, workspaces },
-    pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
+    pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], zoomed: false, root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
     workspace_view: {
       agent_layout: { root: { area: { id: "g1", active: tab.id, displays: [{ id: tab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
       device_id: "local", path: main.path, open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "project", document_width: HERO_LANE_WIDTH, explorer_width: null, panel_width: HERO_LANE_WIDTH, lane_called: 0, lane_calls: 0, lane_called_side: "view",
@@ -452,7 +452,7 @@ export function landingBrowser(nowMs: number, width: number, step: BrowserStep):
   const document: EditorDocumentSnapshot = { path, language: "pdf", document_kind: "pdf", contents_utf8: "", revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
   const rest: SnapshotRest = {
     ...scene.rest,
-    pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: BROWSER_PANE, root: { type: "pane", pane_id: BROWSER_PANE } }],
+    pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: BROWSER_PANE, zoomed: false, root: { type: "pane", pane_id: BROWSER_PANE } }],
     workspace_view: {
       ...scene.rest.workspace_view!,
       tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: 820,

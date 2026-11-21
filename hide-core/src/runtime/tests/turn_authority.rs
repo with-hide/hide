@@ -159,7 +159,8 @@ fn sync_inputs(
         "panes": [{"pane_id": PANE, "cwd": "/fixture", "tokens": {}}],
         "tabs": [{"workspace_id": "w1", "tab_id": "t0", "label": ""}],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "t0",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w1", "tab_id": "t0", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": PANE,
             "panes": [{"pane_id": PANE, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
             "splits": [],
@@ -400,7 +401,8 @@ fn a_newer_state_is_observed_and_laid_in_one_step() {
             "panes": [{"pane_id": PANE, "cwd": "/fixture", "tokens": {}}],
             "tabs": [{"workspace_id": "w1", "tab_id": "t0", "label": ""}],
             "layouts": [{
-                "workspace_id": "w1", "tab_id": "t0",                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "w1", "tab_id": "t0", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": PANE,
                 "panes": [{"pane_id": PANE, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                 "splits": [],

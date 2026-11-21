@@ -27,6 +27,8 @@ export const menusEnglish = {
   "menus.forkSide": "To the right",
   "menus.closeTerminal": "Close terminal",
   "menus.sleep": "Sleep agent",
+  "menus.zoom": "Zoom terminal",
+  "menus.unzoom": "Exit zoom",
   "menus.parent": "Parent: {{name}}",
   "menus.sibling": "Sibling: {{name}}",
 } as const;
@@ -58,6 +60,8 @@ const ko = {
   "menus.forkSide": "오른쪽으로 포크",
   "menus.closeTerminal": "터미널 닫기",
   "menus.sleep": "에이전트 재우기",
+  "menus.zoom": "터미널 확대",
+  "menus.unzoom": "확대 해제",
   "menus.parent": "부모 · {{name}}",
   "menus.sibling": "같은 부모의 세션 · {{name}}",
 } satisfies Catalog<typeof menusEnglish>;
@@ -89,6 +93,8 @@ const zhCN = {
   "menus.forkSide": "在右侧派生",
   "menus.closeTerminal": "关闭终端",
   "menus.sleep": "休眠",
+  "menus.zoom": "放大终端",
+  "menus.unzoom": "退出放大",
   "menus.parent": "父会话：{{name}}",
   "menus.sibling": "同级会话：{{name}}",
 } satisfies Catalog<typeof menusEnglish>;
@@ -120,6 +126,8 @@ const ja = {
   "menus.forkSide": "右側に分岐",
   "menus.closeTerminal": "ターミナルを閉じる",
   "menus.sleep": "スリープ",
+  "menus.zoom": "ターミナルを拡大",
+  "menus.unzoom": "拡大を解除",
   "menus.parent": "親: {{name}}",
   "menus.sibling": "兄弟: {{name}}",
 } satisfies Catalog<typeof menusEnglish>;

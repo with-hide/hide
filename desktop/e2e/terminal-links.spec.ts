@@ -454,7 +454,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await showFiles(page);
   // This menu scenario addresses whole, unwrapped links. Give the fixture's
   // split pane the full lane so opening Agent Views cannot wrap the URL.
-  await onePane(page, paneId);
+  await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
   // Where the holder says no soft wraps, a blank row keeps the URL apart
   // from the next word should it reach the grid's right edge.
@@ -759,12 +759,10 @@ test("Korean prose links only the real path and opens that file", async () => {
 });
 
 
-/** The test's fixture has two splits; give unwrapped links one whole pane by closing the other. */
-async function onePane(page: Page, paneId: string): Promise<void> {
-  const other = await page.locator(`[data-pane-view]:not([data-pane-view="${paneId}"])`).getAttribute("data-pane-view");
-  await page.locator(`[data-terminal="${other}"]`).click({ button: "right" });
-  await page.locator('[data-menu-item="close_pane"]').click();
-  await expect(page.locator("[data-pane-view]")).toHaveCount(1);
+/** The shared fixture has two splits; give unwrapped links one whole pane. */
+async function zoomPane(page: Page, paneId: string): Promise<void> {
+  await page.locator(`[data-terminal="${paneId}"]`).click({ button: "right" });
+  await page.locator('[data-menu-item="toggle_zoom"]').click();
 }
 
 test("prose written straight against a bracket links only the path or address inside it", async () => {
@@ -818,7 +816,7 @@ test("dense terminal path hover measures cold and warm native work", async () =>
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.3));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await onePane(page, paneId);
+  await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(tokens.join(" ").length + 12);
   const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
   await print(page, paneId, [tokens.join(" "), "DENSE-END"], "DENSE-END");

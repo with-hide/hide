@@ -10,7 +10,7 @@
 # 5 printing), opens the release `hided` built here in the hosted
 # image's Google Chrome, headless, and records idle resources, one key echo
 # distribution while an agent changes state every two seconds, and 20 rounds
-# of split, focus mode, close, new tab and tab switch latencies. run.sh starts Chrome
+# of split, zoom, close, new tab and tab switch latencies. run.sh starts Chrome
 # with `--remote-debugging-port=0` and reads the port Chrome chose from
 # `DevToolsActivePort` in the run's own profile.
 #

@@ -43,6 +43,7 @@ fn eligible_agent_panes_open_on_the_terminal_and_keep_the_conversation_they_aske
                 serde_json::json!({
                     "workspace_id": "w1",
                     "tab_id": format!("w1:t{index}"),
+                    "zoomed": false,
                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                     "focused_pane_id": pane_id,
                     "panes": [{"pane_id": pane_id, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -204,9 +205,11 @@ fn an_acknowledged_relocation_stays_in_flight_until_the_layout_shows_the_move() 
         {"workspace_id":"w1","tab_id":"t2","label":"Implementor"}
     ]);
     moved["layouts"] = serde_json::json!([
-        {"workspace_id":"w1","tab_id":"t1",         "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
+        {"workspace_id":"w1","tab_id":"t1","zoomed":false,
+         "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
          "panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]},
-        {"workspace_id":"w1","tab_id":"t2",         "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p2",
+        {"workspace_id":"w1","tab_id":"t2","zoomed":false,
+         "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p2",
          "panes":[{"pane_id":"w1:p2","rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}
     ]);
     runtime.ingest_session(Ok(
@@ -723,13 +726,15 @@ fn pane_focus_request_moves_to_the_checkout_that_owns_the_target() {
             ],
             "layouts": [
                 {
-                    "workspace_id": "ws-a", "tab_id": "ws-a:t1",                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                    "workspace_id": "ws-a", "tab_id": "ws-a:t1", "zoomed": false,
+                    "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                     "focused_pane_id": "ws-a:p1",
                     "panes": [{"pane_id": "ws-a:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                     "splits": []
                 },
                 {
-                    "workspace_id": "ws-b", "tab_id": "ws-b:t1",                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                    "workspace_id": "ws-b", "tab_id": "ws-b:t1", "zoomed": false,
+                    "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                     "focused_pane_id": "ws-b:p1",
                     "panes": [{"pane_id": "ws-b:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                     "splits": []
@@ -2346,12 +2351,14 @@ fn split_tab_payload(checkout_path: &str, focused: &str) -> SessionSnapshotPaylo
         ],
         "panes": panes,
         "layouts": [{
-            "workspace_id": "w-order", "tab_id": "w-order:t1",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w-order", "tab_id": "w-order:t1", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": focused,
             "panes": [rect("w-order:a", 0, 40), rect("w-order:b", 40, 40)],
             "splits": [{"direction": "right", "ratio": 0.5, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}]
         }, {
-            "workspace_id": "w-order", "tab_id": "w-order:t2",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w-order", "tab_id": "w-order:t2", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w-order:c",
             "panes": [rect("w-order:c", 0, 80)],
             "splits": []
@@ -2603,7 +2610,8 @@ fn two_tab_focus_payload(t1_focused: &str) -> SessionSnapshotPayload {
             {"workspace_id": "w1", "tab_id": "t2", "label": ""}
         ],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "t1",             "area": {"x": 0, "y": 0, "width": 90, "height": 24},
+            "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 90, "height": 24},
             "focused_pane_id": t1_focused,
             "panes": [pane_rect("w1:p1", 0, 30), pane_rect("w1:p2", 30, 30), pane_rect("w1:p3", 60, 30)],
             "splits": [
@@ -2613,7 +2621,8 @@ fn two_tab_focus_payload(t1_focused: &str) -> SessionSnapshotPayload {
                  "rect": {"x": 30, "y": 0, "width": 60, "height": 24}}
             ]
         }, {
-            "workspace_id": "w1", "tab_id": "t2",             "area": {"x": 0, "y": 0, "width": 90, "height": 24},
+            "workspace_id": "w1", "tab_id": "t2", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 90, "height": 24},
             "focused_pane_id": "w1:p4",
             "panes": [pane_rect("w1:p4", 0, 90)],
             "splits": []
@@ -3554,6 +3563,7 @@ fn a_plain_terminal_pane_cwd_is_reconciled_into_its_checkout() {
         "layouts": [{
             "workspace_id": "ws-remote",
             "tab_id": "ws-remote:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "plain:p1",
             "panes": [{"pane_id": "plain:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3622,6 +3632,7 @@ fn an_exited_panes_root_directory_does_not_become_a_checkout() {
         "layouts": [{
             "workspace_id": "w2W",
             "tab_id": "w2W:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w2W:p1",
             "panes": [
@@ -3686,6 +3697,7 @@ fn a_returned_pane_id_selects_its_layout_when_other_panes_share_the_cwd() {
         workspace_id: "w2X".to_owned(),
         tab_id: "w2X:t1".to_owned(),
         focused_pane_id: "w2X:pB".to_owned(),
+        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w2X:pB".to_owned(),
         },
@@ -3718,6 +3730,7 @@ fn a_returned_pane_id_selects_its_layout_when_other_panes_share_the_cwd() {
             {
                 "workspace_id": "w2X",
                 "tab_id": "w2X:t1",
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w2X:pB",
                 "panes": [{"pane_id": "w2X:pB", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3726,6 +3739,7 @@ fn a_returned_pane_id_selects_its_layout_when_other_panes_share_the_cwd() {
             {
                 "workspace_id": "w3V",
                 "tab_id": "w3V:t1",
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": selected_pane,
                 "panes": [{"pane_id": selected_pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3809,6 +3823,7 @@ fn a_missing_selected_pane_reports_without_falling_back_to_a_same_cwd_pane() {
         "layouts": [{
             "workspace_id": "old-workspace",
             "tab_id": "old-workspace:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "old:p1",
             "panes": [{"pane_id": "old:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -4159,6 +4174,7 @@ fn a_restored_pane_the_session_no_longer_has_retargets_without_reporting() {
         "layouts": [{
             "workspace_id": "w19",
             "tab_id": "w19:t1",
+            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w19:p1",
             "panes": [{"pane_id": "w19:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],

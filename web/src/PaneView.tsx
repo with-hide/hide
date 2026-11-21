@@ -3,7 +3,7 @@ import { usePaneMove } from "./PaneMoveControls";
 import { keyboardCommandOwner, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
-import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
@@ -93,6 +93,7 @@ function terminalMenuChords(): TerminalMenuContext["chords"] {
     find: commandLabel("find_in_pane"),
     splitRight: commandLabel("split_right"),
     splitDown: commandLabel("split_down"),
+    zoom: commandLabel("toggle_zoom"),
   };
 }
 
@@ -160,6 +161,8 @@ export const PaneView = memo(function PaneView({
   markStatus = null,
   markTone,
   lettersWaiting = 0,
+  paneCount,
+  zoomed,
   local = true,
   keysStayOnDesk = false,
   offline = false,
@@ -178,6 +181,10 @@ export const PaneView = memo(function PaneView({
   markTone: string;
   /** Letters the core shows waiting on this pane for a possible draft; 0 draws no pill. */
   lettersWaiting?: number;
+  /** Panes in the tab, a zoomed pane's hidden siblings included. */
+  paneCount: number;
+  /** The tab is zoomed, so this pane is the only one drawn. */
+  zoomed: boolean;
   /** False for a pane on a selected SSH device. */
   local?: boolean;
   /** Pair view's left pane taken while pair view was on screen: a desk the keys are on keeps them (D-09). */
@@ -201,7 +208,7 @@ export const PaneView = memo(function PaneView({
   const paneId = pane.id;
   const owner = useKeyboardOwner();
   const input = owner.kind === "pane" && owner.paneId === paneId;
-  // The grip and ◧ show on the pane that holds the keyboard, and on any other while it is pointed at.
+  // The grip, ◧ and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
   const tools = input ? "" : "opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100";
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
@@ -348,9 +355,13 @@ export const PaneView = memo(function PaneView({
     event.preventDefault();
     paneMenu.openTerminalAt(event.clientX, event.clientY, {
       selection: terminalSelectionText(paneId) !== null,
+      zoomed,
+      paneCount,
       chords: terminalMenuChords(),
     }, terminalLinkAt(paneId, event));
   };
+  const zoomChord = zoomed ? terminalMenuChords().zoom : "";
+  const hidden = paneCount - 1;
 
   const caption = transportCaption(transport, t, local, offline);
   // The core marks only the panes of a machine whose agents sleep: its own,
@@ -455,9 +466,33 @@ export const PaneView = memo(function PaneView({
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>
+        {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
+            always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
+        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
+        {zoomed ? (
+          <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-popover"
+              aria-label={hidden > 0 ? t("panes.unzoomHidden", { count: hidden }) : t("panes.unzoom")}
+              disabled={moving}
+              data-pane-zoom={hidden}
+              onClick={() => {
+                actions.toggleZoom(paneId);
+                // The chip goes with the zoom; a remote pane stays mounted,
+                // so the keyboard returns to its terminal rather than the page.
+                focusTerminal(paneId);
+              }}
+            >
+              <Maximize2Icon aria-hidden="true" />
+              {hidden > 0 ? <span>+{hidden}</span> : null}
+            </Button>
+          </Hint>
+        ) : null}
         {owned ? null : (
         <>
         <PaneMention paneId={paneId} actions={actions} open={mention} setOpen={setMention} anchor={
@@ -549,7 +584,6 @@ function PaneSplit({ paneId, name, actions }: { paneId: string; name: string; ac
   const views = usePaneViewRows(paneId).length > 0;
   if (!views && !cell) return null;
   const label = t(pairLabelKey(offer));
-  const chord = commandLabel("pair_view");
   const pressed = offer === "on";
   return (
     // Drawn like the head's other icons, with no box (D-48): two ghost cells and one hairline between them, only the
@@ -558,12 +592,12 @@ function PaneSplit({ paneId, name, actions }: { paneId: string; name: string; ac
       {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
       {views && cell ? <Separator orientation="vertical" className="data-[orientation=vertical]:h-(--size-icon) pane-head-tight:hidden" data-pane-split-line="true" /> : null}
       {cell ? (
-        <Hint label={label} shortcut={chord || undefined}>
+        <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
           <Button
             variant="ghost"
             size="icon-sm"
             className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
-            aria-label={chord ? `${label} ${chord}` : label}
+            aria-label={label}
             aria-pressed={pressed}
             data-pane-pair={offer}
             onClick={() => actions.togglePairView(paneId)}

@@ -1,4 +1,4 @@
-// Tabs, splits, focus mode, closes, a closed tab given back and resizes (PRD
+// Tabs, splits, zoom, closes, a closed tab given back and resizes (PRD
 // engine-bundle-3-core-owns D-14, D-24, B37): each test starts its own
 // checkout of two shell panes made through the daemon (`engine-fixture.ts`).
 
@@ -128,7 +128,7 @@ test("⌘D splits the focused pane, a divider drag moves the divider under the p
   }
 });
 
-test("of three panes the focused one is outlined, and ⇧⌘↩ draws it alone in focus mode and back", { tag: "@platform" }, async ({ page }) => {
+test("of three panes the focused one is outlined, and zoom hides the other two behind a chip", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
@@ -138,42 +138,30 @@ test("of three panes the focused one is outlined, and ⇧⌘↩ draws it alone i
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
-    const tabRow = await page.locator("[data-tab-bar]").first().boundingBox();
-    const agents = await page.locator("[data-agent-area]").boundingBox();
-    if (!tabRow || !agents) throw new Error("the tab row and the Agent area are measured before focus mode");
 
-    // A shell with nothing to show enters focus mode alone, as a pane zoom drew it (D-53, D-57).
     await page.keyboard.press(chord("toggle_zoom"));
-    await expect(page.locator("[data-pair-layer]")).toHaveAttribute("data-pair-alone", "true");
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
-    await expect.poll(() => sent.get("pair_view")).toBe(1);
-    // The pane keeps the input perimeter; the band stands in the tab row's place with the pane's name and the way back (D-61).
+    await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
+    // ⇧⌘↩ on a pane is the tab's zoom, never focus mode, which only ⌘. turns on (D-65).
+    await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
+    expect(sent.get("pair_view") ?? 0).toBe(0);
+    // Zoom keeps the input perimeter and names the two panes it hides.
+    await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);
     await expect(shellPane.locator("[data-pane-focus-outline]")).toBeVisible();
-    const band = page.locator("[data-pair-strip]");
-    await expect(band).toBeVisible();
-    await expect(band.locator("[data-pair-strip-name]")).not.toBeEmpty();
-    await expect(band.locator("[data-pair-leave]")).toBeVisible();
-    // The body is as tall as outside the mode: the band takes the tab row's place and height, and the pane fills the rest (D-61).
-    const bandBox = await band.boundingBox();
-    const paneBox = await shellPane.boundingBox();
-    if (!bandBox || !paneBox) throw new Error("the band and the pane are measured in focus mode");
-    expect(Math.abs(bandBox.y - tabRow.y)).toBeLessThanOrEqual(1);
-    expect(Math.abs(bandBox.height - tabRow.height)).toBeLessThanOrEqual(1);
-    expect(Math.abs(paneBox.y - (tabRow.y + tabRow.height))).toBeLessThanOrEqual(1);
-    expect(Math.abs(paneBox.y + paneBox.height - (agents.y + agents.height))).toBeLessThanOrEqual(1);
-    await screenshot(page, "layout-focus-alone");
-    await page.keyboard.press(chord("toggle_zoom"));
-    await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
+    await screenshot(page, "layout-zoom-chip");
+    await page.locator("[data-pane-zoom]").click();
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(2);
-    await expect.poll(() => sent.get("pair_view")).toBe(2);
-    await expect(page.locator("[data-pair-strip]")).toHaveCount(0);
+    await expect.poll(() => sent.get("toggle_zoom")).toBe(2);
+    await expect(page.locator('[data-pane-zoom]:not([data-pane-zoom="false"])')).toHaveCount(0);
   } finally {
     open.stack.stop();
   }
 });
 
-test("a right-click focuses its pane and opens the terminal menu, whose Focus mode draws the pane alone", { tag: "@platform" }, async ({ page }) => {
+test("a right-click focuses its pane and opens the terminal menu, whose Zoom pane fills the canvas", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { stack, sent } = open;
@@ -198,24 +186,22 @@ test("a right-click focuses its pane and opens the terminal menu, whose Focus mo
     await shellPane.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();
-    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Focus mode", "Copy name and ID"]) {
+    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy name and ID"]) {
       await expect(menu.getByRole("menuitem", { name: item, exact: false }).first()).toBeVisible();
     }
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
     await screenshot(page, "layout-terminal-menu");
-    await menu.getByRole("menuitem", { name: /^Focus mode/ }).click();
-    const layer = page.locator(`[data-pair-layer="${shellPaneId}"]`);
-    await expect(layer).toHaveAttribute("data-pair-alone", "true");
-    await expect.poll(() => sent.get("pair_view")).toBe(1);
-    // The pane drawn alone takes the whole body under the band, not just its own split cell (D-61).
-    const layerBox = (await layer.boundingBox())!;
-    const bandBox = (await page.locator("[data-pair-strip]").boundingBox())!;
-    const aloneBox = (await shellPane.boundingBox())!;
-    expect(Math.abs(aloneBox.width - layerBox.width)).toBeLessThan(2);
-    expect(Math.abs(aloneBox.height - (layerBox.height - bandBox.height))).toBeLessThan(2);
-    expect(Math.abs(aloneBox.x - layerBox.x)).toBeLessThan(2);
+    await menu.getByRole("menuitem", { name: /^Zoom terminal/ }).click();
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
+    await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
+    // The zoomed pane takes the whole canvas, not just its own split cell.
+    const canvasBox = (await page.locator("[data-canvas]").boundingBox())!;
+    const zoomedBox = (await page.locator('[data-pane-view][data-focused="true"]').boundingBox())!;
+    expect(Math.abs(zoomedBox.width - canvasBox.width)).toBeLessThan(2);
+    expect(Math.abs(zoomedBox.height - canvasBox.height)).toBeLessThan(2);
+    expect(Math.abs(zoomedBox.x - canvasBox.x)).toBeLessThan(2);
     await page.keyboard.press(chord("toggle_zoom"));
-    await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
+    await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "false");
     await expect(page.locator("[data-pane-view]")).toHaveCount(3);
   } finally {
     open.stack.stop();
@@ -309,7 +295,7 @@ test("a narrower window reaches each pane's program as a narrower terminal", { t
   }
 });
 
-test("directional chords keep terminal input inside the drawn tab and leave focus mode and sheets as they are", { tag: "@platform" }, async ({ page }) => {
+test("directional chords keep terminal input inside the drawn tab and preserve zoom and sheets", { tag: "@platform" }, async ({ page }) => {
   const { stack, sent } = await startOpen(page);
   try {
     // Browser zoom produces independently rounded shared edges.
@@ -335,10 +321,10 @@ test("directional chords keep terminal input inside the drawn tab and leave focu
     await page.keyboard.press(chord("focus_pane_down"));
     await page.keyboard.press(chord("focus_pane_right"));
     await page.keyboard.press(chord("toggle_zoom"));
-    await expect(page.locator("[data-pair-layer]")).toHaveAttribute("data-pair-alone", "true");
+    await expect(page.locator("[data-canvas][data-zoomed=true]")).toBeVisible();
     await page.keyboard.press(chord("focus_pane_left"));
     await page.keyboard.press(chord("toggle_zoom"));
-    await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
+    await expect(page.locator("[data-canvas][data-zoomed=false]")).toBeVisible();
     await page.keyboard.press(chord("shortcuts"));
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.keyboard.press(chord("focus_pane_up"));

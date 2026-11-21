@@ -97,6 +97,9 @@ pub enum PaneControlAction {
         direction: PaneResizeDirection,
         amount: f32,
     },
+    ToggleZoom {
+        pane_id: String,
+    },
     Close {
         pane_id: String,
     },
@@ -116,6 +119,7 @@ impl PaneControlAction {
             Self::Focus { .. } => "pane.focus",
             Self::Split { .. } => "pane.split",
             Self::Resize { .. } => "pane.resize",
+            Self::ToggleZoom { .. } => "pane.zoom",
             Self::Close { .. } => "pane.close",
             Self::MoveToNewTab { .. } => "pane.move",
         }
@@ -129,6 +133,7 @@ impl PaneControlAction {
             | Self::Focus { pane_id }
             | Self::Split { pane_id, .. }
             | Self::Resize { pane_id, .. }
+            | Self::ToggleZoom { pane_id }
             | Self::Close { pane_id }
             | Self::MoveToNewTab { pane_id, .. } => pane_id,
         }
@@ -143,8 +148,8 @@ pub enum PaneControlOutcome {
     Acknowledged {
         created_pane_id: Option<String>,
     },
-    /// The engine accepted the request and moved nothing: a resize answered
-    /// `changed: false`. No
+    /// The engine accepted the request and moved nothing: a zoom answered
+    /// `zoom_changed: false` or a resize answered `changed: false`. No
     /// layout event follows, so the operation ends at this answer (PRD
     /// instant-pane-topology D-12).
     Unchanged,
@@ -320,6 +325,7 @@ pub(crate) fn execute_remote_control(
         RemoteControlAction::Pane(action) => match action {
             PaneControlAction::Focus { .. }
             | PaneControlAction::Split { .. }
+            | PaneControlAction::ToggleZoom { .. }
             | PaneControlAction::Close { .. } => match execute_pane_control(engine, action)? {
                 PaneControlOutcome::Acknowledged { created_pane_id } => (None, created_pane_id),
                 PaneControlOutcome::Unchanged => (None, None),
@@ -454,6 +460,18 @@ fn execute_pane_control(
             PaneControlOutcome::Unchanged
         });
     }
+    if let PaneControlAction::ToggleZoom { pane_id } = action {
+        let changed = engine
+            .toggle_zoom(CONTROL_WAIT, pane_id)
+            .map_err(mutation_failure("pane.zoom"))?;
+        return Ok(if changed {
+            PaneControlOutcome::Acknowledged {
+                created_pane_id: None,
+            }
+        } else {
+            PaneControlOutcome::Unchanged
+        });
+    }
 
     let created_pane_id = match action {
         PaneControlAction::Split {
@@ -492,7 +510,8 @@ fn execute_pane_control(
         }
         PaneControlAction::Project { .. }
         | PaneControlAction::Focus { .. }
-        | PaneControlAction::Resize { .. } => unreachable!("handled above"),
+        | PaneControlAction::Resize { .. }
+        | PaneControlAction::ToggleZoom { .. } => unreachable!("handled above"),
     };
     Ok(PaneControlOutcome::Acknowledged { created_pane_id })
 }
@@ -951,6 +970,7 @@ pub fn spawn_pane_control_with_generation(
         PaneControlAction::Resize { direction, .. } => {
             format!("hide-core-pane-resize-{}", direction.as_str())
         }
+        PaneControlAction::ToggleZoom { .. } => "hide-core-pane-zoom".to_owned(),
         PaneControlAction::Close { .. } => "hide-core-pane-close".to_owned(),
         PaneControlAction::MoveToNewTab { .. } => "hide-core-pane-move".to_owned(),
     };
@@ -1040,6 +1060,9 @@ pub(crate) fn spawn_remote_control_checked(
             "hide-core-remote-{target_id}-pane-split-{}",
             direction.as_str()
         ),
+        RemoteControlAction::Pane(PaneControlAction::ToggleZoom { .. }) => {
+            format!("hide-core-remote-{target_id}-pane-zoom")
+        }
         RemoteControlAction::Pane(PaneControlAction::Close { .. }) => {
             format!("hide-core-remote-{target_id}-pane-close")
         }
@@ -1345,6 +1368,7 @@ pub(crate) fn project_layout(layout: &SessionLayoutPayload) -> Result<PaneLayout
         workspace_id: layout.workspace_id.clone(),
         tab_id: layout.tab_id.clone(),
         focused_pane_id: layout.focused_pane_id.clone(),
+        zoomed: layout.zoomed,
         root,
     })
 }
@@ -1492,6 +1516,7 @@ mod tests {
     fn pane_control_asks_the_engine_for_every_mutation() {
         let engine = FakeEngine::start(|method, _| match method {
             "split_pane" => reply("w1:p2".to_owned()),
+            "toggle_zoom" => reply(true),
             "close_pane" => reply(()),
             other => panic!("unexpected {other}"),
         });
@@ -1505,6 +1530,9 @@ mod tests {
                 pane_id: "w1:p1".to_owned(),
                 direction: PaneSplitDirection::Down,
                 cwd: None,
+            },
+            PaneControlAction::ToggleZoom {
+                pane_id: "w1:p1".to_owned(),
             },
             PaneControlAction::Close {
                 pane_id: "w1:p1".to_owned(),
@@ -1523,29 +1551,38 @@ mod tests {
                     "split_pane",
                     json!({"pane": "w1:p1", "direction": "Down", "cwd": null}),
                 ),
+                ("toggle_zoom", json!({"pane": "w1:p1"})),
                 ("close_pane", json!({"pane": "w1:p1"})),
             ]
         );
     }
 
-    /// A resize with nothing to move changes no layout, so it reads as
-    /// Unchanged and the operation can end at the answer (PRD
-    /// instant-pane-topology D-12).
+    /// A zoom of a lone pane and a resize with nothing to move change no
+    /// layout, so both read as Unchanged and the operation can end at the
+    /// answer (PRD instant-pane-topology D-12).
     #[test]
-    fn a_resize_that_moved_nothing_reads_as_unchanged() {
+    fn a_zoom_or_resize_that_moved_nothing_reads_as_unchanged() {
         let engine = FakeEngine::start(|method, params| {
             let moved = params["pane"] == "w1:p2";
             match method {
-                "resize_pane" => reply(moved),
+                "toggle_zoom" | "resize_pane" => reply(moved),
                 other => panic!("unexpected {other}"),
             }
         });
+        let zoom = |pane: &str| PaneControlAction::ToggleZoom {
+            pane_id: pane.to_owned(),
+        };
         let resize = |pane: &str| PaneControlAction::Resize {
             pane_id: pane.to_owned(),
             direction: PaneResizeDirection::Right,
             amount: 0.05,
         };
-        for (action, unchanged) in [(resize("w1:p1"), true), (resize("w1:p2"), false)] {
+        for (action, unchanged) in [
+            (zoom("w1:p1"), true),
+            (zoom("w1:p2"), false),
+            (resize("w1:p1"), true),
+            (resize("w1:p2"), false),
+        ] {
             let outcome =
                 execute_pane_control(engine.engine().as_ref(), &action).expect("control request");
             assert_eq!(
@@ -1669,6 +1706,7 @@ mod tests {
                     "pane_layout" => reply(layout(json!({
                         "workspace_id": "fixture",
                         "tab_id": "fixture:t1",
+                        "zoomed": false,
                         "area": {"x": 0, "y": 0, "width": 120, "height": 60},
                         "focused_pane_id": focused_pane,
                         "panes": [
@@ -1723,10 +1761,11 @@ mod tests {
     }
 
     #[test]
-    fn a_layout_projects_its_nested_tree() {
+    fn a_layout_projects_its_nested_tree_and_zoom() {
         let layout = project_layout(&layout(json!({
             "workspace_id": "w1",
             "tab_id": "w1:t1",
+            "zoomed": true,
             "area": {"x": 0, "y": 0, "width": 120, "height": 60},
             "focused_pane_id": "w1:p3",
             "panes": [
@@ -1743,6 +1782,7 @@ mod tests {
         assert_eq!(layout.workspace_id, "w1");
         assert_eq!(layout.tab_id, "w1:t1");
         assert_eq!(layout.focused_pane_id, "w1:p3");
+        assert!(layout.zoomed);
         assert_eq!(layout.pane_ids(), ["w1:p1", "w1:p2", "w1:p3"]);
         assert_eq!(
             serde_json::to_value(&layout.root).expect("layout JSON"),

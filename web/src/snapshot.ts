@@ -1174,6 +1174,7 @@ export type PaneLayout = {
   workspace_id: string;
   tab_id: string;
   focused_pane_id: string;
+  zoomed: boolean;
   root: LayoutNode;
 };
 
@@ -2677,6 +2678,7 @@ export type RemotePaneLayout = {
   workspace_id: string;
   tab_id: string;
   focused_pane_id: string;
+  zoomed: boolean;
   frames: RemotePaneFrame[];
 };
 
@@ -3942,6 +3944,7 @@ export type SnapshotRest = {
   repository_clone?: RepositoryClone | null;
   worktree_removal?: WorktreeRemoval | null;
   tab?: Tab;
+  zoomed?: string | null;
   focused?: {
     pane_id?: string | null;
     /** The last operator `focus_pane` number the core applied, per page (`operatorFocus.ts`). */

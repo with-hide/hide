@@ -100,6 +100,7 @@ pub struct Snapshot {
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
     pub connection: ConnectionSnapshot,
+    pub zoomed: Option<String>,
     pub focused: FocusedSnapshot,
     /// Every tab's layout in the local engine session, keyed by the tab id
     /// each one carries. The shell draws the entry whose tab is active, so a
@@ -3791,6 +3792,7 @@ pub struct PaneLayoutSnapshot {
     pub workspace_id: String,
     pub tab_id: String,
     pub focused_pane_id: String,
+    pub zoomed: bool,
     pub root: PaneLayoutNodeSnapshot,
 }
 
@@ -8462,6 +8464,7 @@ pub struct RemotePaneLayoutSnapshot {
     pub workspace_id: String,
     pub tab_id: String,
     pub focused_pane_id: String,
+    pub zoomed: bool,
     pub frames: Vec<RemotePaneLayoutFrame>,
 }
 
@@ -8555,6 +8558,7 @@ impl Snapshot {
                 state: "not_connected".to_owned(),
                 target_id: None,
             },
+            zoomed: None,
             focused: FocusedSnapshot {
                 surface: Surface::Terminal,
                 pane_id: None,

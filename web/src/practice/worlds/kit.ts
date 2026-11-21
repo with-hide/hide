@@ -10,7 +10,7 @@ import type { PaneMoveIntent } from "../../paneMove";
 import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, DetailItem, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, ViewDisplaySnapshot, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
 
-export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string };
+export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
 /** A pane, and the agent running in it; a pane with no agent is a plain shell. */
 export type PracticePane = { id: string; agent: AgentRow | null; title: string };
 
@@ -94,7 +94,7 @@ export function focusedPane(model: DeskModel): string {
 export function oneTabDesk(pane: PracticePane): DeskModel {
   return {
     panes: [pane],
-    tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: pane.id }, focused: pane.id }],
+    tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: pane.id }, focused: pane.id, zoomed: false }],
     groups: [{ id: null, name: null, tabs: ["t1"] }],
     selectedGroup: null,
     activeTab: "t1",
@@ -151,7 +151,7 @@ export function applyDesk(model: DeskModel, event: CoreEvent): DeskModel | null 
       if (!tab) return null;
       const pane = shellPane(model);
       const root = replacePane(tab.root, tab.focused, { type: "split", direction: p.direction === "down" ? "down" : "right", ratio: 0.5, first: { type: "pane", pane_id: tab.focused }, second: { type: "pane", pane_id: pane.id } });
-      return { ...model, panes: [...model.panes, pane], nextId: model.nextId + 1, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused: pane.id } : row)) };
+      return { ...model, panes: [...model.panes, pane], nextId: model.nextId + 1, tabs: model.tabs.map((row) => (row === tab ? { ...row, root, focused: pane.id, zoomed: false } : row)) };
     }
     case "focus_pane": {
       const id = String(p.pane_id);
@@ -159,6 +159,11 @@ export function applyDesk(model: DeskModel, event: CoreEvent): DeskModel | null 
       if (!tab) return null;
       const group = groupOfTab(model, tab.id);
       return { ...model, activeTab: tab.id, selectedGroup: group.id, tabs: model.tabs.map((row) => (row === tab ? { ...row, focused: id } : row)) };
+    }
+    case "toggle_zoom": {
+      const tab = tabOfPane(model, String(p.pane_id));
+      if (!tab) return null;
+      return { ...model, tabs: model.tabs.map((row) => (row === tab ? { ...row, focused: String(p.pane_id), zoomed: !row.zoomed } : row)) };
     }
     case "pane_move":
       return movePane(model, p as unknown as PaneMoveIntent);
@@ -188,12 +193,12 @@ function movePane(model: DeskModel, intent: PaneMoveIntent): DeskModel | null {
   if (destination.type === "new_tab") {
     if (!rest) return null;
     const id = `t${nextId++}`;
-    tabs = [...tabs, { id, name: null, root: { type: "pane", pane_id: source.pane_id }, focused: source.pane_id }];
+    tabs = [...tabs, { id, name: null, root: { type: "pane", pane_id: source.pane_id }, focused: source.pane_id, zoomed: false }];
     groups = groups.map((group) => (group.tabs.includes(from.id) ? { ...group, tabs: [...group.tabs, id] } : group));
     activeTab = id;
   } else {
     const edge = destination.type === "pane" ? destination.edge : "right";
-    tabs = tabs.map((tab) => (tab.id === destination.tab_id ? { ...tab, root: placeBeside(tab.id === from.id ? rest! : tab.root, destination.pane_id, source.pane_id, edge), focused: source.pane_id } : tab));
+    tabs = tabs.map((tab) => (tab.id === destination.tab_id ? { ...tab, root: placeBeside(tab.id === from.id ? rest! : tab.root, destination.pane_id, source.pane_id, edge), focused: source.pane_id, zoomed: false } : tab));
     activeTab = destination.tab_id;
   }
   if (!rest) {
@@ -208,7 +213,7 @@ function applyGroup(model: DeskModel, groupId: string | null, p: Record<string, 
   switch (p.action) {
     case "new_tab": {
       const pane = shellPane(model);
-      const tab: PracticeTab = { id: `t${model.nextId}`, name: null, root: { type: "pane", pane_id: pane.id }, focused: pane.id };
+      const tab: PracticeTab = { id: `t${model.nextId}`, name: null, root: { type: "pane", pane_id: pane.id }, focused: pane.id, zoomed: false };
       return { ...model, panes: [...model.panes, pane], tabs: [...model.tabs, tab], nextId: model.nextId + 1, activeTab: tab.id, groups: model.groups.map((row) => (row.id === groupId ? { ...row, tabs: [...row.tabs, tab.id] } : row)) };
     }
     case "select": {
@@ -511,7 +516,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
     },
     focused: { pane_id: focused },
     status: { async_operations: desks.flatMap((desk) => desk.model.operations) },
-    pane_layouts: desks.flatMap((desk) => desk.model.tabs.map((tab) => ({ workspace_id: desk.place.project, tab_id: tab.id, focused_pane_id: tab.focused, root: tab.root }))),
+    pane_layouts: desks.flatMap((desk) => desk.model.tabs.map((tab) => ({ workspace_id: desk.place.project, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root }))),
     workspace_view: {
       device_id: "local", path: main.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", display_count: 0, limits: { areas: 4, depth: 3, displays: 32 } },

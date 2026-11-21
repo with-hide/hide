@@ -386,6 +386,7 @@ fn reopen_at_capacity_refuses_before_any_worker() {
         layout: crate::recent_closed::ClosedLayout {
             workspace_id: "w-order".into(),
             tab_id: "retired".into(),
+            zoomed: false,
             focused_pane_id: "retired:p".into(),
             root: crate::recent_closed::ClosedLayoutNode::Pane {
                 pane_id: Some("retired:p".into()),
@@ -579,6 +580,7 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
         layout: crate::recent_closed::ClosedLayout {
             workspace_id: "w-order".into(),
             tab_id: "retired".into(),
+            zoomed: false,
             focused_pane_id: "retired:p".into(),
             root: crate::recent_closed::ClosedLayoutNode::Pane {
                 pane_id: Some("retired:p".into()),
@@ -902,6 +904,7 @@ fn capture_close(runtime: &mut Runtime) -> crate::recent_closed::capture::CloseE
         layout: crate::recent_closed::ClosedLayout {
             workspace_id: "w-order".into(),
             tab_id: tab_id.clone(),
+            zoomed: false,
             focused_pane_id: format!("{tab_id}:p"),
             root: crate::recent_closed::ClosedLayoutNode::Pane {
                 pane_id: Some(format!("{tab_id}:p")),
@@ -1093,6 +1096,7 @@ pub(super) fn add_elsewhere_tab(payload: &mut SessionSnapshotPayload) {
             "layouts": [{
                 "workspace_id": "w-else",
                 "tab_id": "w-else:t1",
+                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w-else:t1:p",
                 "panes": [{"pane_id": "w-else:t1:p", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -2032,6 +2036,7 @@ fn the_engine_s_layout_of_a_fork_is_not_read_as_the_engine_moving_the_keyboard()
             workspace_id: "w-order".to_owned(),
             tab_id: if tab { "w-order:t4" } else { "w-order:t1" }.to_owned(),
             focused_pane_id: pane.to_owned(),
+            zoomed: false,
             root: PaneLayoutNodeSnapshot::Pane {
                 pane_id: pane.to_owned(),
             },

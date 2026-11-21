@@ -88,12 +88,12 @@ test("pane chords: the macOS app's set comes across, runs once, and Settings edi
   await expect.poll(() => accelerator("toggle_zoom")).toBe("Alt+Command+Return");
   expect(await accelerator("split_right")).toBe("Command+D");
 
-  // ⌥⌘↩ enters focus mode exactly once; the default ⇧⌘↩ is no longer a chord here.
+  // ⌥⌘↩ zooms exactly once; the default ⇧⌘↩ is no longer a chord here.
   await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
   await page.keyboard.press("Meta+Shift+Enter");
   await page.keyboard.press("Meta+Alt+Enter");
-  await expect(page.locator("[data-pair-layer]")).toHaveAttribute("data-pair-alone", "true");
-  await exactlyOnce(sent, "pair_view", 1, page);
+  await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-zoomed", "true");
+  await exactlyOnce(sent, "toggle_zoom", 1, page);
 
   // The ⌘/ sheet lists it.
   await page.keyboard.press("Meta+Slash");

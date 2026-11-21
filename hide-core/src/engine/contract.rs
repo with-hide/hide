@@ -5,7 +5,7 @@
 //! another and a tab launched with a command run what they were given;
 //! Hide's metadata on a workspace and a pane reads back as written and
 //! clears; a closed pane is gone; a call about a pane that does not exist is
-//! the engine's refusal under a code; a tab's layout resizes, swaps,
+//! the engine's refusal under a code; a tab's layout zooms, resizes, swaps,
 //! moves a pane out and back, comes back in its shape when exported and
 //! applied again, and refuses a layout past its limits (PRD
 //! engine-bundle-3-core-owns B3, B4); and an engine whose server has gone
@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use super::{Engine, EngineError, Wait};
+use super::{Engine, EngineError, Wait, Zoom};
 use crate::live::PaneResizeDirection;
 use crate::recent_closed::{ClosedLayoutNode, ClosedSplitDirection};
 
@@ -172,6 +172,12 @@ fn lays_out(engine: &dyn Engine, workspace: &str, tab: &str, pane: &str, folder:
         .expect("a split at a ratio opens");
     assert!(panes(engine).contains(&(lower.clone(), tab.to_owned())));
 
+    // A zoom turns on and off; a zoom of a lone pane changes nothing.
+    assert!(engine.toggle_zoom(WAIT, pane).expect("the pane zooms"));
+    assert!(engine.pane_layout(WAIT, pane).unwrap().zoomed);
+    engine.set_zoom(WAIT, pane, Zoom::Off).unwrap();
+    assert!(!engine.pane_layout(WAIT, pane).unwrap().zoomed);
+
     // A resize moves the split; a swap trades the two panes' places.
     let before = rect(engine, pane);
     assert!(
@@ -208,6 +214,10 @@ fn lays_out(engine: &dyn Engine, workspace: &str, tab: &str, pane: &str, folder:
     assert!(back.changed);
     assert!(panes(engine).contains(&(back.pane_id.clone(), tab.to_owned())));
     engine.close_pane(WAIT, &back.pane_id).unwrap();
+    assert!(
+        !engine.toggle_zoom(WAIT, pane).expect("a lone pane answers"),
+        "a lone pane does not zoom"
+    );
 
     // A layout past an engine's limits is refused with its reason.
     refused(

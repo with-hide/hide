@@ -342,10 +342,34 @@ pub(super) fn run(
             let before = validate_target(control, &effect)?.expect("target exists");
             let mut source_nodes = Vec::new();
             leaves(&layout.root, &mut source_nodes);
-            if source_nodes.len() != 1 {
+            if source_nodes.len() != 1 || layout.zoomed {
                 return Err(uncertain(
                     "The staged terminal changed. Inspect it before continuing this start.",
                 ));
+            }
+            if before.zoomed {
+                (control.check)().map_err(ControlFailure::Ambiguous)?;
+                match control.engine.set_zoom(
+                    CONTROL_WAIT,
+                    &target.pane_id,
+                    crate::engine::Zoom::Off,
+                ) {
+                    Ok(()) => {}
+                    Err(EngineError::Request(message)) => {
+                        return Err(ControlFailure::Definite(message));
+                    }
+                    Err(_) => {
+                        return Err(uncertain(
+                            "The terminal was created, but its tab could not be prepared. Check this start's status before continuing.",
+                        ));
+                    }
+                }
+                let unzoomed = validate_target(control, &effect)?.expect("target exists");
+                if unzoomed.zoomed || unzoomed.root != before.root {
+                    return Err(uncertain(
+                        "The selected layout changed while starting. Inspect it before continuing.",
+                    ));
+                }
             }
             verify_bound(control, bound)?;
             (control.check)().map_err(ControlFailure::Ambiguous)?;

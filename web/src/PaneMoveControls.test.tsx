@@ -83,7 +83,7 @@ describe("pane move gesture", () => {
   });
   it("rejects an edge when the target topology changed between hover and release", async () => {
     hit = element('[data-pane-view="p2"]'); await start(); await pointer("pointermove", 390, 100);
-    await act(async () => useShellStore.setState({ rest: { pane_layouts: [{ workspace_id: "w1", tab_id: "t1", focused_pane_id: "p1", root: { type: "pane", pane_id: "p1" } }] } }));
+    await act(async () => useShellStore.setState({ rest: { pane_layouts: [{ workspace_id: "w1", tab_id: "t1", focused_pane_id: "p1", zoomed: true, root: { type: "pane", pane_id: "p1" } }] } }));
     await pointer("pointerup", 390, 100); expect(moves()).toHaveLength(0);
   });
   it("settles a move nobody answered by asking the core, with the request it sent, and never shows a position bar", async () => {

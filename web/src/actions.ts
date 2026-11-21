@@ -654,7 +654,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
     if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
     // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
-    // which is what a pane zoom drew (D-57). Only ⌘., ◧ and ⇧⌘↩ on the pane end the mode (D-46).
+    // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
     const pairView = workspaceViewOf(rest());
     if (drawnPair(pairView)) return showPairDesk(pairBesideDesk(pairView) === null);
     if (laneUp()) return closeLane();
@@ -3273,8 +3273,25 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       armKeyTarget(requestId);
     },
 
+    /** Zooms or unzooms `target`, a pane the operator pointed at, else the focused pane. */
+    toggleZoom(target?: string) {
+      if (remoteContext(rest())) {
+        const host = remoteHost("shell.command.zoomPane");
+        if (!host) return;
+        const paneId = target ?? host.view?.focusedPaneId;
+        if (!paneId) return diagnostic("toggle_pane_zoom: no focused remote pane");
+        sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
+        return;
+      }
+      // Focus mode leaves the tab's layout and zoom as they are; the pane is alone already (D-16, D-65).
+      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
+      const paneId = target ?? useShellStore.getState().focusedPaneId;
+      if (!paneId) return diagnostic("toggle_zoom: no focused pane");
+      dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
+    },
+
     /**
-     * ◧ on a pane's head or in its menus (PRD
+     * ◧ on a pane's head or in its menus, and the band's way back (PRD
      * lane-desk-pair-view B18, B20, B26, D-46, D-53): the pane beside its
      * tab's desk, or alone while it has no View to show, or, pressed on the
      * pane already there, pair view off everywhere (D-45). The core decides

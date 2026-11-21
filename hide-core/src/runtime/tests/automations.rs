@@ -2669,6 +2669,7 @@ fn a_run_shown_in_the_automation_screen_stays_attached_until_the_window_looks_aw
                 workspace_id: "w-auto".into(),
                 tab_id: "w-auto:t1".into(),
                 focused_pane_id: pane.clone(),
+                zoomed: false,
                 root: crate::model::PaneLayoutNodeSnapshot::Pane {
                     pane_id: pane.clone(),
                 },

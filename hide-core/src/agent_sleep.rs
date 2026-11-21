@@ -1079,7 +1079,8 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "agents": agents,
             "workspaces": [{"workspace_id": "w1", "label": "Alpha"}],
-            "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1",                 "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": panes[0],
+            "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": panes[0],
                 "panes": panes.iter().map(|pane| serde_json::json!({"pane_id": pane,
                     "rect": {"x": 0, "y": 0, "width": 80, "height": 24}})).collect::<Vec<_>>(),
                 "splits": []}]

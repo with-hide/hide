@@ -136,6 +136,7 @@ type PaneMenuId =
   | "find"
   | "split_right"
   | "split_down"
+  | "toggle_zoom"
   | "link_open"
   | "link_source"
   | "link_external"
@@ -234,8 +235,11 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
 export type TerminalMenuContext = {
   /** The pane has a drag selection, so Copy has something to copy. */
   selection: boolean;
+  zoomed: boolean;
+  /** Panes in the tab, the zoomed one's hidden siblings included. */
+  paneCount: number;
   /** The chords the registry and the terminal bind here; "" draws none. */
-  chords: { copy: string; paste: string; find: string; splitRight: string; splitDown: string };
+  chords: { copy: string; paste: string; find: string; splitRight: string; splitDown: string; zoom: string };
   /** The exact target right-clicked, retained even after the pointer leaves it. */
   link?: TerminalContextLink | null;
   reveal?: RevealHost;
@@ -272,6 +276,13 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     { id: "find", icon: "find", label: translate("panes.menu.find"), unavailable: null, shortcut: chords.find },
     { id: "split_right", icon: "split_right", label: splitLabel("right"), unavailable: null, separated: true, shortcut: chords.splitRight },
     { id: "split_down", icon: "split_down", label: splitLabel("down"), unavailable: null, shortcut: chords.splitDown },
+    {
+      id: "toggle_zoom", menuLabel: translate(context.zoomed ? "menus.unzoom" : "menus.zoom"), icon: context.zoomed ? "unzoom" : "zoom",
+      label: context.zoomed ? translate("panes.unzoom") : translate("panes.menu.zoom"),
+      // Pair view leaves the tab's zoom as it is (D-16), so the item says why rather than doing nothing.
+      unavailable: head?.pair === "on" ? translate("panes.menu.pairZoom") : context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
+      shortcut: chords.zoom,
+    },
     ...(head ? [pairEntry(head.pair)] : []),
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
@@ -346,6 +357,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions, head
         return actions.split("right", pane.id);
       case "split_down":
         return actions.split("down", pane.id);
+      case "toggle_zoom":
+        return actions.toggleZoom(pane.id);
     }
     const target = relationEntries(pane).find((entry) => `open:${entry.paneId}` === id);
     if (target) actions.followRelation(pane.id, target.paneId, target.label);
@@ -359,7 +372,7 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions, head
   const plan = useShellStore((s) => open !== null && planOfPane(s.rest, pane.id) !== null);
   const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan, head) : paneMenuItems(pane, title, archive, revisit, overview, plan, head);
   if (move?.mutationBlocked(pane.id)) {
-    for (const item of items) if (["close_pane", "split_right", "split_down", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
+    for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }
   if (open && move) items.splice(Math.max(0, items.length - 1), 0, ...move.menu(pane.id) as MenuEntry<PaneMenuId>[]);
   const menu = <EntryPointMenu title={title} label={t("panes.menu.aria", { name: title })} items={items} onSelect={select} at={open} onClose={() => setOpen(null)} />;
