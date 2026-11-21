@@ -300,6 +300,11 @@ fn run_coordinator(
         let window_attached = window_reads(&context, worktree_reader.as_mut());
         let connected = pulled.is_some();
         let run_background_reads = connected && !defer_background_reads && window_attached;
+        // The worktree catalog is the one reader below that runs with no
+        // window: a mission is made in a checkout the catalog lists, on a
+        // machine nobody has a window open on too (PRD device-connect-iroh
+        // D-72). Its Git watch still rests then (`window_reads`).
+        let read_worktrees = connected && !defer_background_reads;
         let probe = provider_probe_reads(connected, window_attached, defer_background_reads);
         let read_usage = connected
             && !defer_background_reads
@@ -334,45 +339,51 @@ fn run_coordinator(
         {
             return;
         }
+        if read_worktrees && let Some(reader) = worktree_reader.as_mut() {
+            let Some(request) = read_worktrees_request(&context) else {
+                return;
+            };
+            // A settled removal already took its worktree out of the
+            // catalog, so the rows built on it are rebuilt on this wake
+            // rather than when the next read lands.
+            let mut rebuild = request.removals != published_removals;
+            published_removals = request.removals;
+            // With no window nothing is asked of the node from this thread
+            // (`WorktreeReader::read_unwatched_if_due`).
+            let answer = if window_attached {
+                reader.read_if_due(request)
+            } else {
+                reader.read_unwatched_if_due(request)
+            };
+            if let Some(answer) = answer {
+                // New worktree facts change which rows exist and what they
+                // say, so the catalog is rebuilt rather than only stored.
+                match publish_worktrees(&context, answer) {
+                    None => {
+                        return;
+                    }
+                    Some(changed) => rebuild |= changed,
+                }
+            }
+            if rebuild
+                && let Some(current) = pulled.as_ref()
+                && !publish_session(
+                    &context,
+                    current,
+                    &mut catalog_cache,
+                    &mut purpose_mirror,
+                    &mut labels,
+                )
+            {
+                return;
+            }
+        }
         if run_background_reads {
             if let Some(reader) = ports_reader.as_mut() {
                 // `lsof` runs here, outside every lock; only the result is handed
                 // in.
                 if let Some(ports) = reader.read_if_due()
                     && !publish_ports(&context, ports)
-                {
-                    return;
-                }
-            }
-
-            if let Some(reader) = worktree_reader.as_mut() {
-                let Some(request) = read_worktrees_request(&context) else {
-                    return;
-                };
-                // A settled removal already took its worktree out of the
-                // catalog, so the rows built on it are rebuilt on this wake
-                // rather than when the next read lands.
-                let mut rebuild = request.removals != published_removals;
-                published_removals = request.removals;
-                if let Some(answer) = reader.read_if_due(request) {
-                    // New worktree facts change which rows exist and what they
-                    // say, so the catalog is rebuilt rather than only stored.
-                    match publish_worktrees(&context, answer) {
-                        None => {
-                            return;
-                        }
-                        Some(changed) => rebuild |= changed,
-                    }
-                }
-                if rebuild
-                    && let Some(current) = pulled.as_ref()
-                    && !publish_session(
-                        &context,
-                        current,
-                        &mut catalog_cache,
-                        &mut purpose_mirror,
-                        &mut labels,
-                    )
                 {
                     return;
                 }
@@ -2290,6 +2301,96 @@ mod window_reads_tests {
         watch_started
             .recv_timeout(Duration::from_secs(5))
             .expect("the watch starts again on the first read with a renderer back");
+    }
+
+    /// A node that notes which thread asks it for a repository's
+    /// directories and how many Git watches it was asked for.
+    #[derive(Default)]
+    struct NotingNode {
+        repository_askers: Mutex<Vec<std::thread::ThreadId>>,
+        watches: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::node_access::NodeLink for NotingNode {
+        fn call(
+            &self,
+            call: Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            self.call_with_progress(call, timeout, &mut |_| true)
+        }
+
+        fn call_with_progress(
+            &self,
+            call: Call,
+            _timeout: Duration,
+            _progress: &mut dyn FnMut(Value) -> bool,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            match call {
+                Call::Repository { path } => {
+                    self.repository_askers
+                        .lock()
+                        .unwrap()
+                        .push(std::thread::current().id());
+                    Ok(json!(RepositoryDirs {
+                        root: path.clone(),
+                        git_dir: format!("{path}/.git"),
+                        common_dir: format!("{path}/.git"),
+                    })
+                    .into())
+                }
+                Call::GitWatch { .. } => {
+                    self.watches
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(Value::Null.into())
+                }
+                _ => Err(crate::node_access::LinkError::Unknown(
+                    "not part of this fixture".to_owned(),
+                )),
+            }
+        }
+    }
+
+    /// A core with no window still reads the catalog, for the checkouts a
+    /// mission is made in, and the thread that polls the reader, which is
+    /// session-sync's, asks the node for nothing while it does: a node slow
+    /// to name a repository's directories holds no engine event back
+    /// (docs/PERFORMANCE_TESTING.md). The read with a window is the one
+    /// that follows the projects from that thread.
+    #[test]
+    fn a_read_with_no_window_lands_and_asks_the_node_nothing_from_the_thread_that_polls() {
+        let node = Arc::new(NotingNode::default());
+        let mut reader = crate::worktrees::WorktreeReader::new(node.clone());
+        let request = crate::worktrees::WorktreeRequest {
+            projects: vec![crate::worktrees::WorktreeProjectRequest {
+                root_path: std::path::PathBuf::from("/a"),
+                bases: Default::default(),
+                base_override: None,
+                remote_default: None,
+                generation: 0,
+            }],
+            generation: 0,
+            removals: 0,
+        };
+        let here = std::thread::current().id();
+        let asked_here = || node.repository_askers.lock().unwrap().contains(&here);
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while reader.read_unwatched_if_due(request.clone()).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the read with no window never landed"
+            );
+            std::thread::yield_now();
+        }
+        assert!(!asked_here(), "the polling thread asked the node");
+        assert_eq!(
+            node.watches.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no watch runs with no window"
+        );
+
+        let _ = reader.read_if_due(request);
+        assert!(asked_here(), "a window's read follows the projects");
     }
 }
 
