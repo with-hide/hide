@@ -17,11 +17,12 @@ export const CHANGE_LIMIT = 80;
 export const VERSION_LIMIT = 100;
 
 /**
- * The drawings a highlight can name: the practice cards' moves
- * (`PracticePreviewKind`, which `components/whats-new.tsx` holds equal to
- * this list at compile time; the desktop host reads this file without JSX).
+ * The drawings a highlight can name: a feature's own scene
+ * (`components/whats-new-scenes/`), else one of the practice cards' moves
+ * (`PracticePreviewKind`). `components/whats-new.tsx` holds this list equal to
+ * the two at compile time; the desktop host reads this file without JSX.
  */
-export const RELEASE_DRAWINGS = ["mission", "zones", "split", "switch", "rows", "children", "search", "lane"] as const;
+export const RELEASE_DRAWINGS = ["automation", "mission", "zones", "split", "switch", "rows", "children", "search", "lane"] as const;
 export type ReleaseDrawing = (typeof RELEASE_DRAWINGS)[number];
 
 export type Words<T> = { en: T } & Partial<Record<Exclude<InterfaceLanguage, "en">, T>>;
