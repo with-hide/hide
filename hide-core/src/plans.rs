@@ -859,8 +859,9 @@ pub struct PlanProof {
     /// The core's own node, which runs `gh` for every machine's projects.
     pub(crate) own: Arc<dyn NodeLink>,
     /// Where the project's pull requests are read: its checkout on this
-    /// machine, or its `owner/name` for a device's.
-    pub(crate) github: crate::github::Where,
+    /// machine, or its `owner/name` for a device's; why not, while that name
+    /// is not known, which only a pull request's proof needs.
+    pub(crate) github: Result<crate::github::Where, String>,
     /// The session's checkout, as its machine spells it.
     pub(crate) root: String,
     /// The branches the session's plan children were started on.
@@ -920,7 +921,13 @@ impl PlanProof {
                     }));
                     PrProof::Unconfirmed
                 };
-                let proof = match crate::github::pr_head(self.own.as_ref(), &self.github, *number) {
+                let head = self
+                    .github
+                    .as_ref()
+                    .map_err(|reason| crate::github::PrHeadFailure::Unread(reason.clone()));
+                let proof = match head
+                    .and_then(|place| crate::github::pr_head(self.own.as_ref(), place, *number))
+                {
                     Ok(head) if head.cross_repository => PrProof::NotYours,
                     Ok(head) if branches.contains(&head.branch) => PrProof::Yours {
                         repo: head.repository,
@@ -1852,7 +1859,7 @@ mod tests {
         let proof = PlanProof {
             link: Arc::new(Checkout),
             own: Arc::new(CoreGh),
-            github: crate::github::Where::Repository("acme/app".into()),
+            github: Ok(crate::github::Where::Repository("acme/app".into())),
             root: "/work/app".into(),
             branches: BTreeSet::from(["child-branch".to_owned()]),
             asks: Asks {
@@ -1886,6 +1893,32 @@ mod tests {
         assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
         assert_eq!(proofs.files["docs/gone.md"], FileProof::Missing);
         assert_eq!(proofs.files["docs/link.md"], FileProof::Outside);
+    }
+
+    /// A device project whose repository Hide has not named yet (a plain
+    /// folder, no GitHub remote, its first read still out) proves its files
+    /// as before and leaves only its pull requests unconfirmed.
+    #[test]
+    fn a_repository_not_named_yet_leaves_files_proved_and_only_pull_requests_unconfirmed() {
+        let proof = PlanProof {
+            link: Arc::new(Checkout),
+            own: Arc::new(CoreGh),
+            github: Err("The node has not named this project's GitHub repository yet".into()),
+            root: "/work/app".into(),
+            branches: BTreeSet::new(),
+            asks: Asks {
+                prs: [(1, "pr".to_owned())].into_iter().collect(),
+                files: [("docs/spec.md".to_owned(), "spec".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
+            plan: "1000".into(),
+            session_id: "s1".into(),
+        };
+        let mut proofs = Proofs::default();
+        proof.run(&mut proofs);
+        assert_eq!(proofs.prs[&1], PrProof::Unconfirmed);
+        assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
     }
 
     #[test]

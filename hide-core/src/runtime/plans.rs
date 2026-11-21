@@ -636,8 +636,8 @@ impl Runtime {
     /// The reads `asks` needs, made off the lock: files and branches on the
     /// session's machine, pull requests with the core's own `gh` where the
     /// project's GitHub list is read (a device refuses `gh`, D-18); a
-    /// machine Hide cannot reach now, or a repository not named yet, refuses
-    /// the change as unconfirmed.
+    /// machine Hide cannot reach now refuses the change as unconfirmed, and a
+    /// repository not named yet leaves only its pull requests unconfirmed.
     fn plan_proof(
         &mut self,
         device: &str,
@@ -646,24 +646,20 @@ impl Runtime {
         plan: &Plan,
         asks: plans::Asks,
     ) -> Result<PlanTurn, String> {
-        let unconfirmed = |kind: &str, reason: String| {
+        let link = self.node_link(device).map_err(|reason| {
             crate::diagnostic!(json!({
-                "component": "plans", "kind": kind,
+                "component": "plans", "kind": "plans.proof_unreachable",
                 "plan": plan.id(), "session_id": session.session_id, "device": device,
                 "reason": reason,
             }));
             asks.unconfirmed()
-        };
-        let link = self
-            .node_link(device)
-            .map_err(|reason| unconfirmed("plans.proof_unreachable", reason))?;
+        })?;
         let machine = (device != self.node.as_str()).then_some(device);
         let github = self
             .catalog_workspaces()
             .find(|workspace| workspace.device_id == device && workspace.id == context.workspace_id)
             .ok_or_else(|| "The session's project is not in the catalog".to_owned())
-            .and_then(|workspace| self.github_place(machine, &workspace.path))
-            .map_err(|reason| unconfirmed("plans.repository_unread", reason))?;
+            .and_then(|workspace| self.github_place(machine, &workspace.path));
         let branches = self
             .delivery_state()
             .map(|ledger| {
