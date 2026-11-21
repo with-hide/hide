@@ -132,7 +132,8 @@ export type SnapshotSections =
   | DesktopActivityPayload
   | HumanTurnDonePayload
   | AutomationCall
-  | AutomationResult;
+  | AutomationResult
+  | GuestPaneClosePayload;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -770,11 +771,15 @@ export interface TerminalFrame {
   terminal_sequence: number;
 }
 /**
- * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide.
+ * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile.
  */
 export interface AgentNotice {
   notices: {
     tag: string;
+    /**
+     * Present on a notice another machine handed over: that machine's connection id, `navigator.peers[].key`. `device_id` and `pane_id` are then that machine's own names for the work.
+     */
+    peer?: string;
     device_id: string;
     pane_id: string;
     title: string;
@@ -806,7 +811,7 @@ export interface AgentNotice {
      */
     detail?: string | null;
     /**
-     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on with the count of open Views linked to it (`views`, absent at 0), `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json; `unmet`, for a refused close, is how many finished nodes have a line empty, absent otherwise), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth` or `permission`, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine, `open_ask` is a question the agent put to the operator that still waits, as the session record's 나를 기다리는 것 lists it: the record's `id` for it and its words `line` (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review, `mission_decision` is the decision `line` the Conductor's mission waits on with the count of open Views linked to it (`views`, absent at 0), `mission_attention` is a node (its title `node`) of the mission waiting on the operator to look and why (`reason`, mission_attention_reason in snapshot-wire-enums.json; `unmet`, for a refused close, is how many finished nodes have a line empty, absent otherwise), `input_unconfirmed` is a spawn's brief or a letter (`input`) Hide typed that the agent has not recorded, `held` when its composer was read still showing the text (not received rather than not confirmed), `spent` once its typings are used up, `human_turn` is a step only a person can take that the agent declared with `hide agent ask-human`: its declaration `id`, `kind` (`auth`, `permission`, or `install` for a `hide skill` / `hide mcp` install or update waiting on the operator's confirm, human_kind in snapshot-wire-enums.json), the `place` the person acts at and the `device` it runs on, absent for the core's own machine, `open_ask` is a question the agent put to the operator that still waits, as the session record's 나를 기다리는 것 lists it: the record's `id` for it and its words `line` (ask_subject_cause in snapshot-wire-enums.json). A window that does not know the cause draws detail.
      */
     subject?:
       | null
@@ -845,7 +850,7 @@ export interface AgentNotice {
       | {
           cause: "human_turn";
           id: string;
-          kind: "auth" | "permission";
+          kind: "auth" | "permission" | "install";
           place: string;
           device?: string;
         }
@@ -898,4 +903,10 @@ export interface AutomationResult {
   ok: boolean;
   value?: unknown;
   code?: string;
+}
+/**
+ * Payload of the `guest_pane_close` client event, accepted only from an operator window and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`). The daemon ends it through that machine's node on this computer whether or not the machine is connected, and refuses a pane it does not list (`pane_unavailable`). PRD device-connect-iroh B10, D-74.
+ */
+export interface GuestPaneClosePayload {
+  pane_id: string;
 }

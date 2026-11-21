@@ -367,26 +367,57 @@ fn bootstrap_local(env: &Env, request: &Value, install: Option<&str>) -> Result<
     let mut stream = LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
         .map_err(|_| "hide_unavailable".to_owned())?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
-    read_bootstrap_answer(&mut stream, install)
+    let answer = read_answer(&mut stream)?;
+    // This machine's daemon says the folder is a guest's work and passes
+    // nothing on: the call runs again in that installation's own `hide`,
+    // whose answer is this command's (PRD device-connect-iroh D-55). A call
+    // that names an installation is a pane's or one already handed, and is
+    // never handed on.
+    if install.is_none()
+        && let Some(guest) = handed_install(&answer)
+    {
+        let arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        match crate::pane_install::hand_to_guest(&env.state_dir, &env.home, guest, &arguments) {
+            Ok(code) => std::process::exit(code),
+            Err(reason) => return Err(reason.to_owned()),
+        }
+    }
+    reference_of(&answer, install)
+}
+
+/// The guest installation a daemon handed the call to, when its refusal
+/// names one (`hide_peer::protocol::launch::HandedTo`).
+fn handed_install(answer: &Value) -> Option<&str> {
+    (answer["ok"] != true && answer["reason"] == crate::pane_auth::HANDED_TO)
+        .then(|| answer["handed_to"]["install"].as_str())
+        .flatten()
 }
 
 /// Reads one bootstrap answer. For a request that named an installation
 /// (`install`), a reference counts only when the answer names that same
 /// installation ([`install::confirm`]).
 fn read_bootstrap_answer(stream: &mut impl Read, install: Option<&str>) -> Result<PathBuf, String> {
+    reference_of(&read_answer(stream)?, install)
+}
+
+fn read_answer(stream: &mut impl Read) -> Result<Value, String> {
     let mut line = String::new();
     BufReader::new(stream)
         .take(4096)
         .read_line(&mut line)
         .map_err(|_| "hide_unavailable".to_owned())?;
-    let answer: Value = serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())?;
+    serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())
+}
+
+/// The reference an answer carries, or its refusal.
+fn reference_of(answer: &Value, install: Option<&str>) -> Result<PathBuf, String> {
     if answer["ok"] != true {
         return Err(answer["reason"]
             .as_str()
             .unwrap_or("bootstrap_refused")
             .to_owned());
     }
-    install::confirm(&answer, install).map_err(str::to_owned)?;
+    install::confirm(answer, install).map_err(str::to_owned)?;
     answer["reference"]
         .as_str()
         .and_then(|wire| hide_platform::path::from_wire(wire).ok())

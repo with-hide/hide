@@ -30,7 +30,7 @@ use hide_node::ssh::RemoteHost;
 use hide_node_link::panes::StreamCaller;
 use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::accepting::{CloseOnDrop, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
@@ -842,7 +842,7 @@ fn attest_bootstrap(
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
     own: Option<&str>,
-) -> Result<(Attestation, Option<&'static str>), &'static str> {
+) -> Result<(Attestation, Option<&'static str>), Refused> {
     // The encoded checkout and tool callers are hided's own keys for the
     // core; a request never names one, whatever the engine's pane namespace
     // holds in the future.
@@ -850,7 +850,7 @@ fn attest_bootstrap(
         Caller::parse(&request.pane_id),
         Caller::Checkout { .. } | Caller::Access { .. }
     ) {
-        return Err("invalid_request");
+        return Err("invalid_request".into());
     }
     install::refuse_other(request, own)?;
     let pane = if request.pane_id.is_empty() {
@@ -876,24 +876,77 @@ fn attest_bootstrap(
             "kind": "pane_auth.pane_not_moved",
             "pane_id": request.pane_id,
         }));
-        return Err("pane_not_moved");
+        return Err("pane_not_moved".into());
     }
     match pane {
         Ok(attestation) => Ok((attestation, None)),
-        Err(pane_reason) => attest_checkout(peer, &request.nonce, core)
-            .map(|attestation| (attestation, Some(pane_reason)))
-            .inspect_err(|reason| {
-                note_checkout_capability(
-                    "checkout_capability.refused",
-                    "bootstrap",
-                    Some(peer),
-                    Some(!request.one_shot),
-                    None,
-                    Some(reason),
-                    Some(pane_reason),
-                );
-            }),
+        Err(pane_reason) => {
+            // A caller in no pane of this core's is proved by its folder,
+            // and the folder may be a guest's: then this daemon answers
+            // whose it is and binds nothing (PRD device-connect-iroh D-55).
+            if let Some(install) = folder_guest(peer, core) {
+                return Err(Refused::HandedTo(install));
+            }
+            attest_checkout(peer, &request.nonce, core)
+                .map(|attestation| (attestation, Some(pane_reason)))
+                .inspect_err(|reason| {
+                    note_checkout_capability(
+                        "checkout_capability.refused",
+                        "bootstrap",
+                        Some(peer),
+                        Some(!request.one_shot),
+                        None,
+                        Some(reason),
+                        Some(pane_reason),
+                    );
+                })
+                .map_err(Refused::from)
+        }
     }
+}
+
+/// Why a bootstrap got no reference.
+#[derive(Debug, PartialEq, Eq)]
+enum Refused {
+    Reason(&'static str),
+    /// The caller's folder is the work of the guest whose installation this
+    /// names ([`launch::install_name`]): that installation's own `hide`
+    /// takes the call (D-55).
+    HandedTo(String),
+}
+
+impl From<&'static str> for Refused {
+    fn from(reason: &'static str) -> Self {
+        Self::Reason(reason)
+    }
+}
+
+impl Refused {
+    /// The reason on the wire.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Reason(reason) => reason,
+            Self::HandedTo(_) => HANDED_TO,
+        }
+    }
+}
+
+/// The bootstrap answer's reason when the caller's folder is a guest's; the
+/// answer then carries `handed_to` with that guest's installation.
+pub const HANDED_TO: &str = "handed_to";
+
+/// The installation of the guest that answers for the folder `peer` runs
+/// in, when the core says the folder is one guest's (`Core::folder_call`).
+fn folder_guest(peer: i32, core: &CoreHandle) -> Option<String> {
+    let folder = caller_directory(peer).ok()?;
+    let hide_core::guest_panes::FolderCall::Guest { key } = core.folder_call(&folder) else {
+        return None;
+    };
+    let short: String = key
+        .chars()
+        .take(hide_peer::protocol::key::SHORT_KEY_CHARS)
+        .collect();
+    Some(hide_peer::protocol::launch::install_name(&short))
 }
 
 /// Binds an external tool's command to the connection its key proves (PRD
@@ -1348,7 +1401,8 @@ fn answer_bootstrap(
             if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())?;
+            let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())
+                .map_err(|refused| refused.reason())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1417,6 +1471,7 @@ fn answer_bootstrap(
         }
         return;
     }
+    let mut handed_to = None;
     let result = read
         .and({
             if line.len() <= 4096 {
@@ -1428,7 +1483,16 @@ fn answer_bootstrap(
         .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
             let (attestation, pane_reason) =
-                attest_bootstrap(peer, &request, engine, core, own_install())?;
+                match attest_bootstrap(peer, &request, engine, core, own_install()) {
+                    Ok(attested) => attested,
+                    Err(refused) => {
+                        let reason = refused.reason();
+                        if let Refused::HandedTo(install) = refused {
+                            handed_to = Some(install);
+                        }
+                        return Err(reason);
+                    }
+                };
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1466,7 +1530,19 @@ fn answer_bootstrap(
             answer
         }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),
-        (Err(reason), _) => json!({"ok": false, "reason": reason}),
+        (Err(reason), _) => {
+            let mut answer = json!({"ok": false, "reason": reason});
+            // The host names the installation, never a path (D-55).
+            if let Some(install) = handed_to
+                && let Ok(Value::Object(handed)) =
+                    serde_json::to_value(hide_peer::protocol::launch::HandedTo {
+                        handed_to: hide_peer::protocol::launch::Installation { install },
+                    })
+            {
+                answer.as_object_mut().expect("an object").extend(handed);
+            }
+            answer
+        }
     };
     if (writeln!(stream, "{answer}").is_err() || wire.is_none())
         && let Ok((path, true)) = result
@@ -2231,18 +2307,18 @@ mod tests {
         // (this test's cwd is inside no registered checkout).
         assert_eq!(
             attest_bootstrap(peer, &request("w9J:p17"), None, &core, None).unwrap_err(),
-            "checkout_not_registered"
+            Refused::Reason("checkout_not_registered")
         );
         assert_eq!(
             attest_bootstrap(peer, &request(""), None, &core, None).unwrap_err(),
-            "checkout_not_registered"
+            Refused::Reason("checkout_not_registered")
         );
         // A request cannot name the core's encoded checkout caller, or a
         // tool's, itself (C4).
         for named in ["checkout:abcd:/tmp", "access:0123456789abcdef"] {
             assert_eq!(
                 attest_bootstrap(peer, &request(named), None, &core, None).unwrap_err(),
-                "invalid_request",
+                Refused::Reason("invalid_request"),
                 "{named}"
             );
         }

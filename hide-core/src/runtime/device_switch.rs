@@ -420,6 +420,11 @@ impl Runtime {
             "device.switched",
             format!("Device {device_id} now uses its machine's own connection"),
         );
+        // The machine keeps its own Settings from here on: Hide AI placed
+        // on the device runs on this machine again (Settings per machine).
+        if self.drop_placements_on_own_settings_machines() {
+            self.refresh_background_ai();
+        }
         self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
         self.refresh_device_snapshots();
         true

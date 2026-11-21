@@ -1486,6 +1486,15 @@ impl Core {
         accepted
     }
 
+    /// Who answers a call proved only by the folder it was made in on this
+    /// machine (`Runtime::folder_call`, PRD device-connect-iroh D-55).
+    pub fn folder_call(&self, folder: &str) -> crate::guest_panes::FolderCall {
+        if !check_owner_thread(self, "folder_call") {
+            return crate::guest_panes::FolderCall::Host;
+        }
+        lock_recover(&self.runtime).folder_call(folder)
+    }
+
     /// The engine the core holds for a connected device; `None` when the
     /// device is not connected. The daemon reads and writes a device pane
     /// through it without joining the attach set, and asks it off the

@@ -558,6 +558,7 @@ mod tests {
             device_id: "macbook".into(),
             key: "cd".repeat(32),
             panes: vec![crate::guest_panes::GuestPane {
+                folder: None,
                 id: PANE.into(),
                 pane: "w1:p1".into(),
                 since_unix_ms: 1,

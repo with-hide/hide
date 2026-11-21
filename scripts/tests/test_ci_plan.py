@@ -869,7 +869,7 @@ class NamedPaths(unittest.TestCase):
 
     def test_a_contract_plans_the_tests_and_the_shell_that_read_it(self):
         expected = {
-            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["hide-core"]),
+            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["hide-core", "hided"]),
             "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["hide-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
             "contracts/hide-cli.json": ({"policy", "rust", "docs"}, ["hided"]),
