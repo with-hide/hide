@@ -2551,8 +2551,9 @@ impl Runtime {
         if self.missions.unreadable.is_some() {
             return Err("mission_unavailable".into());
         }
-        // An external tool reads every mission on this machine, and leads
-        // none: a Conductor it starts does (PRD hide-external-control D-12).
+        // A bot reads every mission, an own-mode bot those its own agents
+        // conduct (mission-87), and leads none: a Conductor it starts does
+        // (PRD hide-external-control D-12).
         let tool = match Caller::parse(caller) {
             Caller::Access { connection, .. } => Some(self.access_authority(
                 device,
@@ -2562,9 +2563,10 @@ impl Runtime {
             _ => None,
         };
         let every_project = tool.is_some();
-        // A tool reaches only Show and List, which name no pane.
+        let own = self.own_work(caller);
+        // A bot reaches only Show and List, which name no pane.
         let (context, actor, pane) = match tool {
-            Some(actor) => (expected.clone(), actor.clone(), actor.pane_id),
+            Some((actor, _)) => (expected.clone(), actor.clone(), actor.pane_id),
             None => {
                 let context = self
                     .workspace_control_query(device, caller, Query::Info)
@@ -3130,7 +3132,14 @@ impl Runtime {
                             .get(&id)
                             .map(|mission| mission.id.clone())
                             .or_else(|| self.missions.book.shelf(&id).map(|line| line.id.clone()))
-                            .ok_or("mission_unknown")?,
+                            // An own-mode bot hears the same refusal for a
+                            // mission that is not there as for one that is
+                            // not its own, as its agent reads do.
+                            .ok_or(if own.is_some() {
+                                crate::access::NOT_OWN_WORK
+                            } else {
+                                "mission_unknown"
+                            })?,
                         node,
                         None,
                     ),
@@ -3144,6 +3153,17 @@ impl Runtime {
                         (id, node, Some(caller))
                     }
                 };
+                if let Some(own) = &own {
+                    let conductor = self
+                        .missions
+                        .book
+                        .get(&id)
+                        .map(|mission| &mission.conductor)
+                        .or_else(|| self.missions.book.shelf(&id).map(|line| &line.conductor));
+                    super::access::hold(
+                        conductor.is_some_and(|conductor| self.conducts_own(own, conductor)),
+                    )?;
+                }
                 // Resolve node-key precedence before using an off-lock shelf read.
                 let shelved = if self.missions.book.shelf(&id).is_some() {
                     Some(
@@ -3227,9 +3247,13 @@ impl Runtime {
                             .cloned()
                             .map(|line| (line, true)),
                     )
-                    .filter(|(line, _)| {
-                        every_project
-                            || (line.device_id == device && Some(&line.project) == project.as_ref())
+                    .filter(|(line, _)| match &own {
+                        Some(own) => self.conducts_own(own, &line.conductor),
+                        None => {
+                            every_project
+                                || (line.device_id == device
+                                    && Some(&line.project) == project.as_ref())
+                        }
                     })
                     .collect();
                 lines.sort_by_key(|(line, _)| crate::missions::mission_number(&line.id));
@@ -5709,7 +5733,7 @@ impl Runtime {
                 access
                     .connections
                     .iter()
-                    .filter(|connection| connection.level == crate::access::Level::Act)
+                    .filter(|connection| connection.mode == crate::access::Mode::Own)
                     .map(|connection| (connection.id.clone(), connection.name.clone()))
                     .collect()
             })

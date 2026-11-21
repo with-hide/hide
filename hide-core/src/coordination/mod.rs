@@ -1365,6 +1365,62 @@ fn past_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
     found.next().is_none().then_some(first)
 }
 
+/// What a target key names, read by [`resolve_key`].
+pub(crate) enum Named<'a> {
+    Agent(&'a AgentRecord),
+    /// A spawn with no registration yet.
+    Spawn(&'a SpawnRecord),
+}
+
+/// The one reading of a key that names an agent, which every command
+/// family shares (`hide agent show`, letters, watches, `agent read`, and
+/// what holds an own-mode bot's command, mission-87): a registration's id,
+/// ended or not, wins outright; then a spawn by its id, or one of
+/// `caller`'s own by its intent, as its child once it has one; then the one
+/// live registration of that name or in `pane` (the key as the caller's
+/// machine names a pane), else the last that was ([`shown_record`]).
+/// Nothing else reads a key, so what a command was judged by is what it
+/// runs on.
+pub(crate) fn resolve_key<'a>(
+    ledger: &'a Ledger,
+    caller: Option<&Actor>,
+    pane: &str,
+    key: &str,
+) -> Result<Option<Named<'a>>, &'static str> {
+    if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+        return Ok(Some(Named::Agent(record)));
+    }
+    let own = caller.and_then(|caller| {
+        ledger
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.actor.same_identity(caller))
+            .map(|record| record.id.as_str())
+    });
+    let spawn = ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == key)
+        .or_else(|| {
+            let own = own?;
+            ledger
+                .spawns
+                .iter()
+                .find(|spawn| spawn.parent == own && spawn.intent == key)
+        });
+    if let Some(spawn) = spawn {
+        let child = spawn
+            .child
+            .as_deref()
+            .and_then(|child| ledger.agents.iter().find(|record| record.id == child));
+        return Ok(Some(match child {
+            Some(record) => Named::Agent(record),
+            None => Named::Spawn(spawn),
+        }));
+    }
+    Ok(shown_record(ledger, key, pane)?.map(Named::Agent))
+}
+
 /// The registration `hide agent show` reads for a `key` that is no id: the
 /// one live registration named `key` or sitting in `pane` (the key as the
 /// caller's machine names a pane), as a letter's recipient is named, else
@@ -1633,7 +1689,7 @@ pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &Registratio
     json!(agent_view(record, ledger, sleeping))
 }
 
-/// The name of the external tool whose connection started `record`, read
+/// The name of the bot whose connection started `record`, read
 /// from the origin record its start names (PRD hide-external-control B31).
 pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<String> {
     let origin = record.origin.as_deref()?;
@@ -2901,6 +2957,63 @@ pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u
         "kind": "access.tools_ended",
         "records": ended,
         "parties": parties.len(),
+    }));
+    true
+}
+
+/// The watches an own-mode bot keeps on work that is not its own, by id
+/// (mission-87): a bot moved from the whole Hide to its own work keeps no
+/// watch on the operator's agents or another bot's. `own` names the
+/// connections in own mode; the bot's work is read from the ledger as the
+/// rows read it (`started::hide_started`), and only when such a bot keeps a
+/// watch.
+fn unowned_watches(ledger: &Ledger, own: &[String]) -> Vec<String> {
+    let in_own_mode = |watch: &&crate::delivery::watch::Watch| {
+        watch
+            .parent
+            .access_connection()
+            .is_some_and(|connection| own.iter().any(|id| id == connection))
+    };
+    if !ledger.watches.iter().any(|watch| in_own_mode(&watch)) {
+        return Vec::new();
+    }
+    let work = started::hide_started(ledger).tool_work;
+    ledger
+        .watches
+        .iter()
+        .filter(in_own_mode)
+        .filter(|watch| {
+            let connection = watch.parent.access_connection();
+            !ledger.agents.iter().any(|record| {
+                record.actor.same_identity(&watch.target)
+                    && work.iter().any(|work| {
+                        Some(work.connection.as_str()) == connection && work.agent_id == record.id
+                    })
+            })
+        })
+        .map(|watch| watch.id.clone())
+        .collect()
+}
+
+/// Whether an own-mode bot keeps a watch [`end_unowned_watches`] ends.
+pub(crate) fn unowned_watches_left(ledger: &Ledger, own: &[String]) -> bool {
+    !unowned_watches(ledger, own).is_empty()
+}
+
+/// Ends the watches own-mode bots keep on work not their own. The store's
+/// upkeep runs it before every batch with the connections the core holds in
+/// own mode, so a mode change converges before the bot's next command or
+/// the watch's next warning. Whether it changed anything.
+pub(crate) fn end_unowned_watches(ledger: &mut Ledger, own: &[String]) -> bool {
+    let ended = unowned_watches(ledger, own);
+    if ended.is_empty() {
+        return false;
+    }
+    ledger.watches.retain(|watch| !ended.contains(&watch.id));
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "access.unowned_watches_ended",
+        "watches": ended,
     }));
     true
 }

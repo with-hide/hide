@@ -199,19 +199,19 @@
     "example": "hide device retry mini --wait"
   },
   "access request": {
-    "line": "Asks the operator to let this program, outside Hide's panes, use hide, and waits up to ten minutes for the answer in Settings > External tools (--no-wait answers at once); once approved the program's later hide commands run as it, at View only or Act, with no second request.",
+    "line": "Asks the operator to let this program, outside Hide's panes, use hide, and waits up to ten minutes for the answer in Settings > Bots (--no-wait answers at once); once approved the program's later hide commands run as this bot, in the mode the operator chose, the whole Hide or its own work, with no second request.",
     "example": "hide access request --name nightly-bot"
   },
   "access status": {
-    "line": "Says where this program's connection stands (not connected, waiting, connected and at which level, refused or disconnected) without asking anything new.",
+    "line": "Says where this program's connection stands (not connected, waiting, connected and in which mode, refused or disconnected) without asking anything new.",
     "example": "hide access status --json"
   },
   "access leave": {
-    "line": "Disconnects this program, as the operator's Disconnect does, and removes its key; the agents it started stay the operator's.",
+    "line": "Disconnects this bot, as the operator's Disconnect does, and removes its key; the agents it started run on as the operator's.",
     "example": "hide access leave"
   },
   "access list": {
-    "line": "Lists the connected tools with their level, last use and the agents and missions they started, and the requests waiting for the operator; a connected tool runs it.",
+    "line": "Lists the connected bots with their mode, last use and the agents and missions they started, and the requests waiting for the operator; a bot of the whole Hide runs it.",
     "example": "hide access list --json"
   },
   "mission help": {

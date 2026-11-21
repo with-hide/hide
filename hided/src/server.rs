@@ -1802,11 +1802,12 @@ impl ScopedRequest {
         )
     }
 
-    /// What an external tool's level must allow for this command (PRD
-    /// hide-external-control B20-B23). A command family the core also runs
-    /// for a tool takes its need from the core's one table
-    /// (`hide_core::access`), which the core judges again; the rest are
-    /// this boundary's alone.
+    /// What a bot's mode must allow for this command (PRD
+    /// hide-external-control B20-B23, mission-87). A command family the core
+    /// also runs for a bot takes its need from the core's one table
+    /// (`hide_core::access`), which the core judges again with what the
+    /// command names; the rest are this boundary's alone
+    /// (`docs/ARCHITECTURE.md`, Bots, has every row).
     fn access_need(&self) -> hide_core::access::Need {
         use hide_core::access::{self, Need};
         match self {
@@ -1814,31 +1815,31 @@ impl ScopedRequest {
             Self::Pane(command) => access::pane_need(command),
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
-            Self::Ps { .. } | Self::AccessList => Need::View,
-            Self::Store(command) => match command {
-                hide_core::store_command::StoreCommand::List { .. }
-                | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
-                _ => Need::Act,
-            },
-            // Reading the automations is a view; a change starts agents
-            // later with no one present.
-            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
-            Self::Automation(..) => Need::Act,
-            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
-                Need::Agent
-            }
-            Self::AgentSleep { .. }
-            | Self::AgentArchive { .. }
-            | Self::Query(..)
+            // The core lists an own-mode bot's own work only, and holds the
+            // agent the rest name to it.
+            Self::Ps { .. } | Self::AgentSleep { .. } | Self::AgentArchive { .. } => Need::Work,
+            // Which agents and models a machine offers is no one's work,
+            // and a spawn into any project on any device takes it.
+            Self::AgentCatalog(..) => Need::Work,
+            // The operator's screen and the project's records (Views, files,
+            // pages, links, sessions, worktrees), the bots and requests, the
+            // skills and MCP servers, the agents' profiles, the automations
+            // book and a new project are no one bot's work.
+            Self::Query(..)
             | Self::Action(..)
             | Self::BrowserConnect(..)
             | Self::BrowserRelay(..)
             | Self::Links(..)
             | Self::Session(..)
-            | Self::AgentCatalog(..)
+            | Self::WorktreeRemove(..)
+            | Self::AccessList
+            | Self::Store(..)
             | Self::AgentProfile(..)
-            | Self::ProjectOpen(..)
-            | Self::WorktreeRemove(..) => Need::Act,
+            | Self::Automation(..)
+            | Self::ProjectOpen(..) => Need::All,
+            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
+                Need::Agent
+            }
         }
     }
 }
@@ -2089,10 +2090,10 @@ async fn scoped_client_loop(
                             tokio::task::spawn_blocking(move || {
                             let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
-                            // An external tool runs what its level allows,
-                            // judged here for every command (B20-B23).
-                            if let Some(level) = cap.access_level() {
-                                hide_core::access::admit(level, command.access_need()).map_err(|reason| {
+                            // A bot runs what its mode allows, judged here
+                            // for every command (B20-B23, mission-87 D3).
+                            if let Some(mode) = cap.access_mode() {
+                                hide_core::access::admit(mode, command.access_need()).map_err(|reason| {
                                     (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
                                 })?;
                             }
@@ -2138,7 +2139,7 @@ async fn scoped_client_loop(
                                     crate::hook_request::delivery(&core, &cap, *command, hint)?
                                 }
                                 ScopedRequest::AccessList => {
-                                    if cap.access_level().is_none() {
+                                    if cap.access_mode().is_none() {
                                         return Err((
                                             "access_not_connected".to_owned(),
                                             crate::pane_auth::refusal_next_action("access_not_connected"),
@@ -2152,10 +2153,10 @@ async fn scoped_client_loop(
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
                                 }
-                                // A tool outside every checkout has none to
+                                // A bot outside every checkout has none to
                                 // read: it asks from inside one (B25).
                                 ScopedRequest::Links(_) | ScopedRequest::Session(_)
-                                    if cap.access_level().is_some()
+                                    if cap.access_mode().is_some()
                                         && cap.context.checkout_path.is_empty() =>
                                 {
                                     return Err((
@@ -2869,11 +2870,11 @@ fn handle_client_text(
             }
             return Ok(ClientAction::BrowserComment(event));
         }
-        // Approving, refusing, changing the level of and disconnecting an
-        // external tool are the operator's, in a window's Settings (PRD
+        // Approving, refusing, changing the mode of and disconnecting a bot
+        // are the operator's, in a window's Settings (PRD
         // hide-external-control B8): no `hide` command and no pane sends them.
         Some(kind) if kind.starts_with("access_") && !renderer => {
-            return Err("External tools are approved in an operator window".to_owned());
+            return Err("Bots are approved in an operator window".to_owned());
         }
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.
