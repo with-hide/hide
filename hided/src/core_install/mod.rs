@@ -16,8 +16,8 @@ pub mod starter;
 /// The longest intent id.
 const MAX_INTENT: usize = 64;
 
-/// The id one move or update runs under, which each of its commands on the
-/// other machine names: lowercase letters, digits and `-`, at most 64.
+/// The id one update runs under, which each of its commands on the other
+/// machine names: lowercase letters, digits and `-`, at most 64.
 pub fn checked_intent(intent: &str) -> Result<&str, String> {
     if intent.is_empty()
         || intent.len() > MAX_INTENT
@@ -30,7 +30,7 @@ pub fn checked_intent(intent: &str) -> Result<&str, String> {
     Ok(intent)
 }
 
-/// A fresh id for an intent of `kind`, such as `move` or `update`.
+/// A fresh id for an intent of `kind`, such as `update`.
 pub fn new_intent(kind: &str) -> String {
     let mut bytes = [0_u8; 8];
     getrandom::getrandom(&mut bytes).expect("getrandom");

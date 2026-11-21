@@ -1,4 +1,4 @@
-//! How the machine taking the core starts and stops it (PRD
+//! How a machine starts the core it runs from another build (PRD
 //! core-host-node-move B9, Q14). In production the account's login item
 //! starts it, so it outlives the SSH session that placed it and comes back
 //! after a login; a test fixture's HOME starts it as a detached process, so
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::env::{FIXTURE_HOME_MARKER, HIDE_CORE_STARTER};
 
 /// How long a started core has to bind its attach socket.
-pub(crate) const STARTED_WITHIN: Duration = Duration::from_secs(30);
+const STARTED_WITHIN: Duration = Duration::from_secs(30);
 /// How long a stopped core has to end after it was asked, before it is
 /// killed.
 const STOPPED_WITHIN: Duration = Duration::from_secs(5);
@@ -24,11 +24,6 @@ pub enum CoreStarter {
     },
     /// A detached `hided`, only in a fixture HOME.
     Fixture,
-}
-
-/// This `hided`, started as the core.
-pub fn this_program() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|error| format!("this hided has no path: {error}"))
 }
 
 impl CoreStarter {
@@ -67,19 +62,9 @@ impl CoreStarter {
     }
 
     /// Starts `program` as the core on `state_dir` and waits until it
-    /// takes links.
-    pub fn start(&self, state_dir: &Path, program: &Path) -> Result<u32, String> {
-        self.start_within(state_dir, program, STARTED_WITHIN)
-    }
-
-    /// [`Self::start`], given up `within` from now.
-    pub fn start_within(
-        &self,
-        state_dir: &Path,
-        program: &Path,
-        within: Duration,
-    ) -> Result<u32, String> {
-        let deadline = Instant::now() + within;
+    /// takes links, for at most [`STARTED_WITHIN`].
+    fn start(&self, state_dir: &Path, program: &Path) -> Result<u32, String> {
+        let deadline = Instant::now() + STARTED_WITHIN;
         let stale = std::fs::read(crate::attach::attach_record(state_dir)).ok();
         let mut exited: Exited = match self {
             Self::Fixture => {
@@ -108,22 +93,6 @@ impl CoreStarter {
             stop_running(state_dir)?;
         }
         self.start(state_dir, program)
-    }
-
-    /// Removes this folder's starter, so no core of it starts again; a core
-    /// running on the folder is left as it is.
-    pub fn remove(&self, state_dir: &Path) -> Result<(), String> {
-        match self {
-            Self::LoginItem { home, agents } => crate::login_item::remove(agents, home, state_dir),
-            Self::Fixture => Ok(()),
-        }
-    }
-
-    /// Stops the core on `state_dir` and removes its starter, and answers
-    /// only once no core of that folder runs.
-    pub fn stop(&self, state_dir: &Path) -> Result<(), String> {
-        self.remove(state_dir)?;
-        stop_running(state_dir)
     }
 }
 
@@ -284,7 +253,7 @@ mod tests {
             let state = state(unproven);
             assert!(!state.is_proven_running());
             crate::state_file::write_state(dir.path(), &state).unwrap();
-            CoreStarter::Fixture.stop(dir.path()).unwrap();
+            stop_running(dir.path()).unwrap();
             assert!(
                 other.try_wait().unwrap().is_none(),
                 "an unproven pid was signalled"
