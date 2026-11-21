@@ -2176,9 +2176,11 @@ impl LabelWorker {
         };
         // The newest event being the operator's message is a turn whose end
         // `decide` has not judged: only an answer or an interruption ends it.
+        // The read is owed whatever the summary switch says: the turn's end
+        // and the calls it answered are what a letter's approval hold ends
+        // on (`agent_hooks::facts::end_by_session_read`).
         let owner = record.owner.as_ref().filter(|_| {
-            self.summaries
-                && !pane.agent.requires_native_file_proof()
+            !pane.agent.requires_native_file_proof()
                 && matches!(pane.status.as_str(), "idle" | "done")
                 && newest_user_is_last(pane.events.make_contiguous())
         });

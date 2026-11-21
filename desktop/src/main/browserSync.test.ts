@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localPageRequest, isPopup, loadable, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, overCap, parseCommand, parseSync, parseTarget, remoteRequest, toBounds } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, localPageRequest, isPopup, loadable, popupBounds, MAX_AUTHORIZED_SCOPES, MAX_SYNCED_DISPLAYS, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, remoteRequest, toBounds } from "./browserSync";
 
 const rect = { x: 0, y: 40, width: 800, height: 600 };
 const display = { id: "d1", area_id: "a1", url: "https://a.test/", load: 3, rect, visible: true };
@@ -50,6 +50,20 @@ describe("what the shell may ask of the browser views (issue 155)", () => {
       { ...sync, external_grants: grant },
       { ...sync, external_grants: Array.from({ length: 257 }, () => grant) },
     ]) expect(parseSync(bad), JSON.stringify(bad).slice(0, 120)).toBeNull();
+  });
+
+  it("carries a retained web page's address and load together, and refuses half of them (PRD lane-desk-pair-view B32)", () => {
+    const page = { workspace, id: "d2", area_id: "shelf", url: "https://off.test/", load: 2 };
+    expect(parseSync({ ...sync, retained: [...retained, page] })?.retained).toEqual([...retained, page]);
+    for (const bad of [{ url: page.url }, { load: 2 }, { url: "", load: 2 }, { url: page.url, load: -1 }, { url: page.url, load: 1.5 }, { url: 7, load: 2 }]) {
+      expect(parseSync({ ...sync, retained: [...retained, { workspace, id: "d2", area_id: "shelf", ...bad }] })).toBeNull();
+    }
+  });
+
+  it("carries whether the retained list is the core's inventory, and refuses any other mark (B32)", () => {
+    expect(parseSync({ ...sync, inventoried: true })?.inventoried).toBe(true);
+    expect(parseSync(sync)?.inventoried).toBeUndefined();
+    for (const inventoried of [false, "true", 1, null]) expect(parseSync({ ...sync, inventoried })).toBeNull();
   });
 
   it("requires a bounded area identity on placements and retained pages", () => {
@@ -277,5 +291,13 @@ describe("what a local HTML page may load", () => {
     expect(decide("blob:null/1")).toEqual({ cancel: false });
     expect(decide("ftp://example.com/a")).toEqual({ cancel: true, boundary: "network" });
     expect(decide("not a url")).toEqual({ cancel: true, boundary: "network" });
+  });
+});
+
+describe("pages no slot shows (PRD lane-desk-pair-view B32)", () => {
+  it("lays one out at the lane's width for a page, or the window's when narrower, at the window's height", () => {
+    expect(offScreenBounds({ width: 1400, height: 820 })).toEqual({ x: 0, y: 0, width: 900, height: 820 });
+    expect(offScreenBounds({ width: 720.4, height: 600 })).toEqual({ x: 0, y: 0, width: 720, height: 600 });
+    expect(offScreenBounds({ width: 0, height: 0 })).toEqual({ x: 0, y: 0, width: 1, height: 1 });
   });
 });

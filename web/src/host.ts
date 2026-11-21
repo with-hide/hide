@@ -7,6 +7,7 @@
 // Factory's notifications with their clicks back; the shell
 // never reaches the host any other way (desktop PRD B11).
 
+import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
 
@@ -48,15 +49,27 @@ export type BrowserPlacement = {
 export type BrowserDevicePlacement = { width: number; mobile: boolean };
 
 /**
- * Every browser display of the front Workspace. The host closes a page of
- * that Workspace the list no longer names, hides the pages of any other,
- * and creates a page only once its display is on screen.
+ * Every browser display of the front Workspace, and every one the core
+ * retains. The host closes a page the retained list no longer names, hides
+ * every page not placed on screen, and loads a web page off screen when the
+ * core asks it to (PRD lane-desk-pair-view B32).
  */
 export type BrowserSync = {
   workspace: string | null;
   displays: BrowserPlacement[];
-  /** Core-owned inventory; a hidden native page absent here is closed. */
-  retained: { workspace: string; id: string; area_id: string }[];
+  /**
+   * Core-owned inventory; a hidden native page absent here is closed. A web
+   * page carries its address and the load the core last asked of it, which
+   * the host loads hidden when no slot shows it.
+   */
+  retained: { workspace: string; id: string; area_id: string; url?: string; load?: number }[];
+  /**
+   * Present once `retained` is the core's inventory. A shell's first sync
+   * goes before its snapshot does, with an empty list; the host takes the
+   * newest load of the first inventory it is sent as asked before this
+   * shell, so a relaunch or a reload loads none of the saved pages (B32).
+   */
+  inventoried?: true;
   /** Changes on controller mount or reconnect so the host replays actual attachment facts once. */
   attachment_epoch?: string;
   /** Positive core area authority, including empty areas; absent grants no debugger access. Incarnation changes on revoke/regrant. */
@@ -216,11 +229,16 @@ export type HostBridge = {
    * window; the host logs the outcome without the path and shows nothing (B16).
    */
   openInEditor(path: string): void;
-  /** Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`). */
-  openPractice(language: string, chapter?: string): void;
+  /**
+   * Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`).
+   * `show` opens that chapter's card on the list instead of playing it (the window after an update's 체험하기).
+   */
+  openPractice(language: string, chapter?: string, show?: boolean): void;
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;
+  /** What each released version brought, from the file built into the app (`desktop/src/main/whatsNew.ts`). */
+  whatsNew: WhatsNewBridge;
 };
 
 /**
@@ -266,6 +284,24 @@ export type UpdatesBridge = {
   setPrerelease(on: boolean): void;
   /** Closes the ready card for `version`; Help's dot and line and About keep the update. */
   dismiss(version: string): void;
+};
+
+/**
+ * The releases file as the desktop host holds it (`desktop/src/main/whatsNew.ts`):
+ * the parsed file built into the app, and the record of the last version
+ * whose window closed and the newest version opened in the history.
+ */
+export type WhatsNewState = {
+  appVersion: string;
+  feed: ReleaseFeed;
+  record: WhatsNewRecord | null;
+};
+
+export type WhatsNewBridge = {
+  /** Delivers the state at once and on every change; returns the unsubscribe. */
+  onState(listener: (state: WhatsNewState) => void): () => void;
+  /** Moves the record forward: a version's window closed (`shown`), a version opened in the history (`opened`). */
+  save(update: RecordUpdate): void;
 };
 
 /**

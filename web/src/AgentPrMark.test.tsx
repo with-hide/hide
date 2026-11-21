@@ -104,7 +104,8 @@ it("keeps a closed PR in the list, dimmed, and counts it", async () => {
     await act(async () => root.render(<TooltipProvider><AgentPrMark agent={agent} pulls={pulls} onOpen={() => {}} /></TooltipProvider>));
     const trigger = container.querySelector("button")!;
     expect(trigger.getAttribute("aria-label")).toBe("PR 3 · Merged 2 · Closed 1");
-    expect(container.querySelector('[data-pr-count="closed"]')?.className).toContain("opacity-(--opacity-dimmed)");
+    // All three are over: the merged icon alone, with no count.
+    expect([container.querySelector("[data-pr-count]")?.getAttribute("data-pr-count"), container.querySelector("[data-pr-counts]")?.textContent]).toEqual(["merged", ""]);
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     const items = Array.from(document.querySelectorAll<HTMLElement>("[data-pr-list-item]"));
     expect(items.map((item) => [item.dataset.prListItem, Boolean(item.querySelector("[data-pr-closed]"))])).toEqual([["12", false], ["11", false], ["10", true]]);

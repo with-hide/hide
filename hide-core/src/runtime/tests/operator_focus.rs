@@ -153,3 +153,31 @@ fn the_snapshot_carries_the_record_next_to_the_focused_pane() {
         serde_json::json!([{"client_id": "page-a", "sequence": 1}])
     );
 }
+
+#[test]
+fn a_numbered_card_open_is_answered_with_its_number_even_when_it_opens_nothing() {
+    let (mut runtime, _checkout) = tab_order_runtime("/tmp/hide-operator-focus");
+    // A card open may focus its owner's pane, so the page numbers it as an
+    // operator focus and hands the card the keyboard only from the snapshot
+    // that includes it; a project this core does not know opens nothing.
+    for (kind, payload) in [
+        (
+            "pr_open",
+            serde_json::json!({"workspace_id": "nowhere", "pr_number": 7, "client_id": "page-a", "sequence": 4}),
+        ),
+        (
+            "detail_open",
+            serde_json::json!({"item": {"kind": "mission", "mission": "gone"}, "at": "owner", "client_id": "page-a", "sequence": 5}),
+        ),
+    ] {
+        // The answer is published even though nothing opened.
+        assert!(
+            runtime.dispatch_json(
+                &serde_json::to_vec(&serde_json::json!({"schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload}))
+                    .expect("card open event"),
+            ),
+            "{kind} publishes its number"
+        );
+    }
+    assert_eq!(acked(&runtime), vec![("page-a".to_owned(), 5)]);
+}

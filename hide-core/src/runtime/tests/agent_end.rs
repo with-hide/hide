@@ -12,7 +12,7 @@
 use super::device_catalog::{engine_workspace, session};
 use super::*;
 use crate::coordination::{AgentRecord, Command};
-use crate::delivery::{Actor, ledger, worker::Worker};
+use crate::delivery::{Actor, ledger, store, worker::Worker};
 use crate::handle::ChangeNotifier;
 use crate::runtime::delivery::tests::{authority, fixture};
 use crate::session_archive::{ArchivePhase, ArchiveRecord, Resume};
@@ -291,6 +291,7 @@ fn registered(
                     actor: record.clone(),
                     ended: false,
                     forked: false,
+                    successor: None,
                 },
                 check: false,
             },
@@ -298,11 +299,11 @@ fn registered(
         )
         .unwrap();
     }
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -385,7 +386,7 @@ impl Ending {
     }
 
     fn worker_ended(&self) -> bool {
-        ledger::load(&self.path).unwrap().agents[1].ended
+        store::load(&self.path).unwrap().agents[1].ended
     }
 
     fn open(&self) -> Vec<String> {

@@ -248,7 +248,7 @@ impl SourceRead {
             }
             Err(failure) => {
                 crate::diagnostic!(
-                    json!({"component":"usage", "agent":self.agent,"source":self.source,"kind":failure.kind,"status":failure.status})
+                    json!({"component":"usage", "agent":self.agent,"source":self.source,"kind":failure.kind,"cause":failure.cause,"status":failure.status})
                 );
                 self.retry_at = (failure.status == Some(429)).then(|| {
                     let delay = failure.retry_after.unwrap_or_else(|| {

@@ -7,7 +7,7 @@
 //! from where its last read stopped (`catalog::Transcript`); a file whose
 //! stamp cannot be read is read whole and nothing is kept. Entries whose file
 //! left the listing of their home are dropped, so a home holds no more files
-//! than that listing's own `SESSION_DISCOVERY_LIMIT` cap admits.
+//! than that listing's own `SESSION_DISCOVERY_LIMIT` cap admits per store.
 
 use crate::Agent;
 use crate::catalog::{HeaderError, ProjectSession, SessionAvailability, Transcript};

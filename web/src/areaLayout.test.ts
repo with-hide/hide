@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { adjacentDisplay, tabStripFit, type AreaNode, type TabStripSizes } from "./areaLayout";
 
-// The tokens' values: preferred 180, title minimum 104, icon identity 40, control 24.
-const SIZES: TabStripSizes = { preferred: 180, titleMin: 104, icon: 40, control: 24 };
+// The tokens' values: preferred 180, title minimum 104, selected maximum 240, icon identity 40, control 24.
+const SIZES: TabStripSizes = { preferred: 180, titleMin: 104, selectedMax: 240, icon: 40, control: 24 };
 const fit = (room: number, count: number, hasSelected = true) => tabStripFit(room, count, hasSelected, SIZES);
 const drawn = (room: number, count: number) => {
   const { selected, others } = fit(room, count);
@@ -29,6 +29,28 @@ describe("tabStripFit", () => {
       "104 titled / 40 marks",
       "90 compact / 40 marks",
       "64 marks / 40 marks",
+      "64 marks / 40 marks",
+    ]);
+  });
+
+  it("lets the selected tab read its whole name and shrinks only the others (PRD lane-desk-pair-view D-30)", () => {
+    const needing = (room: number, count: number, need: number) => {
+      const { selected, others } = tabStripFit(room, count, true, SIZES, need);
+      return `${round(selected.width)} ${selected.fit} / ${round(others.width)} ${others.fit}`;
+    };
+    expect([
+      needing(485, 4, 150), // a share of 121 would cut it: it takes 150, three others share 335
+      needing(485, 4, 90), // a short name keeps its stage's width
+      needing(300, 4, 260), // capped where the others are marks alone
+      needing(1200, 6, 240), // room to spare: past the preferred width
+      needing(1200, 6, 400), // a long name stops at the selected maximum
+      needing(200, 6, 150), // below the title minimum after the others' marks: the stages as before
+    ]).toEqual([
+      "150 titled / 111.67 titled",
+      "121.25 titled / 121.25 titled",
+      "180 titled / 40 marks",
+      "240 titled / 180 titled",
+      "240 titled / 180 titled",
       "64 marks / 40 marks",
     ]);
   });

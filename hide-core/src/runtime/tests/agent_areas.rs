@@ -2315,9 +2315,9 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
 
 /// A checkout nobody has opened yet, such as a project just added, keeps the
 /// tab the engine opened for it when the saved Workspaces are at their cap: the
-/// cap forgets the stalest saved Workspace, not the one made for it. Ranked
-/// by its unset choice stamp alone, each such Workspace was forgotten as the
-/// next was made, and the screen showed the empty start over a live terminal.
+/// cap forgets the saved Workspace with no tabs used longest ago, not the one
+/// made for its tabs. Each forgetting the other, the screen showed the empty
+/// start over a live terminal.
 #[test]
 fn checkouts_not_yet_opened_keep_their_tabs_when_saved_workspaces_are_at_the_cap() {
     let (mut runtime, checkout) = live_tab_order_runtime("/agent-groups");
@@ -2357,6 +2357,92 @@ fn checkouts_not_yet_opened_keep_their_tabs_when_saved_workspaces_are_at_the_cap
     assert!(views.get(crate::node::TEST_NODE, "/gone-0").is_none());
     assert!(views.get(crate::node::TEST_NODE, "/gone-1").is_none());
     assert!(views.get(crate::node::TEST_NODE, "/gone-2").is_some());
+}
+
+/// A project listing more checkouts than the saved Workspaces' cap, nearly
+/// all with no tab, makes no saved Workspace for those (#2737): the checkouts
+/// with tabs keep theirs, and their tabs, through every publish. Made for
+/// every checkout listed, the entries forgot each other on each publish, the
+/// one in use among them, and its tabs went back to the engine's order.
+#[test]
+fn checkouts_with_no_tab_get_no_saved_workspace_however_many_are_listed() {
+    let (mut runtime, checkout) = live_tab_order_runtime("/agent-groups");
+    let elsewhere = register_folder(&mut runtime, "elsewhere");
+    // One catalog build for them all: `register_folder` builds one each.
+    let registrations = &mut runtime.snapshot.ui_state.workspace_registrations;
+    for index in 0..crate::workspace_views::MAX_WORKSPACES {
+        registrations.push(WorkspaceRegistration {
+            primary_checkout_id: None,
+            id: format!("workspace:idle-{index}"),
+            label: format!("idle-{index}"),
+            path: format!("/idle-{index}"),
+            device_id: crate::node::TEST_NODE.to_owned(),
+            pinned: false,
+        });
+    }
+    runtime.rebuild_catalog();
+    let mut runtime = with_new_views(runtime, "agent-groups-listed");
+
+    for _ in 0..2 {
+        runtime.ingest_session(Ok(session_with_elsewhere(&["w-order:t1"])));
+        runtime.sync_workspace_view();
+    }
+
+    let snapshot = runtime.snapshot();
+    let tabs = |id: &str| {
+        snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|row| row.id == id)
+            .and_then(|row| row.agent_groups.as_ref())
+            .map(|groups| groups.groups[0].tabs.clone())
+    };
+    assert_eq!(tabs(&checkout), Some(vec!["w-order:t1".to_owned()]));
+    assert_eq!(tabs(&elsewhere), Some(vec!["w-else:t1".to_owned()]));
+    let mut saved: Vec<_> = runtime
+        .workspace_views
+        .as_ref()
+        .unwrap()
+        .views
+        .workspaces
+        .iter()
+        .map(|view| view.path.as_str())
+        .collect();
+    saved.sort();
+    assert_eq!(saved, ["/agent-groups", "/elsewhere"]);
+}
+
+/// A saved Workspace's use moves with its tabs, which the cap ranks: a
+/// session that lists the same tabs again is no use, and one where a tab
+/// arrived is (`used_unix_ms`).
+#[test]
+fn a_saved_workspace_is_used_when_its_tabs_change_not_when_listed_again() {
+    let (runtime, _) = live_tab_order_runtime("/agent-groups");
+    let mut runtime = with_new_views(runtime, "agent-groups-used");
+    fn publish(runtime: &mut Runtime, tabs: &[&str]) {
+        runtime.ingest_session(Ok(session_with_elsewhere(tabs)));
+        runtime.sync_workspace_view();
+    }
+    fn used(runtime: &mut Runtime) -> &mut u64 {
+        &mut runtime
+            .workspace_views
+            .as_mut()
+            .unwrap()
+            .views
+            .get_mut(crate::node::TEST_NODE, "/agent-groups")
+            .unwrap()
+            .used_unix_ms
+    }
+    publish(&mut runtime, &["w-order:t1"]);
+    *used(&mut runtime) = 1;
+
+    publish(&mut runtime, &["w-order:t1"]);
+    assert_eq!(*used(&mut runtime), 1);
+
+    publish(&mut runtime, &["w-order:t1", "w-order:t2"]);
+    assert!(*used(&mut runtime) > 1);
 }
 
 /// The core's own engine lists a new tab before it answers the creation, so

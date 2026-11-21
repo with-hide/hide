@@ -17,6 +17,7 @@ export default chapter<AgentsModel>({
   id: "agents",
   number: 2,
   version: 1,
+  since: "1.2.5",
   world: AGENTS_WORLD,
   quest: true,
   preview: "rows",

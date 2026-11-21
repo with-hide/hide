@@ -39,6 +39,7 @@ fn record(
         ended,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 
@@ -329,11 +330,13 @@ fn mission(
             plan: None,
             attention: None,
             hide: None,
-            review_fails: 0,
+            review_rounds: None,
+            ready_at_unix_ms: None,
+            worked_at_unix_ms: None,
+            own_met_at_unix_ms: None,
             pushed_at_unix_ms: None,
-            asks_push: false,
             warnings: Vec::new(),
-            hold: None,
+            wait: None,
             waiting_on: None,
             work: None,
             gate: None,

@@ -52,8 +52,8 @@ it.each([
   };
   const rest: SnapshotRest = {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", agent_scope: scope, devices: [], workspaces: [{ id: "w", label: "repo", device_id: "local", path: "/repo", registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: scope, checkouts: [checkout] }] },
-    workspace_view: { ...workspace, open: true, documents: true, tool: folded ? "explorer" : null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { active_area: "a1", limits: { areas: 8, depth: 4, displays: 32 }, display_count: 1, root: { area: { id: "a1", active: "b", displays: [{ id: "b", tab_id: null, path: "", committed: null, preview: false, reason: null, kind: "browser", state: "open", label: "page", url: "https://page.test/" }] } } } },
-    ui_state: { detail: { items: [], shown: false } },
+    workspace_view: { ...workspace, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: folded ? "explorer" : null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { active_area: "a1", limits: { areas: 8, depth: 4, displays: 32 }, display_count: 1, root: { area: { id: "a1", active: "b", displays: [{ id: "b", tab_id: null, path: "", committed: null, preview: false, reason: null, kind: "browser", state: "open", label: "page", url: "https://page.test/" }] } } } },
+    ui_state: {},
   };
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -89,7 +89,7 @@ it.each([
     expect(keyboardCommandOwner()).toMatchObject({ kind: arrival === "after" ? "view" : "pane", workspace: "c" });
     const destination = input === "terminal" ? terminal : document.querySelector<HTMLInputElement>(input === "tool" ? "[data-live-tool]" : "[data-popup]")!;
     if (input !== "terminal") act(() => destination.focus());
-    await act(async () => useShellStore.setState({ rest: { ...rest, workspace_view: { ...rest.workspace_view!, ...(folded ? { documents: false } : { open: false }) } } }));
+    await act(async () => useShellStore.setState({ rest: { ...rest, workspace_view: { ...rest.workspace_view!, ...(folded ? { tray: { ...rest.workspace_view!.tray, shown: false } } : { open: false }) } } }));
     // The terminal remained the shell's active element throughout native
     // focus. Returning it cannot depend on another DOM focus event.
     expect(document.activeElement).toBe(destination);
@@ -253,13 +253,13 @@ describe("a terminal link to a file outside every checkout", () => {
     useShellStore.setState({ rest: null });
   });
 
-  it("opens it as a tab of the Workspace in front named by its grant alone (B1, D-05)", async () => {
+  it("opens it as a tab of the Workspace in front named by its grant alone, the pressed pane its owner (B1, D-05, D-54)", async () => {
     const { external, openPath } = host(grant);
     const sent = clicked();
     await vi.waitFor(() => expect(sent.some((event) => event.kind === "external_open")).toBe(true));
     expect(external.open).toHaveBeenCalledWith("/tmp/shot.png", "auto");
     const open = sent.find((event) => event.kind === "external_open")!;
-    expect(open.payload).toEqual({ grant: grant.id, name: "shot.png", kind: "image", request_id: expect.stringMatching(/^follow:/), workspace: { device_id: "core", path: "/repo" } });
+    expect(open.payload).toEqual({ grant: grant.id, name: "shot.png", kind: "image", request_id: expect.stringMatching(/^follow:/), workspace: { device_id: "core", path: "/repo" }, opener_pane: "pane-1" });
     expect(JSON.stringify(sent)).not.toContain("/tmp");
     expect(openPath).not.toHaveBeenCalled();
   });
@@ -282,7 +282,7 @@ describe("a terminal link to a file outside every checkout", () => {
 
 describe("input after a confirmed View close", () => {
   const workspace = { device_id: "local", path: "/repo" };
-  const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, documents: true, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
+  const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
   const setup = async () => {
     vi.stubGlobal("CSS", { escape: (value: string) => value });
     const { installKeyboardOwner } = await import("./viewFocus");
@@ -346,7 +346,7 @@ describe("input after a confirmed View close", () => {
     header.dataset.browserToolbar = "";
     header.innerHTML = "<input />";
     content.parentElement!.append(header);
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout } as never);
     try {
       header.querySelector("input")!.focus();
@@ -366,7 +366,7 @@ describe("input after a confirmed View close", () => {
     let command: (id: string) => void = () => {};
     const previousHost = window.hideHost;
     Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk: vi.fn() } });
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
     const stopKeyboard = installKeyboard(actions);

@@ -20,14 +20,14 @@ import { allAgents } from "./paneAgents";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import type { TaskCost, TaskMission } from "./generated/hided-ws";
-import { costPrefix, dayHeights, durationWords, filterCounts, projectCost, sessionName, TASK_FILTERS, taskIn, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
+import { costPrefix, dayHeights, durationWords, filterCounts, pricedUsd, projectCost, sessionName, TASK_FILTERS, taskIn, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
 import { TaskResultMark } from "./ProjectTool";
 import { catalogWorkspaces, frontCheckout, localDeviceId, type ChangedFileSnapshot, type Checkout, type Workspace } from "./snapshot";
 import type { WorkspaceView } from "./workspace";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
-// What the Project tool opens in the 보기 slot (PRD lane-two-columns B30,
+// What the Project tool opens as a card tab on a desk (PRD lane-two-columns B30,
 // project-panel-results B9, B27-B34): the project's worktrees with its disk,
 // what one worktree left, and the seven days' cost by task. Each draws what
 // the core sent; a removal goes through the disk cleanup sheet's
@@ -295,7 +295,7 @@ function TaskRow({ task, project, noResult, open: openFirst, actions }: { task: 
             </>
           ) : <TaskResultMark task={task} projectId={project.id} />}
         </span>
-        <span role="cell" className={cn(NUMBER_COLUMN, "pointer-events-none relative font-mono tabular-nums text-foreground")}>{task.unpriced ? "≥ " : ""}{usd(task.micro_usd, language)}</span>
+        <span role="cell" className={cn(NUMBER_COLUMN, "pointer-events-none relative font-mono tabular-nums text-foreground")}>{pricedUsd(task, language) ?? t("projectTool.cost.noPrice")}</span>
         <span role="cell" className={cn(NUMBER_COLUMN, WIDE_COLUMN, "pointer-events-none relative tabular-nums text-muted-foreground")}>{tokenWords(language, task.tokens)}</span>
         <span role="cell" className={cn(NUMBER_COLUMN, "pointer-events-none relative tabular-nums text-muted-foreground")}>{durationWords(language, task.elapsed_ms)}</span>
         <span role="cell" className={cn(NUMBER_COLUMN, WIDE_COLUMN, "pointer-events-none relative tabular-nums text-muted-foreground")}>{durationWords(language, task.worked_ms)}</span>
@@ -318,7 +318,7 @@ function TaskSessions({ task, project }: { task: TaskCost; project: Workspace })
         return (
           <li key={session.session_id} className="flex min-w-0 items-center gap-sm py-xxs text-micro" style={{ paddingInlineStart: `calc(var(--spacing-md) * ${session.depth + 1})` }} data-task-session={session.session_id} data-task-depth={session.depth}>
             <span className="min-w-0 flex-1 truncate text-foreground" title={name}>{name} <span className="text-muted-foreground">· {agentProductName(session.agent)}</span></span>
-            <span className={cn(NUMBER_COLUMN, "font-mono tabular-nums")}>{session.unpriced && session.micro_usd === 0 ? t("projectTool.cost.noPrice") : `${session.unpriced ? "≥ " : ""}${usd(session.micro_usd, language)}`}</span>
+            <span className={cn(NUMBER_COLUMN, "font-mono tabular-nums")}>{pricedUsd(session, language) ?? t("projectTool.cost.noPrice")}</span>
             <span className={cn(NUMBER_COLUMN, WIDE_COLUMN, "tabular-nums text-muted-foreground")}>{tokenWords(language, session.tokens)}</span>
             <span className={cn(NUMBER_COLUMN, "tabular-nums text-muted-foreground")}>{durationWords(language, session.worked_ms)}</span>
           </li>

@@ -32,6 +32,7 @@ use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
 use serde_json::json;
 
+use crate::accepting::{CloseOnDrop, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
@@ -1156,11 +1157,14 @@ pub struct Answering {
     pub desktop_renderers: Arc<AtomicUsize>,
     /// What `hide device` asks about pairing (`crate::pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
+    /// What the listener's accept thread does, for `/health`.
+    pub health: Arc<crate::accepting::ListenerHealth>,
 }
 
 /// Answers bootstrap requests until `shutdown`. The listener accepts on a
-/// thread of its own, because an accept blocks; the closer frees it when the
-/// daemon stops, and a failed accept ends the bootstrap with a diagnostic.
+/// thread of its own, because an accept blocks; a failed accept is tried
+/// again (`crate::accepting`), and the closer frees the thread when the
+/// daemon stops.
 pub async fn serve(
     listener: BootstrapListener,
     answering: Answering,
@@ -1174,41 +1178,33 @@ pub async fn serve(
         port,
         desktop_renderers,
         pairing,
+        health,
     } = answering;
-    // Closed however this future ends, a drop included, so the accept
-    // thread never outlives it.
-    let closing = CloseOnDrop {
-        closer: listener.closer(),
-        closed: Arc::new(AtomicBool::new(false)),
-    };
-    let closed = Arc::clone(&closing.closed);
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_BOOTSTRAPS);
-    let accepting = std::thread::Builder::new()
-        .name("pane-bootstrap-accept".to_owned())
-        .spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok(stream) => {
-                        if accepted.blocking_send(Ok(stream)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::ConnectionAborted
-                            && closed.load(Ordering::SeqCst) =>
-                    {
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = accepted.blocking_send(Err(error));
-                        return;
-                    }
-                }
-            }
-        });
-    if let Err(error) = accepting {
-        note_bootstrap_stopped(&error);
-        return;
+    let accepting = {
+        let closed = closing.closed();
+        let health = Arc::clone(&health);
+        std::thread::Builder::new()
+            .name("pane-bootstrap-accept".to_owned())
+            .spawn(move || {
+                accept_until_closed(
+                    || listener.accept(),
+                    &accepted,
+                    &closed,
+                    &health,
+                    ("pane_auth", "bootstrap.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
+                );
+            })
+    };
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            note_bootstrap_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(Semaphore::new(MAX_BOOTSTRAPS));
     let mut sweep = tokio::time::interval(Duration::from_secs(5));
@@ -1223,13 +1219,11 @@ pub async fn serve(
             }
             () = shutdown.ended() => break,
         };
-        let stream = match arrival {
-            Some(Ok(stream)) => stream,
-            Some(Err(error)) => {
-                note_bootstrap_stopped(&error);
-                break;
-            }
-            None => break,
+        let Some(stream) = arrival else {
+            // The accept thread ended though the listener is open.
+            health.stopped();
+            note_bootstrap_stopped("the accept thread ended");
+            break;
         };
         let Ok(permit) = Arc::clone(&limit).try_acquire_owned() else {
             continue;
@@ -1255,27 +1249,14 @@ pub async fn serve(
     }
 }
 
-struct CloseOnDrop {
-    closer: hide_platform::ipc::ListenerCloser,
-    /// Set before the close, so the accept thread tells its own stop from an
-    /// accept that failed.
-    closed: Arc<AtomicBool>,
-}
-
-impl Drop for CloseOnDrop {
-    fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.closer.close();
-    }
-}
-
-/// The bootstrap listener stopped accepting for a reason other than the
-/// daemon's own stop; panes cannot get a capability until hided restarts.
-fn note_bootstrap_stopped(error: &std::io::Error) {
+/// The bootstrap listener stopped for a reason other than the daemon's own
+/// stop; panes cannot get a capability until hided restarts, and `/health`
+/// says so.
+fn note_bootstrap_stopped(message: &str) {
     hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": "bootstrap.stopped",
-        "message": error.to_string(),
+        "message": message,
     }));
 }
 

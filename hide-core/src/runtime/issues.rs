@@ -702,7 +702,20 @@ impl Runtime {
         &self,
         workspace_id: &str,
     ) -> Option<(Option<String>, WorkspaceSnapshot)> {
-        if let Some(workspace) = self.local_project_by_id(workspace_id) {
+        self.issue_project_ref(workspace_id)
+            .map(|(node, workspace)| (node.map(str::to_owned), workspace.clone()))
+    }
+
+    /// `issue_project`, borrowed.
+    pub(super) fn issue_project_ref(
+        &self,
+        workspace_id: &str,
+    ) -> Option<(Option<&str>, &WorkspaceSnapshot)> {
+        if let Some(workspace) =
+            self.snapshot.navigator.workspaces.iter().find(|workspace| {
+                workspace.id == workspace_id && workspace.remote_target_id.is_none()
+            })
+        {
             return Some((None, workspace));
         }
         self.node_sessions().find_map(|(node, session)| {
@@ -710,7 +723,7 @@ impl Runtime {
                 .workspaces
                 .iter()
                 .find(|workspace| workspace.id == workspace_id)?;
-            Some((Some(node.to_owned()), workspace.clone()))
+            Some((Some(node), workspace))
         })
     }
 

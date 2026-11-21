@@ -1062,6 +1062,9 @@ impl Runtime {
         let ui = &mut self.snapshot.ui_state;
         ui.device_expanded_paths.remove(device_id);
         ui.device_add_project_folders.remove(device_id);
+        // Slot cards waiting for one of its panes would wait for good.
+        ui.moving_cards
+            .retain(|held| !held.pane.as_deref().is_some_and(theirs));
         let tabs = self
             .snapshot
             .editor

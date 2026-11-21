@@ -131,6 +131,14 @@ impl From<EngineError> for String {
 /// now, so a replaced connection retires the readers of the old one.
 pub(crate) type SharedEngine = Arc<dyn Engine>;
 
+/// A resume a heal typed: the pane it was typed into, and the pane the agent
+/// was saved in, the same unless the resume opened a tab of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResumedPane {
+    pub(crate) pane: String,
+    pub(crate) saved: String,
+}
+
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
 use crate::session_sync::{ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
@@ -195,8 +203,10 @@ pub(crate) trait Engine: Send + Sync {
     /// engine that starts and resumes agents itself keeps it as the pane's
     /// agent's session, saved with the pane, so a reboot resumes that
     /// conversation. Answers true once for the first session of an agent
-    /// the engine resumed after its turn was cut off under it (PRD
-    /// engine-bundle-4-herdr-removal D-22), which the core then tells.
+    /// a heal resumed after its pane was cut under it (an engine switch, a
+    /// reboot, a lost holder, a device's return), so a report with no heal
+    /// behind it says the holder kept its agent (PRD
+    /// letters-missions-simplify D-19, B17).
     /// `lineage` is the processes from the report's sender up to the pane's
     /// shell, as the pane's kernel named them: a session an agent the
     /// pane's agent ran names (`claude -p` from its tool's shell, which
@@ -209,6 +219,15 @@ pub(crate) trait Engine: Send + Sync {
         _lineage: Option<&[hide_agent_hooks::hook_request::ExecProcess]>,
     ) -> Answer<bool> {
         Ok(false)
+    }
+
+    /// The resumes a heal typed since the last call, each given once, in
+    /// the order typed (PRD letters-missions-simplify B17, B18): the core
+    /// owes what each heal says from these, whatever order the resumed
+    /// agents' reports reach it in, and whether or not they reach it. The
+    /// session-sync pass takes them off the runtime lock.
+    fn take_resumed(&self) -> Vec<ResumedPane> {
+        Vec::new()
     }
 
     /// What `hide agent exec` reported of the profile's start this engine
@@ -521,10 +540,12 @@ pub(crate) trait Engine: Send + Sync {
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// Types `text` into the agent's input and submits it. A refusal typed
-    /// nothing; an answer that never came may follow a submission that
-    /// arrived.
-    fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
+    /// Types `text` into the agent's input and submits it. A letter is
+    /// refused while the agent is blocked or not ready; the operator's own
+    /// words are typed in any state, since they may answer the question on
+    /// screen. A refusal typed nothing; an answer that never came may follow
+    /// a submission that arrived.
+    fn prompt_agent(&self, wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()>;
 
     // Worktrees.
 
@@ -634,6 +655,17 @@ pub(crate) enum Zoom {
     Off,
 }
 
+/// Who types a prompt into an agent ([`Engine::prompt_agent`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptBy {
+    /// A letter's bell or a brief: waits for the agent to be ready and at
+    /// rest, so it never lands in a menu or a question.
+    Letter,
+    /// The operator's own words from the phone or the Desk lane: they may
+    /// be the answer to the question on screen.
+    Operator,
+}
+
 /// The engine hided hands the core and asks itself for the few things that
 /// cannot wait for the core's owner thread (a pane's proof, a phone's read
 /// of a pane). It holds the one engine both use.
@@ -672,12 +704,8 @@ impl EngineHandle {
     /// `install` is the Hide installation whose panes this engine starts, as
     /// the embedder that owns this machine names it
     /// (`hide_host::kit::running_install`); the core never reads it from this
-    /// process itself (PRD core-host-node D-21). The hooks' records folder is
-    /// the state folder this engine was handed (never this process's
-    /// environment's) composed with it by the one rule those panes' hooks
-    /// apply, so `~/.hide/agent-hooks` for the desktop app on the account's
-    /// own state folder and that folder's `installs/<mark>` for a build
-    /// started from elsewhere.
+    /// process itself (PRD core-host-node D-21); the core composes the
+    /// hooks' records folder from it ([`Self::own_install`]).
     pub fn own(
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
@@ -686,14 +714,6 @@ impl EngineHandle {
         install: Option<String>,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
-        let hooks_records =
-            hide_agent_hooks::route::records_of_state(&home, Some(&state_dir), install.as_deref())
-                .map_err(|error| {
-                    format!(
-                        "the hooks' records folder of {} could not be read: {error}",
-                        state_dir.display()
-                    )
-                })?;
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         // The choices this machine's agents were started with, which the
@@ -712,7 +732,6 @@ impl EngineHandle {
             own::Place {
                 engine_dir: scope.clone(),
                 home,
-                hooks_records: Some(hooks_records),
                 node,
                 // This machine's own node.
                 windows: cfg!(windows),
@@ -759,14 +778,18 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
-    /// Types `text` into a pane and submits it.
-    pub fn submit_text(
+    /// Types the operator's `text` into the agent's input in `pane` and
+    /// submits it, as a letter's bell is typed ([`Engine::prompt_agent`]):
+    /// an agent reads a slash command sent this way as the command (#2354).
+    /// A refusal typed nothing.
+    pub fn prompt_agent(
         &self,
         pane: &str,
         text: &str,
         timeout: Duration,
     ) -> Result<(), EngineError> {
-        self.engine.submit_text(Wait::Each(timeout), pane, text)
+        self.engine
+            .prompt_agent(Wait::Each(timeout), pane, text, PromptBy::Operator)
     }
 
     /// Presses one key in a pane.

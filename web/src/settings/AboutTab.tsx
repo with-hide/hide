@@ -10,6 +10,7 @@ import { diagnosticsInputOf, diagnosticsText, environmentTone, engineLine, shown
 import { useShellStore } from "../store";
 import type { UpdateStatus } from "../host";
 import { checkedAgo, checkForUpdates, restartIntoUpdate, setPreviewUpdates, useUpdateStatus } from "../updates";
+import { openUpdateHistory, updateHistoryAvailable } from "../whatsNew";
 
 /** What this hide is: its version and update, and the details folded away unless something is wrong. */
 export function AboutTab({ actions }: { actions: Actions }) {
@@ -103,6 +104,11 @@ export function UpdateRows() {
         {line.action ? (
           <Button variant="secondary" size="sm" onClick={line.action === "restart" ? restartIntoUpdate : checkForUpdates} data-update-action={line.action}>
             {t(line.action === "restart" ? "settings.update.restartNow" : line.action === "retry" ? "settings.update.checkAgain" : "settings.update.checkNow")}
+          </Button>
+        ) : null}
+        {updateHistoryAvailable() ? (
+          <Button variant="text-link" size="inline" className="text-caption" onClick={() => openUpdateHistory()} data-settings-update-history="true">
+            {t("whatsNew.history")}
           </Button>
         ) : null}
       </Row>

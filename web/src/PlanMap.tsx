@@ -22,7 +22,7 @@ import { evidenceWords, planCells, planOfSession, planProposed, stepDelegationWo
 import type { PlanStep, PlanView, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 
-// A session's plan drawn large in the lane's 보기 slot (PRD hide-plan B11-B13),
+// A session's plan drawn large as a card tab on a desk (PRD hide-plan B11-B13),
 // in the mission page's shape so the two read alike: the head (state, time,
 // a cell per step, `k / m 끝`), one band while the plan waits for the
 // operator's review (answered in the conversation, so its one button goes

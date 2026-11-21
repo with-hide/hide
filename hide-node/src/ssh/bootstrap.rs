@@ -74,13 +74,21 @@ const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
 /// The PowerShell that runs on a Windows device in place of `sh`: it says it
 /// wants its own script (`script powershell`), drops every line before a
 /// byte count (the `sh` script the node sent before it knew), and runs the
-/// script of that many bytes that follows ([`powershell_script`]), with `$i`
-/// and `$o` the link's unbuffered input and output. It reads a byte at a
-/// time, so it takes nothing past the script.
+/// script of that many bytes that follows ([`powershell_script`]), with
+/// `$stdin` and `$stdout` the link's unbuffered input and output. It reads a
+/// byte at a time, so it takes nothing past the script.
 ///
-/// They are .NET's console streams; the script reads and writes through
-/// overlapped streams instead where the link's pipes are overlapped, as
-/// Windows OpenSSH's are (`bootstrap.ps1`).
+/// They are synchronous file streams on the handles of .NET's console
+/// streams (their non-public instance field `_handle`, binding flags `36`),
+/// not the console streams themselves: on Windows OpenSSH's overlapped pipes
+/// a console stream's read that has to wait never returns, so the wrapper
+/// waiting for its script after its ask, or for bytes the network brought
+/// late, hung and left its `powershell.exe` on the device
+/// (with-hide/hide#2761). A file stream reads with the plain `ReadFile`
+/// every program the session runs reads with, which waits on an overlapped
+/// pipe and an ordinary one (a local start, a test) alike; an overlapped
+/// stream would not, since on an ordinary pipe it waits for completions that
+/// never come.
 ///
 /// It turns PowerShell's module auto-loading off and imports the one module
 /// the wrapper and the script use (`Write-Output`, `New-Object`, `Add-Type`)
@@ -100,18 +108,21 @@ const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
 const POWERSHELL_WRAPPER: &str = "
 $PSModuleAutoLoadingPreference=[Management.Automation.PSModuleAutoLoadingPreference]::None;
 Import-Module Microsoft.PowerShell.Utility;
-$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();
+$ci=[Console]::OpenStandardInput();$co=[Console]::OpenStandardOutput();
+$f=$ci.GetType().GetField((Write-Output _handle),[Reflection.BindingFlags]36);
+$stdin=New-Object IO.FileStream($f.GetValue($ci),[IO.FileAccess]::Read,1,$false);
+$stdout=New-Object IO.FileStream($f.GetValue($co),[IO.FileAccess]::Write,1,$false);
 $b=[Text.Encoding]::ASCII.GetBytes(((Write-Output HIDE1 script powershell) -join [char]9)+[char]10);
-$o.Write($b,0,$b.Length);$o.Flush();
+$stdout.Write($b,0,$b.Length);$stdout.Flush();
 $n=0;
 while(1){
 $m=New-Object IO.MemoryStream;
-while(1){$c=$i.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};
+while(1){$c=$stdin.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};
 if([int]::TryParse([Text.Encoding]::ASCII.GetString($m.ToArray()),[ref]$n)){break}
 };
 if($n -le 0 -or $n -gt 4194304){exit 65};
 $s=New-Object byte[] $n;$r=0;
-while($r -lt $n){$k=$i.Read($s,$r,$n-$r);if($k -le 0){exit 0};$r+=$k};
+while($r -lt $n){$k=$stdin.Read($s,$r,$n-$r);if($k -le 0){exit 0};$r+=$k};
 iex ([Text.Encoding]::UTF8.GetString($s))
 ";
 
@@ -129,8 +140,16 @@ const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
 /// What the wrapper answers when it runs, asking for [`powershell_script`].
 const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
 
+/// The variables the ssh session sets for what it runs, which the helper
+/// starts without, in both scripts: a program in a pane is on the device, not
+/// in an ssh session, and one that reads them as an ssh login (Antigravity
+/// keeps its sign-in in a file then, not in the device's keychain) misses
+/// what the device's own account holds (with-hide/hide#2776).
+const SSH_SESSION_VARIABLES: [&str; 3] = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"];
+
 /// The PowerShell script's text, with the variables a home of the node's
-/// own clears and the agent homes it sets.
+/// own clears, the agent homes it sets and the ssh session's variables the
+/// helper starts without.
 fn powershell_text() -> String {
     let variables = HOME_FOLDER_VARIABLES
         .iter()
@@ -142,9 +161,15 @@ fn powershell_text() -> String {
         .map(|(variable, folder)| format!("'{variable}={folder}'"))
         .collect::<Vec<_>>()
         .join(",");
+    let session = SSH_SESSION_VARIABLES
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(",");
     POWERSHELL_SCRIPT
         .replace("@HOME_FOLDER_VARIABLES@", &variables)
         .replace("@AGENT_HOMES@", &agents)
+        .replace("@SSH_SESSION_VARIABLES@", &session)
 }
 
 /// The PowerShell script as the wrapper reads it: its size in bytes on a
@@ -202,6 +227,7 @@ start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; 
 below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
 case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
+unset @SSH_SESSION_VARIABLES@;
 say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
 o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
@@ -247,7 +273,8 @@ pub(crate) fn script_line() -> String {
         .replace("@POWERSHELL@", POWERSHELL)
         .replace("@WRAPPER@", &powershell_wrapper())
         .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "))
-        .replace("@AGENT_HOMES@", &posix_agent_homes());
+        .replace("@AGENT_HOMES@", &posix_agent_homes())
+        .replace("@SSH_SESSION_VARIABLES@", &SSH_SESSION_VARIABLES.join(" "));
     line.push('\n');
     line
 }

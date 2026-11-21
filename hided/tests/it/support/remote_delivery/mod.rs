@@ -1216,12 +1216,15 @@ impl Fixture {
         self.event("retry_connect", json!({"target_id":DEVICE}))
     }
 
+    /// The daemon's ledger as its store holds it; empty until the daemon
+    /// has made the store, which this never makes itself.
     pub fn ledger(&self) -> Result<hide_core::delivery::ledger::Ledger> {
-        let path = self.state.join("delivery-ledger.json");
+        let path = hide_kit::layout::delivery_store(&self.state);
         if !path.exists() {
             return Ok(Default::default());
         }
-        Ok(serde_json::from_slice(&read(&path)?)?)
+        hide_core::delivery::store::load(&path)
+            .map_err(|code| anyhow::anyhow!("the ledger store: {code}"))
     }
 
     /// The line the daemon's own doorbell typed into the recipient's pane

@@ -20,7 +20,7 @@ import { setAgentState, startAgentInProject } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, holdReads, moveHead, releaseReads, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showSidebarPrs, showTool, setLanePinned } from "./wire";
+import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showSidebarPrs, showTool } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -78,8 +78,8 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
   }
 }
 
-/** The card in the lane's 보기 slot (PRD sidebar-task-lens D-50). */
-const cardOf = (page: Page, number: number) => page.locator(`aside[data-lane="detail"] [data-pr-card="${number}"]`);
+/** A pull request's card, a tab on a desk (PRD lane-desk-pair-view D-13). */
+const cardOf = (page: Page, number: number) => page.locator(`[data-card] [data-pr-card="${number}"]`);
 
 /** Opens the card's folded files line (B36); the card keeps it open while the app runs. */
 async function unfold(card: Locator, section: "files"): Promise<void> {
@@ -223,14 +223,14 @@ test("all four extra questions failing still lists every pull request and names 
   );
 });
 
-// Operator decision 2026-11-08: a 보기 slot item belongs to the Agent tab that was in front when it
-// opened. Another tab in front, here the checkout's second, shows no card and no slot button of the
-// first tab's; back in the first tab the card is there as it was.
+// Operator decision 2026-11-08: a card belongs to the desk of the Agent tab that was in front when it
+// opened (PRD lane-desk-pair-view D-06, D-13). Another tab in front, here the checkout's second, shows
+// no card tab of the first tab's; back in the first tab the card is there as it was.
 test("the card stays with the Agent tab it was opened in and does not follow to another tab", async ({ page }) => {
   await openWork(page, async ({ work, daemon, project }) => {
     await work.locator('[data-pr-row="31"]').click();
     await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    await expect(page.locator('[role="tab"][data-tab-kind="card"]')).toHaveCount(1);
     await screenshot(page, "work-pr-card-first-tab-light");
 
     const second = await withControl(daemon, async (control) => {
@@ -241,30 +241,35 @@ test("the card stays with the Agent tab it was opened in and does not follow to 
     // The page draws the tab the core shows a few frames after it says so.
     for (let frame = 0; frame < 20; frame += 1) await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
     await screenshot(page, "work-pr-card-second-tab-light");
-    await expect(page.locator('aside[data-lane="detail"]')).toHaveCount(0);
-    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(0);
+    await expect(page.locator('[data-card]')).toHaveCount(0);
+    await expect(page.locator('[role="tab"][data-tab-kind="card"]')).toHaveCount(0);
 
     await withControl(daemon, (control) => focusTab(control, project, project.tab));
     await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('[data-lane-tool="detail"]')).toHaveCount(1);
+    await expect(page.locator('[role="tab"][data-tab-kind="card"]')).toHaveCount(1);
     expect(second.tab).not.toBe(project.tab);
   });
 });
 
-test("the card opens in the 보기 slot and Merge goes out on the head it showed", async ({ page }) => {
+test("the card opens as a desk tab and Merge goes out on the head it showed", async ({ page }) => {
   await openWork(page, async ({ gh, work, sent, last }) => {
-    // A row opens the card in the 보기 slot and no Files tab (B27, B50), and
+    // A row opens the card as a desk tab and no file tab (B27, B50; PRD lane-desk-pair-view D-13), and
     // merge asks once, then goes out conditioned on the head commit the card
     // showed (B37).
     await work.locator('[data-pr-row="31"]').click();
     const card = cardOf(page, 31);
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('[data-view-tab-bar] [role="tab"]', { hasText: "#31" })).toHaveCount(0);
-    // The rail's slot button draws the card's PR mark in its state and stands
-    // apart from the tools by one rule (B46).
+    await expect(page.locator('[data-view-tab-bar] [role="tab"][data-tab-kind="file"]')).toHaveCount(0);
+    // The card's tab draws its PR mark in its state, and the rail has the desk's button alone above its rule (B46; PRD lane-desk-pair-view D-29).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
-    await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
+    expect(rail).toEqual(["documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
+    await expect(page.locator('[role="tab"][data-tab-kind="card"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
+    // The tab carries its mark and short name alone, a desk being one checkout's; its full name is
+    // the tab's tooltip and the card's path line (PRD lane-desk-pair-view D-30, B13).
+    const cardTab = page.locator('[role="tab"][data-tab-kind="card"]');
+    await expect(cardTab).toHaveText("PR #31");
+    await expect(cardTab).toHaveAttribute("aria-label", /^PR #31 · \S/);
+    await expect(page.locator("[data-card] [data-card-name]")).toHaveText("PR #31 · 머지할 수 있는 PR");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
     // The other actions still assign, create an issue or copy the branch; with
@@ -316,7 +321,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
 test("the lane chord brings the card back with its tool and alone, and another checkout in front shows no card of this tab's (lane-two-columns B15, B22)", async ({ page }) => {
   await openWork(page, async ({ work, daemon }) => {
     const screen = page.locator("[data-workspace-screen]");
-    const slot = page.locator('[data-lane-tool="detail"]');
+    const cardTab = page.locator('[role="tab"][data-tab-kind="card"]');
     await showTool(page, "project");
     await work.locator('[data-pr-row="31"]').click();
     const card = cardOf(page, 31);
@@ -341,8 +346,8 @@ test("the lane chord brings the card back with its tool and alone, and another c
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
 
     // Another checkout in front, whose lane was never opened: the card belongs
-    // to the Agent tab it was opened in, so this checkout's tab shows none and
-    // the rail has no slot button for it (B22).
+    // to the desk of the Agent tab it was opened in, so this checkout's tab
+    // shows no card tab (B22).
     const other = path.join(daemon.home, "projects", "other");
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
@@ -352,13 +357,12 @@ test("the lane chord brings the card back with its tool and alone, and another c
     await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
     await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
-    await expect(slot).toHaveCount(0);
+    await expect(cardTab).toHaveCount(0);
     await expect(card).toHaveCount(0);
 
-    // Back in the first checkout's tab its card is there, and its button
-    // is the way to it.
+    // Back in the first checkout's tab its card is there as a tab.
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
-    await expect(slot).toHaveCount(1);
+    await expect(cardTab).toHaveCount(1);
     await expect(card).toBeVisible();
   });
 });
@@ -367,14 +371,13 @@ test("in a stacked lane with the Project tool in front, every way of opening the
   await openWork(page, async ({ work }) => {
     const screen = page.locator("[data-workspace-screen]");
     const tool = page.locator('aside[data-lane="project"]');
-    // A document in the viewing column and the Project tool, pinned, in a
-    // body with room for one column only: the lane stacks with the tool in front.
+    // A document in the viewing column and the Project tool in a body with
+    // room for one column only: the lane stacks with the tool in front.
     await showTool(page, "explorer");
     await page.locator('[data-explorer-row$="/README.md"]').dblclick();
     await expect(screen).toHaveAttribute("data-lane-view", "documents");
     await showTool(page, "project");
-    await setLanePinned(page, true);
-    await page.setViewportSize({ width: 1100, height: 1000 });
+    await page.setViewportSize({ width: 1000, height: 1000 });
     await expect(screen).toHaveAttribute("data-lane-stacked", "true");
     const toolInFront = async () => {
       await showTool(page, "project");
@@ -385,17 +388,17 @@ test("in a stacked lane with the Project tool in front, every way of opening the
     // The sidebar's PR row.
     await work.locator('[data-pr-row="31"]').click();
     await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
-    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
     // The count line's worktree number.
     await toolInFront();
     await tool.locator('[data-project-count="worktrees"]').click();
-    await expect(page.locator('aside[data-lane="detail"] [data-worktrees-view]')).toBeVisible({ timeout: 30_000 });
-    await expect(screen).toHaveAttribute("data-lane-view", "detail");
-    // The slot button brings the card back after the tool.
+    await expect(page.locator('[data-card] [data-worktrees-view]')).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
+    // The desk's button brings the desk back after the tool.
     await toolInFront();
-    await page.locator('[data-lane-tool="detail"]').click();
-    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    await page.locator('[data-lane-tool="documents"]').click();
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
   });
 });
 
@@ -414,6 +417,28 @@ test("an agent's mark on a pull request row takes the press while the row's butt
   }, { agentOn: "feat/clean" });
 });
 
+test("a pull request row opens the card on its maker's standing desk with the keys, so the close chord closes the card and not the maker (UI_BEHAVIOR, Opening, preview, and Open to the side)", { tag: "@platform" }, async ({ page }) => {
+  await openWork(page, async ({ work }) => {
+    const maker = work.locator('[data-pr="31"] [data-pr-agent]').first();
+    await expect(maker).toBeVisible({ timeout: 30_000 }); // wait-ok: the PR list names its maker once the core's GitHub read after the agent's start lands
+    // The core brings the maker's pane forward with the card, focusing it, in its worktree's Workspace.
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible();
+    const pane = page.locator('[data-pane-view][data-focused="true"]');
+    await expect(pane).toHaveCount(1);
+    const makerPane = await pane.getAttribute("data-pane-view");
+    // A closed lane coming up hands the keys to the desk on its own; the operator's case is the desk already standing.
+    await page.locator(`[data-terminal-host="${makerPane}"]`).click();
+    await expect(page.locator(`[data-terminal-host="${makerPane}"] textarea`)).toBeFocused();
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(page.locator('[data-view-area-id] [role="tab"][data-tab-kind="card"][aria-selected="true"]')).toBeFocused();
+    await page.keyboard.press(chord("close_tab"));
+    await expect(cardOf(page, 31)).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${makerPane}"]`)).toBeVisible();
+  }, { agentOn: "feat/clean" });
+});
+
 test("a branch update on a pull request that moved is refused, looked at again, then goes out on the new head", async ({ page }) => {
   await openWork(page, async ({ gh, work }) => {
     // GitHub refuses, the card says it changed, Look again reads it and the
@@ -424,7 +449,7 @@ test("a branch update on a pull request that moved is refused, looked at again, 
     await expect(behind.locator('[data-pr-card-reason="update"]')).toBeVisible();
     await expect(behind.locator("[data-pr-card-files]")).toBeVisible({ timeout: 30_000 });
     const shown = head(gh.state, 32);
-    // Opening the card reads it twice, once for the slot the core opened and
+    // Opening the card reads it twice, once for the card tab the core opened and
     // once by the page on mount, and the list is read again beside them, so
     // one of those can land after the push below. Both keep answering the
     // pull request that was drawn, so the refused write is the operator's
@@ -457,8 +482,6 @@ test("the list and the card read without sideways scrolling in each language and
     await work.locator('[data-pr-row="33"]').click();
     const review = cardOf(page, 33);
     await expect(review).toBeVisible({ timeout: 30_000 });
-    // The lane stays unpinned, over the agents; a pinned one would dock and redraw under the keys.
-    await setLanePinned(page, false);
     const overflow = (target: Locator) => target.evaluate((node) => node.scrollWidth - node.clientWidth);
     // The narrowest lane (B48): the divider's keys narrow it to its minimum.
     const divider = page.locator('[data-lane-divider="lane"]');
@@ -479,7 +502,7 @@ test("the list and the card read without sideways scrolling in each language and
       await page.locator(`[data-theme-option="${theme}"]`).click();
       await page.keyboard.press("Escape");
       await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
-      // The card in the 보기 slot and the list in the sidebar beside it.
+      // The card on the desk and the list in the sidebar beside it.
       await expect(review).toBeVisible();
       await expect.poll(() => overflow(review)).toBeLessThanOrEqual(0);
       await expect(work.locator('[data-prs-view="board"]')).toBeVisible();
@@ -495,7 +518,7 @@ test("a merged pull request opens its card and draws its parts, with no Merge", 
     await work.locator('[data-pr-row="37"]').click();
     const card = cardOf(page, 37);
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "merged");
+    await expect(page.locator('[role="tab"][data-tab-kind="card"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "merged");
     await expect(card.locator("[data-pr-card-files]")).toBeVisible({ timeout: 30_000 });
     // A merged pull request's timeline ends on `머지됨` with no now row (B6).
     await expect(card.locator("[data-timeline-milestone]").last()).toHaveAttribute("data-timeline-milestone", "merged");

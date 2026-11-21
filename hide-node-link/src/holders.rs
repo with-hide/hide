@@ -259,6 +259,9 @@ pub struct HolderProof {
 /// shows is followed as one that is shown.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PaneFacts {
+    /// The program's OSC 7501 lifecycle report, absent on older peers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<Box<ProgramStatus>>,
     /// The holder's last screen-mode fact, false for a holder or node
     /// built before the negotiated alternate-screen extension.
     #[serde(default)]
@@ -299,6 +302,22 @@ pub struct PaneFacts {
     pub foreground_unread: bool,
     /// What the pane's screen rules read on its screen.
     pub screen: ScreenRead,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProgramStatus {
+    pub app: String,
+    pub state: ProgramState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+    Error,
 }
 
 /// The program in a pane's foreground, as an agent definition's

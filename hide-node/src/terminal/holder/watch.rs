@@ -291,6 +291,7 @@ impl Watches {
                 // next start of it follows it again.
                 Ended::Lost(_) => {
                     let mut last = watched.last.take().unwrap_or_default();
+                    last.program_status = None;
                     last.screen = ScreenRead::Unknown {
                         reason: WATCH_LOST.to_owned(),
                     };
@@ -313,6 +314,7 @@ impl Watches {
                 Capability::LineEditing,
                 Capability::ForegroundUnread,
                 Capability::AlternateScreen,
+                Capability::ProgramStatus,
             ],
             Instant::now() + OPEN_LIMIT,
         );
@@ -514,6 +516,28 @@ fn pane_facts(pane: &str, facts: Facts) -> PaneFacts {
             }
         });
     PaneFacts {
+        program_status: facts.program_status.flatten().map(|status| {
+            Box::new(hide_node_link::holders::ProgramStatus {
+                app: status.app,
+                state: match status.state {
+                    hide_holder_protocol::ProgramState::Idle => {
+                        hide_node_link::holders::ProgramState::Idle
+                    }
+                    hide_holder_protocol::ProgramState::Working => {
+                        hide_node_link::holders::ProgramState::Working
+                    }
+                    hide_holder_protocol::ProgramState::Blocked => {
+                        hide_node_link::holders::ProgramState::Blocked
+                    }
+                    hide_holder_protocol::ProgramState::Done => {
+                        hide_node_link::holders::ProgramState::Done
+                    }
+                    hide_holder_protocol::ProgramState::Error => {
+                        hide_node_link::holders::ProgramState::Error
+                    }
+                },
+            })
+        }),
         cwd,
         title: facts.title,
         bells: facts.bells,

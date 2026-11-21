@@ -3,7 +3,7 @@ import type { Catalog, Catalogs } from "../schema";
 // The mission screen (PRD mission-screen B1-B23): one device's missions in a
 // table of groups, the list beside a mission's detail, the start guide with
 // its moving picture, and the words its states say; and a mission's card in
-// the 보기 slot (operator decision 2026-11-09).
+// a desk (operator decision 2026-11-09).
 export const missionScreenEnglish = {
   "missionScreen.title": "Missions",
   "missionScreen.rowHint": "Missions · {{count}} your turn",

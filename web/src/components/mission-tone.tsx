@@ -82,10 +82,12 @@ export const CELL_LIMIT = 20;
 /**
  * One cell per step or node (B1, B8, B13), in order and in its state's
  * colour; a long list draws each run of one state as one stretch, so the bar
- * keeps its width and its proportions. The words beside it carry the
+ * keeps its width and its proportions. `edge` lays it along the bottom edge
+ * of a chip that is `relative` and clips it, so it takes no width and stays
+ * when a narrow pane hides the chip's words. The words beside it carry the
  * numbers, so the bar itself is hidden from a screen reader.
  */
-export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head"; className?: string }) {
+export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head" | "edge"; className?: string }) {
   const fills = fill ?? (TONE_FILL as Record<string, string>);
   const runs: { tone: T; count: number }[] = [];
   if (tones.length > CELL_LIMIT) {
@@ -102,12 +104,12 @@ export function ProgressCells<T extends string = CellTone>({ tones, fill, size, 
       data-progress-cells={tones.join(" ")}
       className={cn(
         "flex shrink-0 items-stretch",
-        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
+        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : size === "edge" ? "pointer-events-none absolute inset-x-0 bottom-0 h-(--size-chip-edge-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
         className,
       )}
     >
       {cells.map((cell, index) => (
-        <span key={index} className={cn("rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
+        <span key={index} className={cn(size !== "edge" && "rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
       ))}
     </span>
   );

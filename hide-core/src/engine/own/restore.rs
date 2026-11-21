@@ -40,6 +40,16 @@
 //! terminal's foreground, is resumed the same way: the daemon that typed
 //! its resume ended before the line reached the shell, or the agent ended
 //! while no daemon ran.
+//!
+//! This is the one heal (PRD letters-missions-simplify D-06, D-18, B16): an
+//! engine switch, a reboot, a holder lost under a running daemon (whose
+//! daemon restarts, `hided/src/holder_restart.rs`) and a device's reboot or
+//! its link's return all reach it, since each opens an engine whose saved
+//! panes have no holder. Every cut agent is resumed, the operator's own
+//! included, the one at rest as much as the one at work; each resume typed
+//! is marked healed until its hook names its session (`Shared::healed`),
+//! and the core, which knows whether the agent was at work and what it is
+//! to its parent or mission, decides whether it is owed its line.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -172,10 +182,6 @@ pub(super) struct Resume {
     name: Option<String>,
     session: Option<String>,
     argv: Vec<String>,
-    /// Its hook last said its turn was running or waiting on the operator:
-    /// the turn was cut off, and the core tells the agent once it is back
-    /// (PRD engine-bundle-4-herdr-removal D-22).
-    cut: bool,
     /// Set when its own pane runs another command: it resumes in a new tab
     /// opened for it (PRD engine-bundle-4-herdr-removal D-8, B15).
     new_tab: Option<NewTab>,
@@ -196,7 +202,6 @@ impl Resume {
             name: None,
             session: Some(session.to_owned()),
             argv: vec![kind.to_owned()],
-            cut: false,
             new_tab: None,
             profile: Some(crate::launch::LaunchProfile {
                 id: hide_agent_adapter::ProfileId("p1".to_owned()),
@@ -278,7 +283,6 @@ fn plans(
                             name: agent.name.clone(),
                             session: agent.session.clone(),
                             argv,
-                            cut: false,
                             new_tab: None,
                             profile: described(launches, restart, agent)
                                 .and_then(|launch| launch.profile.clone()),
@@ -290,32 +294,6 @@ fn plans(
         plans.insert(restart.pane.clone(), plan);
     }
     plans
-}
-
-/// Whether `resume`'s agent was cut off mid-turn: the last record its hook
-/// wrote in the pane's file under `records` (the daemon's hook records) for
-/// that agent, and for its conversation when both name one, says its turn was
-/// running or waiting on the operator. A pane no hook wrote, or an agent that
-/// rested, was not.
-fn was_cut(catalog: &Catalog, records: &Path, resume: &Resume) -> bool {
-    hide_agent_hooks::counters::records_in(records, &resume.pane)
-        .iter()
-        .rev()
-        .find(|record| {
-            agents::definition(catalog, &record.agent)
-                .is_some_and(|definition| definition.id == resume.kind)
-                && match (resume.session.as_deref(), record.session.as_deref()) {
-                    (Some(resumed), Some(reported)) => resumed == reported,
-                    _ => true,
-                }
-        })
-        .is_some_and(|record| {
-            matches!(
-                record.turn,
-                Some(hide_agent_hooks::report::HookTurn::Working)
-                    | Some(hide_agent_hooks::report::HookTurn::Waiting)
-            )
-        })
 }
 
 /// `argv`, a resume of `agent` in `restart`'s pane, followed by the model
@@ -558,14 +536,13 @@ impl OwnEngine<'static> {
             .as_ref()
             .map(|place| crate::herdr_import::waiting(&place.engine_dir))
             .unwrap_or_default();
-        let mut plans = plans(
+        let plans = plans(
             &self.shared.definitions.get(),
             launches,
             &both,
             running,
             &waiting,
         );
-        self.mark_cut(&mut plans);
         let Restarted {
             failures,
             mut resumes,
@@ -891,35 +868,13 @@ impl OwnEngine<'static> {
         }
     }
 
-    /// Marks each resume whose agent's hook last said its turn was running or
-    /// waiting on the operator in that conversation: the move or the
-    /// machine's restart cut that turn off (D-22, B9). Read from the hook
-    /// records on this machine; a device's engine reads none
-    /// (`hooks_records`).
-    fn mark_cut(&self, plans: &mut BTreeMap<String, Plan>) {
-        let Some(records) = self
-            .shared
-            .place
-            .as_ref()
-            .and_then(|place| place.hooks_records.as_deref())
-        else {
-            return;
-        };
-        let catalog = self.shared.definitions.get();
-        for plan in plans.values_mut() {
-            if let Plan::Resume(resume) = plan {
-                resume.cut = was_cut(&catalog, records, resume);
-            }
-        }
-    }
-
     /// Types each of `resumes` into its pane, one pane after another, each
     /// once its shell is ready; one that cannot be typed is tried again once
     /// the others have had their turn ([`RESUME_ATTEMPTS`]), and one that
     /// still cannot leaves its pane a shell, logs why and is named by the
-    /// session as an agent that was not resumed. A cut resume is owed its
-    /// letter from before its line is typed, so the agent's first hook report
-    /// never comes first. One that was resting is not typed ([`Self::rests`]).
+    /// session as an agent that was not resumed. Each is marked healed from
+    /// before its line is typed, so the agent's first hook report never comes
+    /// first.
     /// An engine its owner lets go ends the pass: each resume it had yet to
     /// type is still its pane's saved agent, which the next restore resumes.
     pub(super) fn resume_agents(engine: &std::sync::Weak<super::Shared>, resumes: &[Resume]) {
@@ -939,9 +894,6 @@ impl OwnEngine<'static> {
                 if engine.check().is_err() {
                     return;
                 }
-                if engine.rests(resume) {
-                    continue;
-                }
                 // A restarted pane runs the shell a pane with no program runs:
                 // it marks its first prompt when that is the integration's, and
                 // the resume waits for the mark as a start into a tab the core
@@ -951,13 +903,14 @@ impl OwnEngine<'static> {
                         ShellStart::of_tab(true, engine.shared.holders.shell_launch().as_ref())
                     })
                     .clone();
-                let cut = || {
+                let healed = || {
                     engine
                         .shared
-                        .cut
+                        .healed
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                 };
+                let saved = resume.pane.clone();
                 let opened;
                 let resume = match &resume.new_tab {
                     None => resume,
@@ -985,9 +938,11 @@ impl OwnEngine<'static> {
                         }
                     },
                 };
-                if resume.cut {
-                    cut().insert(resume.pane.clone(), resume.kind.clone());
-                }
+                healed().insert(resume.pane.clone(), resume.kind.clone());
+                // Said before it is typed, so the core takes it before any
+                // report of the resumed agent: a resume that then fails is
+                // said not resumed (`leave_not_resumed`).
+                engine.say_resumed(&resume.pane, &saved);
                 match engine.resume_agent(resume, shell) {
                     Ok(by_name) => crate::diagnostic!(serde_json::json!({
                         "component": "own_engine",
@@ -997,12 +952,11 @@ impl OwnEngine<'static> {
                         "by_session": resume.session.is_some(),
                         "by_file": by_name.is_none(),
                         "by_name_cause": by_name.map(ByName::as_str),
-                        "cut": resume.cut,
                         "attempt": attempt,
                     })),
                     Err(why) => {
-                        // An agent that never resumed is owed nothing.
-                        cut().remove(&resume.pane);
+                        // An agent that never resumed is told nothing.
+                        healed().remove(&resume.pane);
                         let last = attempt == RESUME_ATTEMPTS;
                         crate::diagnostic!(serde_json::json!({
                             "component": "own_engine",
@@ -1045,53 +999,6 @@ impl OwnEngine<'static> {
             self.say_not_resumed(&left);
             self.changed();
         }
-    }
-
-    /// Leaves the agent of `resume` resting in its pane when its turn was
-    /// not cut off, and answers whether it did: started again, every agent
-    /// of a machine that was running dozens would load it at once, while
-    /// one that rested is waited on by no one. The core keeps it as a
-    /// sleeping agent the operator's visit wakes (`Topology::rest`). Only
-    /// this machine's hook files say a turn was cut (`mark_cut`), so a
-    /// device's agents, a given-back conversation with no pane yet, and one
-    /// with no session to wake into are started again as before.
-    fn rests(&self, resume: &Resume) -> bool {
-        let local = self
-            .shared
-            .place
-            .as_ref()
-            .is_some_and(|place| place.hooks_records.is_some());
-        if !local || resume.cut || resume.new_tab.is_some() || resume.session.is_none() {
-            return false;
-        }
-        // Only an agent that sleeps in its pane can wait there; one whose
-        // sleep closes its pane, or that cannot sleep, starts again.
-        let catalog = self.shared.definitions.get();
-        let kind = agents::definition(&catalog, &resume.kind)
-            .map_or_else(|| resume.kind.clone(), agents::kind_name);
-        let sleeps_in_pane = hide_agent_adapter::adapter(&kind)
-            .and_then(|adapter| adapter.sleep)
-            .is_some_and(|dialect| !dialect.closes_pane_when_sleeping());
-        if !sleeps_in_pane {
-            return false;
-        }
-        let agent = PaneAgent {
-            kind: resume.kind.clone(),
-            name: resume.name.clone(),
-            session: resume.session.clone(),
-            ..PaneAgent::default()
-        };
-        if !self.topology().rest(&resume.pane, agent) {
-            return false;
-        }
-        crate::diagnostic!(serde_json::json!({
-            "component": "own_engine",
-            "kind": "agent.resume_rested",
-            "pane_id": resume.pane,
-            "agent": resume.kind,
-        }));
-        self.changed();
-        true
     }
 
     /// A given-back conversation whose tab could not open (`why`) waits

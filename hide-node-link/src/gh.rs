@@ -282,6 +282,12 @@ pub const MINIMUM_VERSION: GhVersion = GhVersion(2, 72, 0);
 /// it refuses.
 pub const VERSION: [&str; 1] = ["--version"];
 
+/// Whether `gh` is signed in, asked after [`VERSION`]: only the account in
+/// use, since a plain `auth status` exits 1 when any other stored account's
+/// token has lapsed, and that failed every read of a machine whose active
+/// account was fine (issue #2767).
+pub const AUTH_STATUS: [&str; 3] = ["auth", "status", "--active"];
+
 /// A `gh` release, compared part by part.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct GhVersion(pub u32, pub u32, pub u32);
@@ -597,7 +603,7 @@ pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRe
 /// a line in `hide-host/tests/it/gh_floor.rs`, which runs it against the
 /// [`MINIMUM_VERSION`] release.
 pub fn allowed(arguments: &[&str]) -> bool {
-    arguments == ["auth", "status"]
+    arguments == AUTH_STATUS
         || arguments == VERSION
         || is_job_log_read(arguments)
         || is_conditional_read(arguments)
@@ -1522,7 +1528,7 @@ mod tests {
             ]
         };
         for arguments in [
-            vec!["auth", "status"],
+            AUTH_STATUS.to_vec(),
             pr_list("open", OPEN_CHECK_FIELDS),
             pr_list("all", PULL_REQUEST_FIELDS),
             merged("factory/1-task"),
@@ -1535,7 +1541,7 @@ mod tests {
         }
         let mut with_web = pr_list("all", PULL_REQUEST_FIELDS);
         with_web.push("--web");
-        let mut token = vec!["auth", "status"];
+        let mut token = AUTH_STATUS.to_vec();
         token.push("--show-token");
         for arguments in [
             token,
@@ -1951,6 +1957,6 @@ mod tests {
         let log = format!("{}가end", "x".repeat(JOB_LOG_TAIL_BYTES));
         let kept = answered_output(&["run", "view", "--job", "1", "--log-failed"], log.clone());
         assert!(kept.len() <= JOB_LOG_TAIL_BYTES && kept.ends_with("가end"));
-        assert_eq!(answered_output(&["auth", "status"], log.clone()), log);
+        assert_eq!(answered_output(&AUTH_STATUS, log.clone()), log);
     }
 }

@@ -100,9 +100,10 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * A Memory promotion or a suggestion's home is the Hide AI tool's 제안 tab, where it is one of the rows (PRD hide-ai-suggestions D-02, B2);
+ * an automation run's is the automation screen, where its terminal is (PRD automations D-11, B15).
  */
-export type HideAiHome = "suggestions";
+export type HideAiHome = "suggestions" | "automations";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 /** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
@@ -137,7 +138,7 @@ export type AgentRow = {
   resolved_recent?: boolean;
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
-  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
+  escalation?: { cause: "parent_blocked" | "draft" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
   /** On a lineage root: every raised descendant, lead first. */
@@ -253,8 +254,8 @@ export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
 /** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
 export type OpenAsk = { id: string; text: string; at_unix_ms: number };
 
-export const HUMAN_KINDS = ["auth", "permission"] as const;
-/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
+export const HUMAN_KINDS = ["auth", "permission", "install"] as const;
+/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, a permission, or the confirm of an install an agent asked for with `hide skill` / `hide mcp`, which the core lays itself. */
 export type HumanKind = typeof HUMAN_KINDS[number];
 
 /**
@@ -819,7 +820,7 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-/** `branch_diffs`: the Hide AI branch files read now, the 보기 slot's and the open 제안 row's, at most two. */
+/** `branch_diffs`: the Hide AI branch files read now, a card tab's and the open 제안 row's, at most two. */
 export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diffs?: BranchDiff[] };
 
 /** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
@@ -877,6 +878,8 @@ export type Tab = {
   label: string | null;
   empty: boolean;
   delegated: boolean;
+  /** Every pane is an automation run's: neither the strip nor the project's tree lists it (absent when false). */
+  automation?: boolean;
   panes: PaneRow[];
 };
 
@@ -1028,6 +1031,8 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
+  /** An automation's own folder, registered only so its runs start there: no list draws it (PRD automations D-08, B30). Absent while false. */
+  unlisted?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -1385,7 +1390,7 @@ export type ProjectAddReceipt = { request_id: string; device_id: string; path: s
 );
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
-/** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
+/** One card a desk tab shows (`DetailItem`, PRD sidebar-task-lens D-50; lane-desk-pair-view D-13). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
@@ -1402,11 +1407,12 @@ export type DetailItem =
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
 /**
- * Which agent's 보기 slot an item opens in, where it was pressed (operator
- * decision 2026-11-09): `here` the slot in front, over what it shows, for
- * what a card opens inside the slot; `{ pane }` the slot of the agent whose
- * row, head or chip was pressed, that pane taking the keyboard; `owner` the
- * slot of the agent that owns the item, pressed where no agent is.
+ * Which Agent tab's desk a card opens on, where it was pressed (PRD
+ * lane-desk-pair-view D-12, B6, B7): `here` the desk in front, beside what
+ * it holds, for what a card opens inside a card; `{ pane }` the desk of the
+ * tab of the agent whose row, head or chip was pressed, that pane taking the
+ * keyboard; `owner` the desk of the tab of the agent that owns the item,
+ * pressed where no agent is.
  */
 export type DetailPlace = "here" | "owner" | { pane: string };
 
@@ -1447,6 +1453,9 @@ export type MissionBlocked = "upstream_dropped";
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
+/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
+export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
@@ -1633,7 +1642,7 @@ export type MissionEvent = {
   action?: MissionOperatorAction;
 };
 
-/** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
+/** The events of the mission open as a card tab on a desk (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
 export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
 
 /** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
@@ -1717,14 +1726,18 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
-  /** Its review's or verification's failures in a row (hide-private issue 552); absent from an older core. */
-  review_fails?: number;
+  /** Its review's or verification's rounds against the mission's limit (`ReviewRounds`): null before a checker answered, absent from an older core. */
+  review_rounds?: MissionReviewRounds | null;
+  /** When it could have started, the mission's start or its last dependency done (`ready_at`); null while it cannot, absent from an older core. */
+  ready_at_unix_ms?: number | null;
+  /** When it last went to work, its start or back from a finish (`MissionNode::worked_at_unix_ms`): its work counts from here (`nodeSpans`); null for a node of a book from before it, absent from an older core. */
+  worked_at_unix_ms?: number | null;
+  /** When the lines its worker answers first all stood met in this run of its work (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
+  own_met_at_unix_ms?: number | null;
   /** When Hide last read a new head on one of its pull requests. */
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
-  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
-  asks_push?: boolean;
   /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
   waiting_on?: MissionWaitingOn | null;
   /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
@@ -1733,24 +1746,25 @@ export type MissionNode = {
   gate?: MissionGate;
   /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
   merge?: MissionNodeMerge;
-  /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
-  hold?: MissionNodeHold | null;
+  /** What it waits on that its Conductor set (`Mission::wait_of`): its own hold (`hide mission node --hold`) or the mission's delay (`hide mission delay`, `mission` true), why and until when; no warning or stall rises on it until then. Null while nothing holds it, absent from an older core. */
+  wait?: MissionNodeWait | null;
 };
 
-/** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
-export type MissionNodeHold = { why: string; until_unix_ms: number };
+/** A node's wait as the core decides it (`NodeWait`): the map's and the phone's `기다리는 중 · <why> · <time>`. */
+export type MissionNodeWait = { why: string; until_unix_ms: number; mission: boolean };
 
-/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, asleep while Hide holds its worker asleep (a sleep, not a wait), stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
 export type MissionNodeWork =
   | { state: "working" }
   | { state: "waiting"; on: MissionWaitingOn }
+  | { state: "asleep" }
   | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
   | { state: "no_worker"; since_unix_ms?: number | null };
 /** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
-export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unanswered";
+export type MissionLettersHeldFor = "approval" | "draft";
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
@@ -1765,13 +1779,16 @@ export type MissionWaitingOn =
   | { kind: "below"; node: string }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
-/** What a node's warning is about (`WarningKind`): its review or verification failing in a row, a long quiet with no push, or its worker stopped. */
-export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
+/** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
+export type MissionReviewRounds = { line: string; rounds: number; limit: number };
+
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, or its worker stopped. */
+export type MissionWarningKind = "review_fails" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
-/** One node the safety net holds (`HeldNodeView`): its raise's reason and since when it stands. */
-export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason; pr: number | null; since_unix_ms: number };
+/** One node the safety net holds (`HeldNodeView`): its unresolved cell (a raise's reason or a standing cell's fact) and since when it stands. */
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; since_unix_ms: number };
 /** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
 export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
 /** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
@@ -1845,7 +1862,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
@@ -1921,9 +1938,6 @@ export type ConductorCandidate = { agent: string; profile?: string | null; model
 export type MissionMapFlow = "down" | "across";
 export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
-/** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
-export type DetailSlot = { items: DetailItem[]; shown: boolean };
-
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
 export type GraphProjectKey = { device_id: string; workspace_id: string };
@@ -1969,7 +1983,7 @@ export type ViewDisplaySnapshot = {
   path: string;
   /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
-  kind: "file" | "diff" | "browser" | "external";
+  kind: "file" | "diff" | "browser" | "external" | "card";
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -1991,6 +2005,10 @@ export type ViewDisplaySnapshot = {
   unseen?: boolean;
   /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
+  /** A card tab's card (PRD lane-desk-pair-view D-13); absent for every other kind. */
+  card?: DetailItem;
+  /** The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view B24, D-41): an agent's View its opener's, a card its owner's; absent for what the operator opened. */
+  owner_pane?: string | null;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
@@ -2404,7 +2422,190 @@ export type Kit = {
   codex_daemon_off?: CodexDaemonOff | null;
   /** The machine's agent profiles as its node lists them (PRD agent-profiles D-04); null until first read. */
   profiles?: MachineAgentProfiles | null;
+  /** The machine's store of skills and MCP items as its kit last reported it (PRD skill-mcp-manager); null until the machine was read. */
+  store?: StoreReport | null;
+  /** The cells whose change waits for a new agent session (B17). */
+  store_new_session?: { item: string; column: string }[];
 };
+
+/** What a store item is (`store_item_kind`). */
+export type StoreItemKind = "skill" | "mcp";
+
+/** Where an item came from (`hide_kit::store::Source`). */
+export type StoreSource =
+  | { kind: "git"; url: string; path?: string; reference?: string | null; commit: string; tag?: string | null }
+  | { kind: "folder"; path: string }
+  | { kind: "copy"; from: string }
+  | { kind: "pasted" };
+
+/** The short version a row shows beside the name (B36). */
+export type StoreVersion =
+  | { kind: "tag" | "commit" | "pinned"; value: string }
+  | { kind: "folder" | "copy" | "remote" | "npm_latest" | "unpinned" };
+
+/** One cell column of a kind's rows: a skill folder or an agent (`Column`). */
+export type StoreColumn = { id: string; agents: string[]; also?: string[] };
+
+/** One file of a skill (`FileEntry`); `executable` is the ▲ of the confirm screens. */
+export type StoreFile = { path: string; size: number; executable: boolean };
+
+/** One agent's cell of an item's row (`store_cell_state`). */
+export type StoreCellState = "on" | "off" | "waiting" | "hand_written" | "failed" | "unsupported" | "agent_off";
+
+/** What kind of failure a failed cell's is (`store_cell_failure`), which the screen words in one line. */
+export type StoreCellFailure = "unreadable" | "unwritable" | "keys" | "pending";
+export type StoreCell = {
+  column: string;
+  state: StoreCellState;
+  /** The kit's own sentence, for the log; the screen words the state and the failure. */
+  reason?: string | null;
+  failure?: StoreCellFailure | null;
+  /** The real path of `place`, the agent's file or folder. */
+  path?: string | null;
+  changed_at_unix_ms?: number | null;
+  /** The key of the place the state speaks of, which a take-over names (decisions 2026-11-19). */
+  place?: string | null;
+  /** A hand-written MCP cell's server as that place holds it, key names only: what a take-over brings in (B20). */
+  server?: McpServer | null;
+};
+
+/** How an MCP server is reached; the names of its keys, never a value. */
+export type McpReach =
+  | { kind: "local"; command: string; args?: string[]; env?: string[] }
+  | { kind: "remote"; transport: "http" | "sse"; url: string; headers?: string[] };
+
+export type McpServer = { name: string; reach: McpReach };
+
+/** One item's row (`ItemReport`). */
+export type StoreItem = {
+  id: string;
+  kind: StoreItemKind;
+  name: string;
+  /** The GitHub account a git source belongs to, whose kept picture is in `StoreReport.avatars`. */
+  owner?: string | null;
+  source: StoreSource;
+  version: StoreVersion;
+  update?: StoreVersion | null;
+  on: boolean;
+  folder_missing?: boolean;
+  files?: StoreFile[];
+  /** A skill's own description, when its SKILL.md gives one. */
+  description?: string | null;
+  server?: McpServer | null;
+  /** The columns the operator switched off while the item is on. */
+  off_for?: string[];
+  cells: StoreCell[];
+};
+
+/** One copy of an entry Hide did not write (`FoundCopy`). */
+/** An agent's copy Hide does not manage; an MCP copy carries its server as that place holds it, key names only (B20). */
+export type StoreFoundCopy = { place: string; agents: string[]; profiles?: string[]; path: string; link?: string | null; digest: string; refused?: string | null; server?: McpServer | null };
+
+/** What agents hold that Hide does not manage ('에이전트에만 있음', B19). */
+export type StoreUnmanaged = { kind: StoreItemKind; name: string; copies: StoreFoundCopy[]; same: boolean };
+
+export type StoreTrashCause = { kind: "deleted" } | { kind: "replaced"; place: string; path: string };
+
+export type StoreTrash = { id: string; kind: StoreItemKind; name: string; at_unix_ms: number; cause: StoreTrashCause };
+
+/** What the operator gave as a source (B3, B5). */
+export type StoreSourceSpec = { kind: "git"; url: string } | { kind: "folder"; path: string };
+
+export type StoreFoundSkill = { name: string; path: string; description?: string | null; digest: string; taken?: boolean };
+
+/** What a source answered (B3-B6). */
+export type StorePreview = {
+  id: string;
+  source: StoreSourceSpec;
+  url?: string | null;
+  commit?: string | null;
+  tag?: string | null;
+  reference?: string | null;
+  skills: StoreFoundSkill[];
+  agents: string[];
+  at_unix_ms: number;
+};
+
+/** What an update would change (B23). */
+export type StoreUpdateDiff = {
+  id: string;
+  item: string;
+  from: StoreVersion;
+  to: StoreVersion;
+  commit: string;
+  summary: string[];
+  at_unix_ms: number;
+};
+
+/** One server a paste read as (B8, B9). */
+export type McpPastedServer = { server: McpServer; given?: string[]; taken?: boolean; agents?: string[] };
+
+export type McpPreview = { id: string; servers: McpPastedServer[]; at_unix_ms: number };
+
+/** Why a store pass could not run at all (`store_pass_refusal`); the sentence stays in the log. */
+export type StorePassRefusal = "keys_secret_gone" | "unreadable";
+
+/** A machine's store after a pass or a read (`StoreReport`). */
+export type StoreReport = {
+  columns: Partial<Record<StoreItemKind, StoreColumn[]>>;
+  items: StoreItem[];
+  unmanaged: StoreUnmanaged[];
+  trash: StoreTrash[];
+  previews: StorePreview[];
+  diffs: StoreUpdateDiff[];
+  mcp_previews?: McpPreview[];
+  checked_at_unix_ms?: number | null;
+  follows?: boolean;
+  refused?: string | null;
+  refusal?: StorePassRefusal | null;
+  /** The machine's home folder, which the screen spells as `~`. */
+  home?: string | null;
+  /** The kept pictures of the items' GitHub owners, as data addresses: the screen never loads one from the web. */
+  avatars?: Record<string, string>;
+};
+
+/** Why a change was refused (`store_refusal_cause`). */
+export type StoreRefusalCause = "not_found" | "no_skills" | "no_access" | "unreachable" | "no_git" | "too_large" | "name_taken" | "differs" | "too_many" | "unsupported" | "failed";
+
+/** The operator's change to a machine's store (`StoreChange`), as the screen sends it. */
+export type StoreAdoptConfirmation = { kind: "skill"; digest: string } | { kind: "mcp"; server: McpServer };
+
+export type StoreChange =
+  | { op: "inspect"; source: StoreSourceSpec }
+  | { op: "install"; preview: string; names: string[] }
+  | { op: "set"; item: string; column?: string; on: boolean }
+  | { op: "delete"; item: string }
+  | { op: "restore"; entry: string }
+  | { op: "forget"; entry: string }
+  | { op: "adopt"; kind: StoreItemKind; name: string; from?: string; confirmed?: StoreAdoptConfirmation }
+  | { op: "check_updates" }
+  | { op: "preview_update"; item: string }
+  | { op: "update"; item: string; commit: string }
+  | { op: "read_mcp"; text: string }
+  | { op: "add_mcp"; server: McpServer; keys?: Record<string, string>; from?: { preview: string; index: number } }
+  | { op: "cancel_mcp"; preview: string }
+  | { op: "set_mcp"; item: string; server: McpServer; keys?: Record<string, string> }
+  | { op: "receive"; item: unknown };
+
+/** How one change of a pass ended; `made` names what it made for its asker to show (an inspect's preview, a paste's MCP preview, an update preview's diff). */
+export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null; made?: string | null };
+
+/** What one store request came to (`status.store_answers`), found by its request id. */
+export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[]; refused?: { cause: StoreRefusalCause; reason: string } };
+
+/** An install or update an agent asked for with `hide skill` / `hide mcp`, waiting on the operator's confirm (B32). */
+export type StoreAsk = {
+  id: string;
+  device_id: string;
+  /** The asking agent's pane. */
+  pane_id: string;
+  since_unix_ms: number;
+} & (
+  | { what: "install"; preview: string; names: string[] }
+  | { what: "update"; item: string; diff: string }
+  | { what: "add_mcp"; server: McpServer }
+  | { what: "set_mcp"; item: string; server: McpServer }
+);
 
 /** Whether a machine's profiles could be read (`contracts/snapshot-wire-enums.json`: `profiles_state`). */
 export type AgentProfilesState = "listed" | "unsupported" | "unreadable";
@@ -2974,7 +3175,7 @@ export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging
 /** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
 export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
 
-/** A ready branch as its row and the 보기 slot's branch card draw it (B3, B4). */
+/** A ready branch as its row and a branch card tab draw it (B3, B4). */
 export type SuggestionBranch = {
   name: string;
   base: string | null;
@@ -3280,6 +3481,113 @@ export type AccessConnection = {
   /** How many live agents the tool started, and how many open missions those agents conduct. */
   agent_count: number;
   mission_count: number;
+};
+
+/** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
+export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/**
+ * When an automation runs (PRD automations D-06, B6): one of the form's
+ * choices or a five-field cron line, `HH:MM` in the zone of the machine that
+ * runs it. The core reads a cron line that equals a choice as that choice
+ * (`reads_as`); the screen only words it.
+ */
+export type AutomationSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_minutes"; minutes: number }
+  | { kind: "every_hours"; hours: number; time: string }
+  | { kind: "cron"; expr: string };
+
+/** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
+export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
+
+/** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
+export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
+
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped";
+
+export type AutomationRun = {
+  number: number;
+  trigger: "scheduled" | "manual" | "missed";
+  due_unix_ms?: number;
+  started_at_unix_ms: number;
+  ended_at_unix_ms?: number;
+  state: AutomationRunState;
+  /** The attempt going now or last (D-17), from 1. */
+  attempt: number;
+  /** Why the last attempt failed or the run ended, a code the screen words. */
+  reason?: string;
+  /** The terminal the screen shows for the run: its agent's pane while it runs or its terminal is open, else its conversation's opened again (B16, B17). */
+  pane_id?: string;
+  /** Its conversation is open again: `이어서 대화 중` (B17). */
+  opened: boolean;
+  /** Its conversation can be opened again. */
+  resumable: boolean;
+  conversation_missing: boolean;
+  branch?: string;
+  seen: boolean;
+  /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
+  spend?: AutomationSpend;
+  /** The agent's last answer, one paragraph, only while a window shows the run (operator decision 2026-11-21). */
+  answer?: string;
+};
+
+/**
+ * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new
+ * tokens and their price in millionths of a dollar; `unpriced` when some calls had no price, so the price is a lower bound.
+ */
+export type AutomationSpend = { tokens: number; micro_usd: number; unpriced: boolean };
+
+/**
+ * One record of an automation, newest first: a run, the times skipped one after another for the same reason
+ * (`count` from `at_unix_ms` to `last_unix_ms`, one time when 1), or the times missed while nothing could run them (D-15).
+ */
+export type AutomationRecord =
+  | ({ kind: "run" } & AutomationRun)
+  | { kind: "skipped"; at_unix_ms: number; last_unix_ms: number; count: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
+
+export type Automation = {
+  id: string;
+  name: string;
+  task: string;
+  /** As chosen, which the form opens on. */
+  schedule: AutomationSchedule;
+  /** The choice it reads as. */
+  reads_as: AutomationSchedule;
+  /** None while it is paused. */
+  next_run_at_unix_ms: number | null;
+  agent: AutomationAgent;
+  /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
+  folder: { path: string; default: boolean; worktree: boolean };
+  paused?: { reason: AutomationPauseReason; at_unix_ms: number };
+  /** A run goes now: [지금 실행] is refused (B19). */
+  running: boolean;
+  unseen: number;
+  /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
+  recent_spend?: AutomationSpend & { runs: number };
+  records: AutomationRecord[];
+};
+
+/**
+ * The `automations` section (PRD automations D-02): the automations of this
+ * window's core, which runs them on its own machine (D-21). Its own section,
+ * absent until the core restored its book.
+ */
+export type AutomationsSection = {
+  items: Automation[];
+  /** Finished runs not looked at, over every automation: the sidebar row's number (B1). */
+  unseen: number;
+  /** The agent last chosen, the form's default (D-07). */
+  last_choice?: AutomationAgent;
+  /** The zone the schedules are read in, by its IANA name. */
+  zone?: string;
+  /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
+  own_folder_root?: string;
+  /** The saved automations could not be read and were set aside as `file`; gone once an automation is made. */
+  unreadable?: { file: string; at_unix_ms: number };
 };
 
 /** The `desk` section: absent until hided starts Desk. */
@@ -3589,7 +3897,7 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
-  /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
+  /** The events of the mission open as a card tab on a desk (PRD mission-plan-visibility D-22). */
   mission_events?: MissionEventsSnapshot;
   /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
   mission_brief?: MissionBriefSnapshot;
@@ -3679,8 +3987,6 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50) of the Agent tab in front; each tab keeps its own in the core. */
-    detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;
     selected_path?: string | null;
@@ -3758,6 +4064,10 @@ export type SnapshotRest = {
     machine_profiles?: MachineProfiles;
     /** What Settings › Agents' last profile request came to; absent until one was made. */
     agent_profile_answer?: AgentProfileAnswer;
+    /** What the latest store requests came to, oldest first and bounded; a request finds its own by id (PRD skill-mcp-manager). */
+    store_answers?: StoreAnswer[];
+    /** The installs and updates agents asked for that wait on the operator's confirm (B32). */
+    store_asks?: StoreAsk[];
     /** The core's final automatic start choice for each project and agent. */
     start_profiles?: Record<string, { device_id: string; root: string; profiles: Record<string, string> }>;
     diagnostics?: CoreDiagnostic[];
@@ -3780,7 +4090,11 @@ export type SnapshotRest = {
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
   /** All retained Browser Views, including those outside the front Workspace. */
-  browser_views?: { device_id: string; path: string; view_id: string; area_id: string }[];
+  /**
+   * `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37).
+   * `url` and `load`: a web page's address and the load the core last asked of it, so the host loads a page no desk on screen shows (B32); null and 0 for an outside HTML file.
+   */
+  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null; url?: string | null; load?: number }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
   /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */
@@ -3826,6 +4140,29 @@ export function focusedCheckout(rest: SnapshotRest | null): Checkout | null {
  */
 export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
+}
+
+const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
+
+/**
+ * The projects a person picks from: every one but an automation's own
+ * folder, which the core registers only so its runs can start there (PRD
+ * automations D-08, B30). The same array while none is unlisted, and one
+ * kept list per source array, so a store selector that returns it is stable.
+ */
+export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
+  if (!workspaces.some((workspace) => workspace.unlisted)) return workspaces;
+  let listed = listedOf.get(workspaces);
+  if (!listed) {
+    listed = workspaces.filter((workspace) => !workspace.unlisted);
+    listedOf.set(workspaces, listed);
+  }
+  return listed;
+}
+
+/** `catalogWorkspaces` as a person picks from it: every project but an automation's own folder (`listedWorkspaces`). */
+export function listedCatalog(rest: SnapshotRest | null): Workspace[] {
+  return listedWorkspaces(catalogWorkspaces(rest));
 }
 
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */

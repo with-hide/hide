@@ -37,7 +37,7 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
-    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake, Zoom,
+    PaneSessionKind, PaneText, PreparedStart, PromptBy, ServerPong, StartedAgent, Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -92,11 +92,6 @@ const UNKNOWN_SOURCE: &str = "unknown_read_source";
 pub(crate) struct Place {
     pub(crate) engine_dir: PathBuf,
     pub(crate) home: String,
-    /// The folder this daemon's panes keep their Hide agent hook records in,
-    /// when those records are on the machine the core runs on: the daemon's
-    /// own engine. A device's engine has none; its panes' records are on the
-    /// device.
-    pub(crate) hooks_records: Option<PathBuf>,
     pub(crate) node: Arc<dyn NodeLink>,
     /// Whether the machine `node` answers for runs Windows: a device's
     /// system, from its node's hello, never the core's own, since a Mac core
@@ -148,11 +143,14 @@ struct Shared {
     /// reserves its id and starts its holder first), laid on once it has.
     /// The oldest goes first past [`EARLY_FACTS_CAP`].
     early: Mutex<Vec<(String, PaneFacts)>>,
-    /// The panes whose agent the restore resumed after its turn was cut off,
-    /// by the definition resumed there, until its hook names its session
-    /// (PRD engine-bundle-4-herdr-removal D-22). Bounded by one restore's
-    /// resumes.
-    cut: Mutex<BTreeMap<String, String>>,
+    /// The panes whose agent a heal resumed, by the definition resumed
+    /// there, until its hook names its session: the core then reads whether
+    /// it was cut mid-turn and owes it its line (PRD letters-missions-simplify
+    /// D-19, B17). Bounded by one restore's resumes.
+    healed: Mutex<BTreeMap<String, String>>,
+    /// The resumes typed since the core last took them
+    /// ([`Engine::take_resumed`]), one per pane, so bounded by the panes.
+    resumed: Mutex<Vec<crate::engine::ResumedPane>>,
 }
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
@@ -240,7 +238,6 @@ pub(crate) fn open_device(
         Place {
             engine_dir,
             home: link.home,
-            hooks_records: None,
             node,
             windows: link.windows,
             definitions,
@@ -366,7 +363,8 @@ impl OwnEngine<'static> {
                 }),
                 definitions: agents::Definitions::new(definitions),
                 early: Mutex::default(),
-                cut: Mutex::default(),
+                healed: Mutex::default(),
+                resumed: Mutex::default(),
             }),
             gates: Vec::new(),
             saver: None,
@@ -513,11 +511,31 @@ impl OwnEngine<'_> {
         )
     }
 
-    /// Records that `left`'s agent was not resumed, and withdraws the owed
-    /// letter a cut resume was typed with: nothing runs there to be owed it.
+    /// Records that `left`'s agent was not resumed, and withdraws the heal
+    /// its resume was typed with: nothing runs there to be told.
+    /// Keeps the resume about to be typed into `pane` for the core to take,
+    /// the agent saved in `saved`; a pane already waiting to be taken keeps
+    /// its first, as the core reads the cut once.
+    fn say_resumed(&self, pane: &str, saved: &str) {
+        let mut resumed = self
+            .shared
+            .resumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if resumed.iter().any(|said| said.pane == pane) {
+            return;
+        }
+        resumed.push(crate::engine::ResumedPane {
+            pane: pane.to_owned(),
+            saved: saved.to_owned(),
+        });
+        drop(resumed);
+        self.changed();
+    }
+
     fn say_not_resumed(&self, left: &NotResumed) {
         self.shared
-            .cut
+            .healed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&left.pane_id);
@@ -1766,12 +1784,27 @@ impl<'g> Engine for OwnEngine<'g> {
         }
         // The first session the resumed agent names is the conversation it
         // resumed, whatever id its runtime gives it now.
-        let mut cut = self
+        let mut healed = self
             .shared
-            .cut
+            .healed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(cut.get(pane) == Some(&definition.id) && cut.remove(pane).is_some())
+        let healed = healed.get(pane) == Some(&definition.id) && healed.remove(pane).is_some();
+        if healed {
+            // The pane is no longer named healing: the next read says so.
+            self.changed();
+        }
+        Ok(healed)
+    }
+
+    fn take_resumed(&self) -> Vec<crate::engine::ResumedPane> {
+        std::mem::take(
+            &mut *self
+                .shared
+                .resumed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
@@ -1794,7 +1827,20 @@ impl<'g> Engine for OwnEngine<'g> {
         if !missed.is_empty() {
             self.changed();
         }
-        state
+        let mut state = state?;
+        // A typed resume heals until its hook names its session, as one
+        // still to be typed does.
+        let healed = self
+            .shared
+            .healed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for pane in healed.keys() {
+            if !state.healing.contains(pane) {
+                state.healing.push(pane.clone());
+            }
+        }
+        Ok(state)
     }
 
     fn session_payload(&self, wait: Wait) -> Answer<SessionSnapshotPayload> {
@@ -2680,7 +2726,7 @@ impl<'g> Engine for OwnEngine<'g> {
     }
 
     #[allow(clippy::disallowed_methods)] // the prompt's submit delay, a production wait
-    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
+    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()> {
         self.check()?;
         if text.is_empty() {
             return Err(refused(
@@ -2691,13 +2737,13 @@ impl<'g> Engine for OwnEngine<'g> {
         let (pane, paste, kind) = {
             let topology = self.topology();
             let (pane, held, agent) = topology.agent(target)?;
-            if agent.live.status == agents::Status::Blocked {
+            if by == PromptBy::Letter && agent.live.status == agents::Status::Blocked {
                 return Err(refused(
                     "agent_blocked",
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.takes_input(std::time::Instant::now()) {
+            if by == PromptBy::Letter && !agent.takes_input(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -3862,7 +3908,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         // As `open_device` makes it.
         let place = Place {
-            hooks_records: None,
             ..place(root.path())
         };
         let folder = root.path().join("repo");
@@ -3984,13 +4029,6 @@ mod tests {
         first
             .report_agent_session(WAIT, &pane, "claude-code", "s-1", 1)
             .unwrap();
-        // Each turn was running when the machine went down, so each resumes.
-        hook_said(
-            &place,
-            &pane,
-            "s-1",
-            hide_agent_hooks::report::HookTurn::Working,
-        );
         drop(first);
 
         // After the reboot the pane's holder refuses to start.
@@ -4281,7 +4319,6 @@ mod tests {
             node: Arc::new(hide_node::Local::new(Some(home.clone()))),
             windows: cfg!(windows),
             home: wire(&home),
-            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
             switched: false,
@@ -4745,53 +4782,6 @@ mod tests {
     }
 
     /// What was typed into `pane`, in order.
-    /// Writes what `pane`'s agent's hook said last: its turn in `session`.
-    fn hook_said(
-        place: &Place,
-        pane: &str,
-        session: &str,
-        turn: hide_agent_hooks::report::HookTurn,
-    ) {
-        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
-        apply(
-            &home(place),
-            pane,
-            Change::None,
-            Reporter {
-                agent: Some("claude"),
-                session: Some(session),
-            },
-            Said::Turn(turn),
-            None,
-            hide_agent_hooks::counters::Told::default(),
-        )
-        .unwrap();
-    }
-
-    /// Writes what `pane`'s agent of `kind` said last: its turn in `session`.
-    fn hook_said_by(
-        place: &Place,
-        pane: &str,
-        kind: &str,
-        session: &str,
-        turn: hide_agent_hooks::report::HookTurn,
-    ) {
-        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
-        apply(
-            &home(place),
-            pane,
-            Change::None,
-            Reporter {
-                agent: Some(kind),
-                session: Some(session),
-            },
-            Said::Turn(turn),
-            None,
-            hide_agent_hooks::counters::Told::default(),
-        )
-        .unwrap();
-    }
-
     fn typed_into(typed: &[(String, Vec<u8>)], pane: &str) -> String {
         typed
             .iter()
@@ -6422,15 +6412,12 @@ mod tests {
     }
 
     fn typed_agent_goes_on_after_a_restart(device: bool) {
-        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
-        use hide_agent_hooks::report::HookTurn;
         use hide_node_link::holders::ScreenState;
         let root = tempfile::tempdir().unwrap();
         let place = match device {
             false => place(root.path()),
             // As `open_device` makes it.
             true => Place {
-                hooks_records: None,
                 ..place(root.path())
             },
         };
@@ -6474,20 +6461,6 @@ mod tests {
         for (pane, kind, program, session) in &typed {
             first_holders.say(pane, &running(program, ScreenState::Working));
             first.hook_session(pane, kind, session, None).unwrap();
-            // Its turn was running when the daemon went down.
-            apply(
-                &home(&place),
-                pane,
-                Change::None,
-                Reporter {
-                    agent: Some(kind),
-                    session: Some(session),
-                },
-                Said::Turn(HookTurn::Working),
-                None,
-                hide_agent_hooks::counters::Told::default(),
-            )
-            .unwrap();
         }
         // The last one's agent ended: its shell holds the terminal again.
         first_holders.say(&ended, &PaneFacts::default());
@@ -6567,7 +6540,11 @@ mod tests {
             "",
             "an ended agent is not resumed (device {device})"
         );
-        assert!(next.session(WAIT).unwrap().resting.is_empty());
+        assert_eq!(
+            next.session(WAIT).unwrap().healing.len(),
+            3,
+            "each resumed pane heals until its hook names its session"
+        );
     }
 
     /// B19: the folder, title and first prompt the holder reads follow the
@@ -6650,7 +6627,7 @@ mod tests {
             other => panic!("expected a refusal, got {other:?}"),
         };
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_not_ready"
         );
         let idle = PaneFacts {
@@ -6659,12 +6636,14 @@ mod tests {
         };
         holders.say(&pane, &idle);
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_not_ready",
             "a screen drawn within the start's settle"
         );
         settle_start(&engine, &pane);
-        engine.prompt_agent(WAIT, "worker", "a\nb").unwrap();
+        engine
+            .prompt_agent(WAIT, "worker", "a\nb", PromptBy::Letter)
+            .unwrap();
         assert!(
             holders
                 .typed(&pane)
@@ -6674,8 +6653,19 @@ mod tests {
         );
         holders.say(&pane, &running("codex", ScreenState::Blocked));
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_blocked"
+        );
+        // The operator's own words may answer the question on screen.
+        engine
+            .prompt_agent(WAIT, "worker", "other answer", PromptBy::Operator)
+            .unwrap();
+        assert!(
+            holders
+                .typed(&pane)
+                .ends_with("<letter>other answer<Enter></letter>"),
+            "{:?}",
+            holders.typed(&pane)
         );
     }
 
@@ -6849,7 +6839,7 @@ mod tests {
         };
         holders.say(&pane, &at(Some(true)));
         let refused = |when: &str| {
-            match engine.prompt_agent(WAIT, "worker", "brief") {
+            match engine.prompt_agent(WAIT, "worker", "brief", PromptBy::Letter) {
                 Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
                 other => panic!("{when}: expected the agent not ready, got {other:?}"),
             }
@@ -6878,7 +6868,9 @@ mod tests {
                 .readiness
                 .accepts_input()
         );
-        engine.prompt_agent(WAIT, "worker", "brief").unwrap();
+        engine
+            .prompt_agent(WAIT, "worker", "brief", PromptBy::Letter)
+            .unwrap();
         assert!(
             holders.typed(&pane).ends_with("brief<Enter></letter>"),
             "{:?}",
@@ -6995,19 +6987,6 @@ mod tests {
             .prepare_start(launch(&gemini, "reader", "gemini", &[]))
             .unwrap();
         first.start_agent(WAIT, &start).unwrap();
-        // Each turn was running when the machine went down, so each resumes.
-        hook_said(
-            &place,
-            &claude,
-            "s-1",
-            hide_agent_hooks::report::HookTurn::Working,
-        );
-        hook_said(
-            &place,
-            &twin,
-            "s-1",
-            hide_agent_hooks::report::HookTurn::Working,
-        );
         drop(first);
 
         let holders = Arc::new(Holders::default());
@@ -7086,13 +7065,6 @@ mod tests {
             first
                 .report_agent_session(WAIT, pane, "claude", session, 1)
                 .unwrap();
-            // Its turn was running when the machine went down, so it resumes.
-            hook_said(
-                &place,
-                pane,
-                session,
-                hide_agent_hooks::report::HookTurn::Working,
-            );
         }
         drop(first);
 
@@ -7143,15 +7115,13 @@ mod tests {
         );
     }
 
-    /// PRD engine-bundle-4-herdr-removal D-22, B9: an agent whose hook last
-    /// said its turn was running when the machine went down is resumed and,
-    /// once its hook names its session, said to be owed its letter, once. An
-    /// agent that had finished its turn is not started again: a machine that
-    /// ran dozens would start them all at once, and none was waited on.
+    /// PRD letters-missions-simplify D-18, B16: after a reboot every agent
+    /// whose pane was cut is resumed, the one that had finished its turn as
+    /// much as the one at work, and nothing else is typed. Each pane is
+    /// named healing until its agent's hook names its session, which the
+    /// engine answers as a heal once, for the core to judge its line.
     #[test]
-    fn a_reboot_resumes_the_agent_whose_turn_was_cut_off_and_leaves_a_resting_one_to_sleep() {
-        use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
-        use hide_agent_hooks::report::HookTurn;
+    fn a_reboot_resumes_every_cut_agent_and_names_each_healing_until_its_hook_reports() {
         let root = tempfile::tempdir().unwrap();
         let place = place(root.path());
         let folder = root.path().join("repo");
@@ -7178,27 +7148,10 @@ mod tests {
                 Env::new(),
             )
             .unwrap();
-        for (pane, session, turn) in [
-            (&working, "s-1", HookTurn::Working),
-            (&resting, "s-2", HookTurn::Done),
-        ] {
+        for (pane, session) in [(&working, "s-1"), (&resting, "s-2")] {
             first
                 .report_agent_session(WAIT, pane, "claude", session, 1)
                 .unwrap();
-            // What the agent's hook wrote last in the pane's file.
-            apply(
-                &home(&place),
-                pane,
-                Change::None,
-                Reporter {
-                    agent: Some("claude"),
-                    session: Some(session),
-                },
-                Said::Turn(turn),
-                None,
-                hide_agent_hooks::counters::Told::default(),
-            )
-            .unwrap();
         }
         drop(first);
 
@@ -7212,38 +7165,37 @@ mod tests {
             ..HolderRecovery::default()
         });
         next.restored().unwrap();
-        assert!(
-            holders
-                .wait_typed(&working)
-                .starts_with("claude --resume s-1"),
-            "{:?}",
-            holders.typed(&working)
-        );
-        // The agent that had finished its turn is not started again: its
-        // pane is a shell, and the session names it resting until the core
-        // says it keeps it, as a sleeping agent a visit wakes.
-        settles("the resting agent is named", || {
-            !next.session(WAIT).unwrap().resting.is_empty()
-        });
-        let rested = next.session(WAIT).unwrap().resting;
-        assert_eq!(rested.len(), 1, "{rested:?}");
-        assert_eq!(rested[0].pane_id, resting);
-        assert_eq!(rested[0].agent.as_deref(), Some("claude"));
-        assert_eq!(rested[0].agent_status.as_deref(), Some("idle"));
-        assert_eq!(
-            rested[0]
-                .agent_session
-                .as_ref()
-                .map(|session| session.value.as_str()),
-            Some("s-2")
-        );
-        assert_eq!(holders.typed(&resting), "", "nothing is typed into it");
+        for (pane, session) in [(&working, "s-1"), (&resting, "s-2")] {
+            let typed = holders.wait_typed(pane);
+            assert!(
+                typed.starts_with(&format!("claude --resume {session}")),
+                "{typed:?}"
+            );
+        }
+        let mut healing = next.session(WAIT).unwrap().healing;
+        healing.sort();
+        let mut both = vec![working.clone(), resting.clone()];
+        both.sort();
+        assert_eq!(healing, both);
 
         assert!(next.hook_session(&working, "claude", "s-1", None).unwrap());
         assert!(
             !next.hook_session(&working, "claude", "s-1", None).unwrap(),
-            "owed once"
+            "healed once"
         );
+        assert_eq!(next.session(WAIT).unwrap().healing, vec![resting.clone()]);
+        // Each resume is said once, whatever its agent reported since.
+        let mut said: Vec<String> = next
+            .take_resumed()
+            .into_iter()
+            .map(|resumed| {
+                assert_eq!(resumed.pane, resumed.saved);
+                resumed.pane
+            })
+            .collect();
+        said.sort();
+        assert_eq!(said, both);
+        assert!(next.take_resumed().is_empty());
     }
 
     /// Two agents, each with the conversation its hook named and a turn that
@@ -7289,13 +7241,6 @@ mod tests {
                 first
                     .report_agent_session(WAIT, pane, kind, session, 1)
                     .unwrap();
-                hook_said_by(
-                    &place,
-                    pane,
-                    kind,
-                    session,
-                    hide_agent_hooks::report::HookTurn::Working,
-                );
             }
             drop(first);
             Self {
@@ -7739,13 +7684,6 @@ mod tests {
         first
             .report_agent_session(WAIT, &claude, "claude", "s-1", 1)
             .unwrap();
-        // Each turn was running when the machine went down, so each resumes.
-        hook_said(
-            &place,
-            &claude,
-            "s-1",
-            hide_agent_hooks::report::HookTurn::Working,
-        );
         drop(first);
         let reopen = |processes: HolderProcesses| {
             let holders = Arc::new(Holders::default());

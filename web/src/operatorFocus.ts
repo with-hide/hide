@@ -20,9 +20,14 @@ export const operatorFocusClientId: string = Array.from(crypto.getRandomValues(n
   byte.toString(16).padStart(2, "0"),
 ).join("");
 
-/** True for the one event the numbering covers: this machine's operator focus. */
-export function isOperatorFocus(event: { kind: string; payload: Record<string, unknown> }): boolean {
-  return event.kind === "focus_pane" && event.payload.origin === "operator";
+/**
+ * True for the events the numbering covers: this machine's operator focus,
+ * and a card the operator opens (`detail_open`, `pr_open`), which may focus
+ * its owner's pane and hands the card the keyboard only from the snapshot
+ * that includes it (`ViewAreas.tsx`).
+ */
+export function movesOperatorFocus(event: { kind: string; payload: Record<string, unknown> }): boolean {
+  return (event.kind === "focus_pane" && event.payload.origin === "operator") || event.kind === "detail_open" || event.kind === "pr_open";
 }
 
 /** The event with this page's name and the given number on it. */

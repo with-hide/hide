@@ -3297,6 +3297,7 @@ fn an_explicit_checkout_waits_without_rendering_stale_projection_when_catalog_is
         label: Some("Old context".to_owned()),
         empty: false,
         delegated: false,
+        automation: false,
         panes: vec![pane("w3P:p1", "/tmp/old-context")],
     };
     // The user chose this checkout against a running session, so it is an
@@ -4674,6 +4675,7 @@ fn tab_with_pane(pane_id: &str) -> TabSnapshot {
         label: None,
         empty: false,
         delegated: false,
+        automation: false,
         panes: vec![crate::model::PaneSnapshot {
             device_id: Default::default(),
             device_pane_id: Default::default(),

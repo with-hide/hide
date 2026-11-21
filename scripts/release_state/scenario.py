@@ -602,12 +602,38 @@ class Scenario:
         raise Stop(f"the dormant sleep was refused: {last}")
 
     def remains(self):
+        """A Remains card of the device project opened while dev-a's tab is
+        in front: a release with the 보기 slot keeps it in the slot
+        (`detail`), a later one as a card tab on that tab's desk (`trays`),
+        both naming the device's project and checkout."""
         workspace, checkout = self.checkout(self.daemon.snapshot(), True, DEVICE_REPO)
         self.show(self.agents["dev-a"]["pane"])
         self.send("detail_open", {"item": {"kind": "remains", "workspace_id": workspace["id"], "checkout_id": checkout["id"]}})
-        self.wait(lambda rest: "remains" in json.dumps(((rest.get("ui_state") or {}).get("detail") or {}).get("items")),
-                  "the Remains item in the slot")
-        return checkout["id"]
+
+        def kept(rest):
+            if "remains" in json.dumps(((rest.get("ui_state") or {}).get("detail") or {}).get("items")):
+                return "slot"
+            return "desk" if "remains" in json.dumps((rest.get("workspace_view") or {}).get("layout")) else None
+        return f"{checkout['id']} on the {self.wait(kept, 'the Remains card')}"
+
+    def pair(self):
+        """dev-a's tab drawn in pair view beside its desk: the tray keeps the
+        device pane it pairs (`trays[].pair`). A release before desks has no
+        pair view."""
+        pane = self.agents["dev-a"]["pane"]
+        self.show(pane)
+        seen = ((self.daemon.snapshot() or {}).get("status") or {}).get("last_error") or {}
+        self.send("pair_view", {"pane_id": pane})
+
+        def answered(rest):
+            error = (rest.get("status") or {}).get("last_error") or {}
+            if error != seen and error.get("kind") == "event.unknown_kind":
+                raise NotInRelease(error.get("message"))
+            if error != seen and str(error.get("kind")).startswith("pair_view."):
+                raise Stop(f"pair view was refused: {error}")
+            pairs = (rest.get("workspace_view") or {}).get("pairs") or []
+            return next((row["tab_id"] for row in pairs if row.get("pane_id") == pane), None)
+        return f"{pane} paired on tab {self.wait(answered, 'the pair view')}"
 
     def project_settings(self):
         """Project settings saved for a core and a device project, as the
@@ -744,7 +770,8 @@ class Scenario:
             self.step("decision View opened by a device agent and closed", self.decision_view)
             self.step("gate shown behind that decision", self.shown_gate)
             self.step("missions in each state a later build reads", self.mission_states)
-            self.step("remains item in the detail slot", self.remains)
+            self.step("remains card beside a device agent", self.remains)
+            self.step("pair view of a device agent's tab", self.pair)
             self.step("sleeping device agent", self.sleep)
             self.step("Pi on the core asleep with its pane closed", self.dormant)
             self.step("agent started from the start panel", self.start_panel)

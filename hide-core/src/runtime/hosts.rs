@@ -1460,6 +1460,7 @@ impl Runtime {
             Retiring::Removed => {
                 self.forget_device_catalog(device_id);
                 self.device_kit_pending.remove(device_id);
+                self.forget_store(device_id);
                 self.device_first_run_choice.remove(device_id);
                 self.kit_states.remove(device_id);
                 self.refresh_ai_items();

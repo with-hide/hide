@@ -8,7 +8,7 @@ import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAcc
 import { agentWithProfile, recordWords } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
-import { homeTurnLine, originLine } from "../hideAiOrigin";
+import { automationNames, automationRun, homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
 import { RevisitStar, starred } from "./revisit-mark";
 import { RowLetterMark } from "./letter-mark";
@@ -27,6 +27,9 @@ import { DeviceChip } from "./device-chip";
 import { ToolLed } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
+import { PairMark } from "./pair-mark";
+import { markedPairs } from "../pairView";
+import { workspaceViewOf } from "../workspace";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 import { beginAgentDrag } from "../agentReference";
@@ -73,7 +76,7 @@ export type SidebarTreeSlot = {
   /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
   fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
-  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
+  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> } | null;
 };
 
 /**
@@ -147,12 +150,14 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
   /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
-  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
   // Each row reads only the facts it draws, so a snapshot that moves nothing here renders nothing.
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
+  // The agent drawn in its tab's pair view wears the pair view mark (PRD lane-desk-pair-view B22).
+  const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.pane_id === agent.pane_id));
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const pulls = listed ?? rowPulls(agent, "own");
@@ -172,12 +177,15 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Copy stands beside a person's turn's place wherever Done does (operator decision 2026-11-08).
   const humanActions = agent.human_turn && actions && !offline ? actions : null;
   const copy = humanActions?.copyText;
+  const names = useShellStore((s) => automationNames(s.automations));
+  // An automation run's row says which automation started it wherever it stands, its Needs You row too (PRD automations B15).
+  const origin = agent.hide_ai && (tree || agent.hide_ai.home === "automations") ? originLine(t, agent.hide_ai, names) : null;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
   // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
   const resting = tree && depth === 0 && agent.resolved;
-  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place ?? origin].filter(Boolean).join("\n");
   // The hint reads as a card: the title, one muted line of what and how it stands, the summary cut at three lines, and the place.
   // A project tree's row keeps to one line, so what it is waiting on is said here.
   const sentence = offline ? null : rowSentence(t, agent);
@@ -247,7 +255,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[paired ? t("panes.pair.mark") : null, offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
@@ -264,12 +272,13 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
         mark={<>
-          <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
-          {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). */}
-          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree ? "sidebar" : null} profile={agent.profile} />
+          <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
+          {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). An automation run's row wears the automation's repeat mark instead (operator decision 2026-11-21). */}
+          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree && !automationRun(agent) ? "sidebar" : null} profile={agent.profile} />
         </>}
         head={<>
           {/* The row button's name already reads all of this out. */}
+          {paired ? <PairMark className="pointer-events-none" data-pair-row={agent.pane_id} /> : null}
           <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
           <AgentForkMark agent={agent} />
           {starred(agent) ? <RevisitStar /> : null}
@@ -299,9 +308,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       >
         {/* An external tool's row leads its line with the tool's name, muted, since its first line has no room for it (operator decision 2026-11-14). */}
         <ToolLed tool={offline ? undefined : agent.tool} className="pointer-events-none text-caption leading-(--size-sidebar-line-detail)">{detail}</ToolLed>
-        {tree && agent.hide_ai ? (
-          <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
-            {originLine(t, agent.hide_ai)}
+        {origin ? (
+          <span aria-hidden="true" data-agent-task={origin} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+            {origin}
           </span>
         ) : null}
         {remote && !offline ? (

@@ -21,6 +21,7 @@ import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
+import { WhatsNewHost } from "./components/whats-new";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { PairingDialogs } from "./PairingDialogs";
@@ -52,6 +53,8 @@ import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
 import { MissionScreen } from "./MissionScreen";
+import { AutomationScreen } from "./AutomationScreen";
+import { configureAutomationCalls } from "./automationCall";
 import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
@@ -78,6 +81,7 @@ export function App() {
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);
+    configureAutomationCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {
@@ -294,6 +298,7 @@ export function App() {
     ["pairing", <PairingDialogs actions={actions} />],
     ["device_switch_dialogs", <DeviceSwitchDialogs actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
+    ["whats_new", <WhatsNewHost actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],
@@ -421,7 +426,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   return (
     <>
       <OpeningStatus actions={actions} />
-      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : <OverviewPage actions={actions} />}
+      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : screen.kind === "automations" ? <AutomationScreen actions={actions} /> : <OverviewPage actions={actions} />}
     </>
   );
 }

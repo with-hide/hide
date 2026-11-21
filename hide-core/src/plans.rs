@@ -850,11 +850,18 @@ pub enum PlanTurn {
 }
 
 /// The reads a change's evidence needs (D-19), made on the caller's request
-/// worker, never under the lock or on the owner thread: the pull requests
-/// in the session's checkout's repository and the files below it, on the
-/// session's own machine, a connected device's through its helper (B24).
+/// worker, never under the lock or on the owner thread: the files below the
+/// session's checkout and its branches on the session's own machine, a
+/// connected device's through its helper (B24), and the pull requests in its
+/// project's repository with the core's own `gh`, as a mission's are read.
 pub struct PlanProof {
     pub(crate) link: Arc<dyn NodeLink>,
+    /// The core's own node, which runs `gh` for every machine's projects.
+    pub(crate) own: Arc<dyn NodeLink>,
+    /// Where the project's pull requests are read: its checkout on this
+    /// machine, or its `owner/name` for a device's; why not, while that name
+    /// is not known, which only a pull request's proof needs.
+    pub(crate) github: Result<crate::github::Where, String>,
     /// The session's checkout, as its machine spells it.
     pub(crate) root: String,
     /// The branches the session's plan children were started on.
@@ -902,7 +909,6 @@ impl PlanProof {
                     "plan": self.plan, "session_id": self.session_id, "reason": reason,
                 })),
             }
-            let place = crate::github::Where::Checkout(std::path::PathBuf::from(&self.root));
             for number in self.asks.prs.keys() {
                 if proofs.prs.contains_key(number) {
                     continue;
@@ -915,7 +921,13 @@ impl PlanProof {
                     }));
                     PrProof::Unconfirmed
                 };
-                let proof = match crate::github::pr_head(self.link.as_ref(), &place, *number) {
+                let head = self
+                    .github
+                    .as_ref()
+                    .map_err(|reason| crate::github::PrHeadFailure::Unread(reason.clone()));
+                let proof = match head
+                    .and_then(|place| crate::github::pr_head(self.own.as_ref(), place, *number))
+                {
                     Ok(head) if head.cross_repository => PrProof::NotYours,
                     Ok(head) if branches.contains(&head.branch) => PrProof::Yours {
                         repo: head.repository,
@@ -1720,12 +1732,58 @@ mod tests {
         assert_ne!(next.id(), done.id());
     }
 
-    /// A session's checkout on branch `main-branch`, where pull request 1 is
-    /// from it, 2 from a child's branch, 3 from a branch the checkout does
-    /// not have, 4 from a fork, 5 is not there, 6 cannot be asked about and
-    /// 7 is from `left-branch`, a local branch the checkout is no longer on;
-    /// `docs/spec.md` is there, `docs/link.md` leads out of the checkout.
+    /// A session's checkout on a connected device, on branch `main-branch`,
+    /// where `docs/spec.md` is there and `docs/link.md` leads out of the
+    /// checkout; the device refuses `gh`, as every device does (D-18).
     struct Checkout;
+
+    /// The core's own `gh`, which answers only by the repository's name:
+    /// pull request 1 is from `main-branch`, 2 from a child's branch, 3 from
+    /// a branch the checkout does not have, 4 from a fork, 5 is not there, 6
+    /// cannot be asked about and 7 is from `left-branch`, a local branch the
+    /// checkout is no longer on.
+    struct CoreGh;
+
+    impl crate::node_access::NodeLink for CoreGh {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            use hide_node_link::gh::{GhAnswer, GithubFailureCategory};
+            use hide_node_link::protocol::Call;
+            let Call::Gh {
+                args,
+                cwd: None,
+                repository: Some(repository),
+            } = call
+            else {
+                panic!("the core's gh is asked by repository name only: {call:?}");
+            };
+            assert_eq!(repository, "acme/app");
+            let head = |branch: &str, fork: bool| GhAnswer::Output {
+                stdout: json!({
+                    "headRefName": branch, "isCrossRepository": fork,
+                    "url": "https://github.com/acme/app/pull/1",
+                })
+                .to_string(),
+            };
+            let failed = |reason: &str| GhAnswer::Failed {
+                category: GithubFailureCategory::NetworkOrRateLimit,
+                reason: reason.into(),
+            };
+            let answer = match args[2].as_str() {
+                "1" => head("main-branch", false),
+                "2" => head("child-branch", false),
+                "3" => head("someone-else", false),
+                "4" => head("main-branch", true),
+                "5" => failed("GraphQL: Could not resolve to a PullRequest with the number of 5."),
+                "7" => head("left-branch", false),
+                _ => failed("error connecting to api.github.com"),
+            };
+            Ok(serde_json::to_value(answer).unwrap().into())
+        }
+    }
 
     impl crate::node_access::NodeLink for Checkout {
         fn call(
@@ -1734,7 +1792,6 @@ mod tests {
             _timeout: std::time::Duration,
         ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
             use hide_node_link::catalog::{PathFact, PathFacts, RepositoryPlace};
-            use hide_node_link::gh::{GhAnswer, GithubFailureCategory};
             use hide_node_link::protocol::Call;
             let answer = match call {
                 Call::PathFacts { paths } => {
@@ -1767,30 +1824,13 @@ mod tests {
                     })
                     .unwrap()
                 }
-                Call::Gh { args, .. } => {
-                    let head = |branch: &str, fork: bool| GhAnswer::Output {
-                        stdout: json!({
-                            "headRefName": branch, "isCrossRepository": fork,
-                            "url": "https://github.com/acme/app/pull/1",
-                        })
-                        .to_string(),
-                    };
-                    let failed = |reason: &str| GhAnswer::Failed {
-                        category: GithubFailureCategory::NetworkOrRateLimit,
-                        reason: reason.into(),
-                    };
-                    serde_json::to_value(match args[2].as_str() {
-                        "1" => head("main-branch", false),
-                        "2" => head("child-branch", false),
-                        "3" => head("someone-else", false),
-                        "4" => head("main-branch", true),
-                        "5" => failed(
-                            "GraphQL: Could not resolve to a PullRequest with the number of 5.",
+                Call::Gh { .. } => {
+                    return Err(hide_node_link::LinkError::Refused(
+                        hide_node_link::HostError::new(
+                            hide_node_link::ErrorCode::InvalidRequest,
+                            "gh is the core's",
                         ),
-                        "7" => head("left-branch", false),
-                        _ => failed("error connecting to api.github.com"),
-                    })
-                    .unwrap()
+                    ));
                 }
                 Call::Git {
                     command: hide_node_link::git::GitCommand::HasLocalBranch { branch },
@@ -1814,8 +1854,12 @@ mod tests {
 
     #[test]
     fn a_pull_request_is_the_sessions_by_its_branch_and_a_file_by_where_its_machine_finds_it() {
+        // A device's pull request is read with the core's own `gh` by its
+        // repository's name, while its branches stay the device's (#2668).
         let proof = PlanProof {
             link: Arc::new(Checkout),
+            own: Arc::new(CoreGh),
+            github: Ok(crate::github::Where::Repository("acme/app".into())),
             root: "/work/app".into(),
             branches: BTreeSet::from(["child-branch".to_owned()]),
             asks: Asks {
@@ -1849,6 +1893,32 @@ mod tests {
         assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
         assert_eq!(proofs.files["docs/gone.md"], FileProof::Missing);
         assert_eq!(proofs.files["docs/link.md"], FileProof::Outside);
+    }
+
+    /// A device project whose repository Hide has not named yet (a plain
+    /// folder, no GitHub remote, its first read still out) proves its files
+    /// as before and leaves only its pull requests unconfirmed.
+    #[test]
+    fn a_repository_not_named_yet_leaves_files_proved_and_only_pull_requests_unconfirmed() {
+        let proof = PlanProof {
+            link: Arc::new(Checkout),
+            own: Arc::new(CoreGh),
+            github: Err("The node has not named this project's GitHub repository yet".into()),
+            root: "/work/app".into(),
+            branches: BTreeSet::new(),
+            asks: Asks {
+                prs: [(1, "pr".to_owned())].into_iter().collect(),
+                files: [("docs/spec.md".to_owned(), "spec".to_owned())]
+                    .into_iter()
+                    .collect(),
+            },
+            plan: "1000".into(),
+            session_id: "s1".into(),
+        };
+        let mut proofs = Proofs::default();
+        proof.run(&mut proofs);
+        assert_eq!(proofs.prs[&1], PrProof::Unconfirmed);
+        assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
     }
 
     #[test]

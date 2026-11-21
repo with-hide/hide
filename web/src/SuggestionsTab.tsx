@@ -295,7 +295,7 @@ function AgentAsk({ pane, actions }: { pane: string | null; actions: Actions }) 
 /**
  * A ready branch's line (PRD hide-ai-branch-first-apply B3, B4): `바뀐 것
  * 보기`, the branch, its file count and +/−. The press opens the branch's
- * card in the 보기 slot, or its one file's diff straight away; the checkout
+ * card as a card tab on a desk, or its one file's diff straight away; the checkout
  * in front stays where it is.
  */
 function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; branch: SuggestionBranch; project: ProjectSuggestions; actions: Actions }) {

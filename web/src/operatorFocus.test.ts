@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { appliedIn, caughtUp, isOperatorFocus, numbered, operatorFocusClientId } from "./operatorFocus";
+import { appliedIn, caughtUp, movesOperatorFocus, numbered, operatorFocusClientId } from "./operatorFocus";
 import { useShellStore } from "./store";
 
 const focus = (origin: string) => ({ schema_version: 2, kind: "focus_pane", payload: { pane_id: "p1", origin } });
@@ -11,10 +11,13 @@ function snapshotFrame(operator_focus: { client_id: string; sequence: number }[]
 describe("operator focus numbering", () => {
   beforeEach(() => useShellStore.setState({ operatorFocusSent: 0, operatorFocusApplied: 0 }));
 
-  it("numbers only this machine's operator focus", () => {
-    expect(isOperatorFocus(focus("operator"))).toBe(true);
-    expect(isOperatorFocus(focus("restore"))).toBe(false);
-    expect(isOperatorFocus({ kind: "key", payload: { origin: "operator" } })).toBe(false);
+  it("numbers only this machine's operator focus and a card the operator opens", () => {
+    expect(movesOperatorFocus(focus("operator"))).toBe(true);
+    expect(movesOperatorFocus(focus("restore"))).toBe(false);
+    expect(movesOperatorFocus({ kind: "key", payload: { origin: "operator" } })).toBe(false);
+    // A card open may focus its owner's pane; the card takes the keys only from the snapshot that includes it.
+    expect(movesOperatorFocus({ kind: "detail_open", payload: { item: { kind: "mission", mission: "m1" } } })).toBe(true);
+    expect(movesOperatorFocus({ kind: "pr_open", payload: { workspace_id: "w1", pr_number: 3 } })).toBe(true);
     expect(numbered(focus("operator"), 7).payload).toMatchObject({ client_id: operatorFocusClientId, sequence: 7, origin: "operator" });
   });
 

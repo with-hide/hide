@@ -1,9 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
 
@@ -38,7 +37,6 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
       { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-lane-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
     ],
     spawn_placement_revision: 1,
-    node_clocks: {},
   };
 }
 
@@ -60,7 +58,7 @@ async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
   let daemon = await startHided(engine, name);
   const pane = engine.panes[1];
   daemon = await daemon.restart((stateDir) => {
-    fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), JSON.stringify(deskLedger(daemon.node, pane, repo)));
+    seedLedger(stateDir, JSON.stringify(deskLedger(daemon.node, pane, repo)));
   });
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
