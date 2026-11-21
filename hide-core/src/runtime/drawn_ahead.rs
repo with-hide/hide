@@ -217,7 +217,6 @@ impl Runtime {
             payload.layouts.push(crate::sidebar::SessionLayoutPayload {
                 workspace_id,
                 tab_id: tab.tab_id.clone(),
-                zoomed: false,
                 area,
                 focused_pane_id: tab.pane_id.clone(),
                 panes: vec![crate::sidebar::SessionLayoutPanePayload {

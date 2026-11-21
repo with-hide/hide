@@ -1,5 +1,5 @@
 //! The engine boundary: the one way the core speaks to the program that runs
-//! its panes (PRD engine-bundle-1 D-2). Pane existence, split geometry, zoom,
+//! its panes (PRD engine-bundle-1 D-2). Pane existence, split geometry,
 //! cwd, agent lifecycle and the PTY are the engine's; the core asks for them
 //! through [`Engine`] and never names the engine's protocol. The core's own
 //! engine ([`own::OwnEngine`]), which runs panes in the node's holders, is
@@ -393,11 +393,6 @@ pub(crate) trait Engine: Send + Sync {
     fn focus_pane(&self, wait: Wait, pane: &str) -> Answer<()>;
     /// Names a pane; `None` clears its name.
     fn rename_pane(&self, wait: Wait, pane: &str, label: Option<&str>) -> Answer<()>;
-    /// Zooms the pane, or unzooms it when zoomed: whether its zoom changed.
-    fn toggle_zoom(&self, wait: Wait, pane: &str) -> Answer<bool>;
-    /// Zooms or unzooms the pane's tab around it. Asked for the effect only;
-    /// the layout read after it is what confirms it.
-    fn set_zoom(&self, wait: Wait, pane: &str, zoom: Zoom) -> Answer<()>;
     /// Moves a pane's edge: whether anything moved.
     fn resize_pane(
         &self,
@@ -645,13 +640,6 @@ impl<'a> Gate<'a> {
 
 /// What an engine calls once its session changed ([`Engine::changes`]).
 pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
-
-/// Whether a tab is to be zoomed on a pane.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Zoom {
-    On,
-    Off,
-}
 
 /// The engine hided hands the core and asks itself for the few things that
 /// cannot wait for the core's owner thread (a pane's proof, a phone's read

@@ -411,7 +411,7 @@ mod tests {
 
         timings.begin(
             "pane-op-2",
-            "pane.zoom",
+            "pane.resize",
             Some("w1:t1"),
             &["w1:p1"],
             start,
@@ -485,7 +485,7 @@ mod tests {
         for index in 0..=OP_TIMING_LIMIT {
             timings.begin(
                 &format!("op-{index}"),
-                "pane.zoom",
+                "pane.resize",
                 Some("w1:t1"),
                 &[],
                 start,

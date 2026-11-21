@@ -1285,7 +1285,7 @@ mod tests {
                 path: "/remote/fixture".to_owned(),
             }]
         );
-        snapshot.zoomed = Some("fixture:pane".to_owned());
+        snapshot.ime.marked_text = "あ".to_owned();
         let selected = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert_eq!(roots_from_rest(&selected), roots_from_rest(&initial));
         assert_eq!(
@@ -1317,11 +1317,11 @@ mod tests {
         );
         assert!(roots_changed(&initial, 0));
         assert!(!roots_changed(&initial, 1));
-        snapshot.zoomed = Some("fixture:p1".into());
-        let zoom = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
+        snapshot.ime.marked_text = "あ".into();
+        let typing = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert!(
-            !roots_changed(&zoom, 1),
-            "another reader's zoom does not renew roots"
+            !roots_changed(&typing, 1),
+            "another reader's marked text does not renew roots"
         );
         snapshot.status.remote[0]
             .session
@@ -1330,7 +1330,7 @@ mod tests {
             .workspaces[0]
             .checkouts[0]
             .path = "/r/new".into();
-        let moved = hide_core::RestSections::capture(&snapshot, Some(&zoom), 3);
+        let moved = hide_core::RestSections::capture(&snapshot, Some(&typing), 3);
         assert!(roots_changed(&moved, 2));
         assert!(roots_changed(&moved, 1));
         assert_eq!(

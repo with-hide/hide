@@ -19326,8 +19326,7 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
         child["declared_parent_session"] = json!(digest);
         child["spawned_from_pane_id"] = json!("w1:p1");
         let layout = |index: usize, pane: &str| {
-            json!({"workspace_id":"w1","tab_id":format!("t{index}"),"zoomed":false,
-                "area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":pane,
+            json!({"workspace_id":"w1","tab_id":format!("t{index}"),                "area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":pane,
                 "panes":[{"pane_id":pane,"rect":{"x":0,"y":0,"width":120,"height":40}}],
                 "splits":[]})
         };

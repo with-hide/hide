@@ -381,11 +381,6 @@ pub(super) struct ResizePanePayload {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ToggleZoomPayload {
-    pub(super) pane_id: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub(super) struct ConfirmedWorkspacePayload {
     pub(super) workspace_id: String,
     pub(super) confirmed: bool,
@@ -481,9 +476,6 @@ pub(super) enum RemoteControlRequest {
         #[serde(default)]
         cwd: Option<String>,
     },
-    TogglePaneZoom {
-        pane_id: String,
-    },
     ClosePane {
         pane_id: String,
         confirmed: bool,
@@ -519,7 +511,6 @@ impl RemoteControlRequest {
         match self {
             Self::FocusPane { pane_id }
             | Self::SplitPane { pane_id, .. }
-            | Self::TogglePaneZoom { pane_id }
             | Self::ClosePane { pane_id, .. } => Some(pane_id),
             Self::FocusWorkspace { .. }
             | Self::FocusTab { .. }
@@ -544,7 +535,6 @@ impl RemoteControlRequest {
     pub(super) fn mutation_kind(&self) -> Option<&'static str> {
         match self {
             Self::SplitPane { .. } => Some("pane.split"),
-            Self::TogglePaneZoom { .. } => Some("pane.zoom"),
             Self::ClosePane { .. } => Some("pane.close"),
             Self::CloseTab { .. } => Some("tab.close"),
             Self::FocusPane { .. }
@@ -1750,7 +1740,6 @@ pub(super) enum Event {
     TestDevice(TestDevicePayload),
     CreatePane(CreatePanePayload),
     ResizePane(ResizePanePayload),
-    ToggleZoom(ToggleZoomPayload),
     ToggleConversation(PaneTargetPayload),
     CloseWorkspace(ConfirmedWorkspacePayload),
     CloseTab(ConfirmedTabPayload),
@@ -2063,7 +2052,6 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "test_device" => decode!(TestDevicePayload, TestDevice),
         "create_pane" => decode!(CreatePanePayload, CreatePane),
         "resize_pane" => decode!(ResizePanePayload, ResizePane),
-        "toggle_zoom" => decode!(ToggleZoomPayload, ToggleZoom),
         "toggle_conversation" => decode!(PaneTargetPayload, ToggleConversation),
         "close_workspace" => decode!(ConfirmedWorkspacePayload, CloseWorkspace),
         "close_tab" => decode!(ConfirmedTabPayload, CloseTab),
@@ -3446,30 +3434,6 @@ impl Runtime {
                     },
                     None,
                 );
-                true
-            }
-            Event::ToggleZoom(payload) => {
-                if self.live.is_none() {
-                    self.set_error(
-                        "pane.control_unavailable",
-                        "Pane zoom requires a live engine connection",
-                        true,
-                    );
-                    return true;
-                }
-                let pane_id = payload.pane_id;
-                if self.pane_alone_unzoomed(&pane_id) {
-                    self.push_diagnostic(
-                        "pane.zoom.single_pane",
-                        format!("Pane {pane_id} is its tab's only pane; zoom was not sent"),
-                    );
-                    return true;
-                }
-                self.push_diagnostic(
-                    "pane.zoom.requested",
-                    format!("Toggling zoom for pane {pane_id}"),
-                );
-                self.begin_pane_operation(PaneControlAction::ToggleZoom { pane_id }, None);
                 true
             }
             Event::ToggleConversation(payload) => {

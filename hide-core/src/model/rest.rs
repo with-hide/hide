@@ -209,7 +209,6 @@ section!(RestSections, Snapshot, s, {
     overlay: OverlaySnapshot => s.overlay,
     tab: TabSnapshot => s.tab,
     connection: ConnectionSnapshot => s.connection,
-    zoomed: Option<String> => s.zoomed,
     focused: FocusedSnapshot => s.focused,
     pane_layouts: Vec<PaneLayoutSnapshot> => s.pane_layouts,
     ui_state: UiStateSnapshot => s.ui_state,

@@ -463,8 +463,7 @@ fn session_with_split_pane(laid_out: bool) -> SessionSnapshotPayload {
             {"pane_id": SPLIT_PANE, "cwd": CHECKOUT}
         ],
         "layouts": [{
-            "workspace_id": "w-order", "tab_id": "w-order:t1", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w-order", "tab_id": "w-order:t1",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": ORIGIN,
             "panes": [
                 {"pane_id": ORIGIN, "rect": {"x": 0, "y": 0, "width": 40, "height": 24}},

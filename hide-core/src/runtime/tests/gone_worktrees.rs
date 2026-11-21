@@ -52,7 +52,7 @@ fn session(label: &str, agent: Option<&str>, pane: bool) -> serde_json::Value {
         "panes": [{"workspace_id": "w1", "tab_id": "w1:t1", "pane_id": "w1:p1",
             "terminal_id": "fixture-terminal", "focused": true, "revision": 0,
             "agent_status": "idle", "cwd": gone()}],
-        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false, "area": rect,
+        "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "area": rect,
             "focused_pane_id": "w1:p1",
             "panes": [{"pane_id": "w1:p1", "focused": true, "rect": rect}], "splits": []}],
         "agents": agents

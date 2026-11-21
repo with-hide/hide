@@ -48,9 +48,9 @@ fn session(label: &str, agent: bool, t1_panes: &[&str]) -> SessionSnapshotPayloa
         ],
         "panes": panes,
         "layouts": [
-            {"workspace_id": "w-order", "tab_id": "w-order:t1", "zoomed": false, "area": rect(0, 80),
+            {"workspace_id": "w-order", "tab_id": "w-order:t1", "area": rect(0, 80),
              "focused_pane_id": t1_panes[0], "panes": t1_layout_panes, "splits": t1_splits},
-            {"workspace_id": "w-order", "tab_id": "w-order:t2", "zoomed": false, "area": rect(0, 80),
+            {"workspace_id": "w-order", "tab_id": "w-order:t2", "area": rect(0, 80),
              "focused_pane_id": "w-order:t2:p",
              "panes": [{"pane_id": "w-order:t2:p", "rect": rect(0, 80)}], "splits": []}
         ]
@@ -299,7 +299,6 @@ fn a_reopened_tab_the_operator_named_is_named_again() {
             layout: crate::recent_closed::ClosedLayout {
                 workspace_id: "w-order".into(),
                 tab_id: "w-order:t1".into(),
-                zoomed: false,
                 focused_pane_id: AGENT.into(),
                 root: crate::recent_closed::ClosedLayoutNode::Pane {
                     pane_id: Some(AGENT.into()),

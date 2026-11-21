@@ -99,7 +99,6 @@ struct LegacyWorkspace {
     custom_name: Option<String>,
     layout: HerdrLayout,
     panes: HashMap<u32, HerdrPane>,
-    zoomed: bool,
     #[serde(default)]
     focused: Option<u32>,
     #[serde(default)]
@@ -121,7 +120,6 @@ struct HerdrTab {
     custom_name: Option<String>,
     layout: HerdrLayout,
     panes: HashMap<u32, HerdrPane>,
-    zoomed: bool,
     #[serde(default)]
     focused: Option<u32>,
 }
@@ -269,7 +267,6 @@ fn workspace_of(index: usize, raw: Value) -> Result<HerdrWorkspace, Refused> {
                 custom_name: None,
                 layout: legacy.layout,
                 panes: legacy.panes,
-                zoomed: legacy.zoomed,
                 focused: legacy.focused,
             }],
             active_tab: 0,
@@ -509,7 +506,7 @@ fn moved(workspace: &HerdrWorkspace, id: &str, label: String) -> Result<Moved, S
         tabs.push(SavedTab {
             label: tab.custom_name.clone().unwrap_or_default(),
             focused: pane_id(focused)?,
-            zoomed: tab.zoomed && laid.len() > 1,
+            zoomed: false,
             root,
             panes,
             id: tab_id,
@@ -804,7 +801,7 @@ mod tests {
             // The next pane is past the one closed before the save (w1:p3).
             assert_eq!((first.tab_numbers, first.pane_numbers), (2, 4));
             let tab = &first.tabs[0];
-            assert!(tab.zoomed);
+            assert!(!tab.zoomed, "a Herdr tab's zoom is not carried");
             assert_eq!(tab.focused, "w1:p1");
             assert!(matches!(
                 &tab.root,
@@ -895,7 +892,6 @@ mod tests {
                 "layout": {"Split": {"direction": "Vertical", "ratio": 0.4,
                     "first": {"Pane": 3}, "second": {"Pane": 9}}},
                 "panes": {"3": {"cwd": "/srv/a"}, "9": {"cwd": "/srv/b", "managed_agent_kind": "codex"}},
-                "zoomed": false,
                 "focused": 9
             }],
             "active": 0,

@@ -1257,8 +1257,7 @@ fn focus_answer(
         "focus_pane" => reply(()),
         "pane_layout" => reply(
             serde_json::from_value::<crate::sidebar::SessionLayoutPayload>(serde_json::json!({
-                "workspace_id":"w-order","tab_id":tab,"zoomed":false,
-                "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":pane,
+                "workspace_id":"w-order","tab_id":tab,                "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":pane,
                 "panes":[{"pane_id":pane,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]
             }))
             .unwrap(),
@@ -1370,8 +1369,7 @@ fn native_fork_current_journey(kind: &'static str) {
                         on_call.on_call();
                     }
                     reply(fake::session(serde_json::json!({
-                        "layouts":[{"workspace_id":"w-order","tab_id":"w-order:t1","zoomed":false,
-                            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":parent,
+                        "layouts":[{"workspace_id":"w-order","tab_id":"w-order:t1",                            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":parent,
                             "panes":[{"pane_id":parent,"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}]
                     })))
                 }

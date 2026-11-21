@@ -600,14 +600,6 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("rename_pane", json!({"pane": pane, "label": label}))
     }
 
-    fn toggle_zoom(&self, _wait: Wait, pane: &str) -> Answer<bool> {
-        self.ask("toggle_zoom", json!({"pane": pane}))
-    }
-
-    fn set_zoom(&self, _wait: Wait, pane: &str, zoom: Zoom) -> Answer<()> {
-        self.ask("set_zoom", json!({"pane": pane, "zoom": zoom == Zoom::On}))
-    }
-
     fn resize_pane(
         &self,
         _wait: Wait,

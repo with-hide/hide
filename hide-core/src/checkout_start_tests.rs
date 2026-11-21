@@ -28,7 +28,7 @@ fn split(first: Value, second: Value) -> Value {
 }
 
 fn layout(tab: &str, root: Value) -> Value {
-    json!({"workspace_id":"w1", "tab_id":tab, "zoomed":false, "focused_pane_id":"w1:p1", "root":root})
+    json!({"workspace_id":"w1", "tab_id":tab, "focused_pane_id":"w1:p1", "root":root})
 }
 
 fn pane_ids(root: &Value) -> Vec<String> {
@@ -48,7 +48,6 @@ struct State {
     wrong_export_owner: bool,
     refuse_binding_save: bool,
     respawn_at_inspection: Option<usize>,
-    refuse_unzoom: bool,
     /// The engine names no pane's shell.
     no_identity: bool,
     /// The call whose answer is lost after its effect, and the flag that
@@ -74,7 +73,6 @@ impl State {
             wrong_export_owner: false,
             refuse_binding_save: false,
             respawn_at_inspection: None,
-            refuse_unzoom: false,
             no_identity: false,
             lost: None,
             stopped: Arc::new(AtomicBool::new(false)),
@@ -93,10 +91,6 @@ impl State {
     /// The engine's answer to `method`; a lost answer is the effect done
     /// and no answer read.
     fn answer(&mut self, method: &'static str, params: &Value) -> Reply {
-        if method == "set_zoom" && self.refuse_unzoom {
-            self.calls.push(method.into());
-            return refused("invalid_operation", "unzoom refused");
-        }
         let answer = self.effect(method, params);
         if self.lost == Some(method) {
             self.stopped.store(true, Ordering::Release);
@@ -161,12 +155,6 @@ impl State {
                     "focused_workspace_id":"w1","focused_pane_id":"w1:p1"
                 })))
             }
-            "set_zoom" => {
-                assert_eq!(params, &json!({"pane":"w1:p1","zoom":false}));
-                assert!(self.last_saved().binding.is_some());
-                self.layouts.get_mut("w1:t1").unwrap()["zoomed"] = json!(false);
-                reply(())
-            }
             "move_pane_beside" => {
                 let saved = self.last_saved();
                 assert_eq!(saved.binding.as_ref().unwrap().identity, identity("w1:p3"));
@@ -175,7 +163,6 @@ impl State {
                     params,
                     &json!({"pane":"w1:p3","target_tab":"w1:t1","target_pane":"w1:p1","down":false})
                 );
-                assert_eq!(self.layouts["w1:t1"]["zoomed"], false);
                 let source = self.layouts.remove("w1:t2").unwrap();
                 let target = self.layouts.get_mut("w1:t1").unwrap();
                 target["root"]["first"] =
@@ -328,7 +315,7 @@ impl Fixture {
             .filter(|method| {
                 matches!(
                     method.as_str(),
-                    "launch_checkout_tab" | "move_pane_beside" | "set_zoom"
+                    "launch_checkout_tab" | "move_pane_beside"
                 )
             })
             .cloned()
@@ -394,33 +381,6 @@ fn a_start_no_node_can_confirm_fails_and_closes_the_tab_it_made() {
         "the tab it made stays"
     );
     assert!(state.layouts.contains_key("w1:t1"));
-}
-
-#[test]
-fn refused_unzoom_retains_the_created_terminal_for_confirmation() {
-    let fixture = Fixture::new();
-    {
-        let mut state = fixture.state.lock().unwrap();
-        state.layouts.get_mut("w1:t1").unwrap()["zoomed"] = json!(true);
-        state.refuse_unzoom = true;
-    }
-    let request = fixture.request(true);
-    let error = fixture.run(&request, Some(&launch()), None).unwrap_err();
-    assert!(error.is_ambiguous(), "creation already succeeded");
-    assert!(fixture.state.lock().unwrap().last_saved().binding.is_some());
-    assert_eq!(fixture.mutations(), ["launch_checkout_tab", "set_zoom"]);
-    fixture.state.lock().unwrap().refuse_unzoom = false;
-    let recovered = fixture.run(&fixture.recover(&request), None, None).unwrap();
-    assert_eq!(recovered.created_tab_id.as_deref(), Some("w1:t1"));
-    assert_eq!(
-        fixture.mutations(),
-        [
-            "launch_checkout_tab",
-            "set_zoom",
-            "set_zoom",
-            "move_pane_beside"
-        ]
-    );
 }
 
 #[test]
@@ -617,22 +577,15 @@ fn saved_terminal_binding_refuses_each_changed_incarnation_field() {
 }
 
 #[test]
-fn adding_to_a_zoomed_target_unzooms_then_preserves_its_existing_panes() {
+fn adding_to_a_target_tab_preserves_its_existing_panes() {
     let fixture = Fixture::new();
-    fixture
-        .state
-        .lock()
-        .unwrap()
-        .layouts
-        .get_mut("w1:t1")
-        .unwrap()["zoomed"] = json!(true);
     let outcome = fixture
         .run(&fixture.request(true), Some(&launch()), None)
         .unwrap();
     assert_eq!(outcome.created_tab_id.as_deref(), Some("w1:t1"));
     assert_eq!(
         fixture.mutations(),
-        ["launch_checkout_tab", "set_zoom", "move_pane_beside"]
+        ["launch_checkout_tab", "move_pane_beside"]
     );
     let state = fixture.state.lock().unwrap();
     assert_eq!(

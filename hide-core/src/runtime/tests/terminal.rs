@@ -145,7 +145,6 @@ fn pane_mutation_receipts_without_an_operation_move_nothing() {
         workspace_id: "w1".to_owned(),
         tab_id: "w1:t1".to_owned(),
         focused_pane_id: pane_id.to_owned(),
-        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: pane_id.to_owned(),
         },
@@ -186,14 +185,6 @@ fn pane_mutation_receipts_without_an_operation_move_nothing() {
                 pane_id: pane_id.to_owned(),
                 direction: PaneResizeDirection::Right,
                 amount: 0.1,
-            },
-            PaneControlOutcome::Acknowledged {
-                created_pane_id: None,
-            },
-        ),
-        (
-            PaneControlAction::ToggleZoom {
-                pane_id: pane_id.to_owned(),
             },
             PaneControlOutcome::Acknowledged {
                 created_pane_id: None,
@@ -1010,7 +1001,6 @@ fn two_checkout_session(root_a: &str, root_b: &str, focused_tab: &str) -> Sessio
         "layouts": tabs.iter().map(|(workspace, tab, _)| serde_json::json!({
             "workspace_id": workspace,
             "tab_id": tab,
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": format!("{tab}:p"),
             "panes": [{"pane_id": format!("{tab}:p"), "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],

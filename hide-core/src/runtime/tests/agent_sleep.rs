@@ -241,8 +241,7 @@ fn dormant_wire_session(cwd: &str, tabs: &[&str]) -> serde_json::Value {
             "tab_id":tab,"cwd":cwd,"focused":false,"agent_status":"idle","revision":0
         })).collect::<Vec<_>>(),
         "layouts":tabs.iter().map(|tab| serde_json::json!({
-            "workspace_id":"w-order","tab_id":tab,"zoomed":false,
-            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":format!("{tab}:p"),
+            "workspace_id":"w-order","tab_id":tab,            "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":format!("{tab}:p"),
             "panes":[{"pane_id":format!("{tab}:p"),"focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]
         })).collect::<Vec<_>>(),"agents":[]})
 }
@@ -658,8 +657,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
                 "saving_close"
             );
             reply(fake::closed_layout(serde_json::json!({
-                "workspace_id":"w-order","tab_id":"w-order:t2","zoomed":false,
-                "focused_pane_id":SLEEPER,"root":{"type":"pane","pane_id":SLEEPER,"cwd":saved_cwd,"env":{}}
+                "workspace_id":"w-order","tab_id":"w-order:t2",                "focused_pane_id":SLEEPER,"root":{"type":"pane","pane_id":SLEEPER,"cwd":saved_cwd,"env":{}}
             })))
         }
         "close_pane" => {
@@ -703,8 +701,7 @@ fn durable_dormant_journey_in(kind: &'static str, interference: &'static str, op
             created = true;
             effects.send("create").unwrap();
             reply(fake::closed_layout(serde_json::json!({
-                "workspace_id":"w-order","tab_id":"w-order:t3","zoomed":false,
-                "focused_pane_id":"w-order:t3:p","root":{"type":"pane","pane_id":"w-order:t3:p","cwd":saved_cwd,"env":params["root"]["env"]}
+                "workspace_id":"w-order","tab_id":"w-order:t3",                "focused_pane_id":"w-order:t3:p","root":{"type":"pane","pane_id":"w-order:t3:p","cwd":saved_cwd,"env":params["root"]["env"]}
             })))
         }
         "move_tab" => tab_list(&["w-order:t1", "w-order:t3"]),
@@ -1386,7 +1383,7 @@ fn a_dormant_close_never_becomes_reopenable_after_archive_retirement() {
         .phase = crate::agent_sleep::DormantPhase::Closing;
     let fake = FakeEngine::start(|method, _| match method {
         "export_layout" => reply(fake::closed_layout(serde_json::json!({
-            "workspace_id":"w-order","tab_id":"w-order:t2","zoomed":false,"focused_pane_id":SLEEPER,
+            "workspace_id":"w-order","tab_id":"w-order:t2","focused_pane_id":SLEEPER,
             "root":{"type":"pane","pane_id":SLEEPER,"cwd":CHECKOUT,"env":{}}
         }))),
         other => panic!("unexpected retired sleep effect: {other}"),

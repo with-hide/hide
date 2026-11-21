@@ -40,8 +40,7 @@ fn session(panes: &[(&str, &str, bool)]) -> serde_json::Value {
         .enumerate()
         .map(|(index, (pane, _, _))| {
             serde_json::json!({
-                "workspace_id": "w1", "tab_id": format!("t{index}"), "zoomed": false,
-                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "w1", "tab_id": format!("t{index}"),                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": pane,
                 "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                 "splits": [],
@@ -1463,7 +1462,6 @@ fn turns_a_hook_reports_ask_for_one_read_of_each_open_pane() {
                 workspace_id: "w1".to_owned(),
                 tab_id: format!("w1:t{index}"),
                 focused_pane_id: (*pane).to_owned(),
-                zoomed: false,
                 root: PaneLayoutNodeSnapshot::Pane {
                     pane_id: (*pane).to_owned(),
                 },

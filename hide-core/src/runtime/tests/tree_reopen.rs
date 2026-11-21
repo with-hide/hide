@@ -282,8 +282,7 @@ pub(super) fn reopened_session(runtime: &mut Runtime, back: &[&str]) {
         "spawned_from_pane_id": pane_of("agent-4"), "state_change_seq": 1,
     })];
     let mut layouts = vec![serde_json::json!({
-        "workspace_id": "w5", "tab_id": "w5:t5", "zoomed": false,
-        "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": "w5:p5",
+        "workspace_id": "w5", "tab_id": "w5:t5",         "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": "w5:p5",
         "panes": [{"pane_id": "w5:p5", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
         "splits": []
     })];
@@ -304,8 +303,7 @@ pub(super) fn reopened_session(runtime: &mut Runtime, back: &[&str]) {
             "agent_session": {"kind": "id", "value": session_of(old)},
         }));
         layouts.push(serde_json::json!({
-            "workspace_id": "w1", "tab_id": tab, "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": pane,
+            "workspace_id": "w1", "tab_id": tab,             "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": pane,
             "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
             "splits": []
         }));

@@ -1864,8 +1864,7 @@ mod tests {
             "workspaces":[{"workspace_id":"w1","label":"Alpha"}],
             "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"1"}],
             "panes":[{"pane_id":"w1:p1","cwd":root}],
-            "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
-                        "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
+            "layouts":[{"workspace_id":"w1","tab_id":"w1:t1",                        "area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1",
                         "panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],
                         "splits":[]}]
         }))

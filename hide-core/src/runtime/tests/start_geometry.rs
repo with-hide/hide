@@ -10,31 +10,44 @@ const PATH: &str = "/checkout-start-geometry";
 const TAB: &str = "w-order:t1";
 const PANE: &str = "w-order:t1:p";
 
-fn session(zoomed: bool) -> SessionSnapshotPayload {
+/// The tab as the engine sends it, its pane a column narrower once `moved`:
+/// the change that confirms a pane resize.
+fn session(moved: bool) -> SessionSnapshotPayload {
     let mut payload = tab_order_payload(PATH, &[TAB], &[TAB], TAB);
-    payload.layouts[0].zoomed = zoomed;
+    if moved {
+        payload.layouts[0].panes[0].rect.width -= 1;
+    }
     payload
 }
 
 fn setup() -> (Runtime, Fake, u64) {
     let fake = FakeEngine::start(|method, _| match method {
-        "set_zoom" => reply(()),
+        "resize_pane" => reply(true),
         other => refused("unsupported", &format!("unexpected {other}")),
     });
     let (mut runtime, _) = tab_order_runtime(PATH);
     record_terminals(&mut runtime);
     runtime.live = Some(fake.live());
-    runtime.ingest_session(Ok(session(true)));
+    runtime.ingest_session(Ok(session(false)));
     let task = runtime
         .begin_task_operation("checkout_start", None, None, None, None)
         .unwrap();
     (runtime, fake, task)
 }
 
-fn zoom(runtime: &mut Runtime) -> String {
+/// Queues a resize of the tab's pane, across the tab or down it by turns,
+/// so no resize folds into the one waiting before it.
+fn resize(runtime: &mut Runtime) -> String {
+    let direction = if runtime.pane_operations.len() % 2 == 0 {
+        PaneResizeDirection::Right
+    } else {
+        PaneResizeDirection::Down
+    };
     runtime.begin_pane_operation(
-        PaneControlAction::ToggleZoom {
+        PaneControlAction::Resize {
             pane_id: PANE.into(),
+            direction,
+            amount: 0.1,
         },
         None,
     );
@@ -47,7 +60,7 @@ fn zoom(runtime: &mut Runtime) -> String {
         .clone()
 }
 
-fn confirm_unzoom(runtime: &mut Runtime, id: &str) {
+fn confirm_resize(runtime: &mut Runtime, id: &str) {
     assert!(runtime.ingest_pane_mutation_result(
         id,
         Ok(PaneControlOutcome::Acknowledged {
@@ -55,26 +68,26 @@ fn confirm_unzoom(runtime: &mut Runtime, id: &str) {
         }),
         0
     ));
-    runtime.ingest_session(Ok(session(false)));
+    runtime.ingest_session(Ok(session(true)));
 }
 
 #[test]
 fn checkout_start_waits_its_turn_and_holds_followers_through_intermediate_topology() {
     let (mut runtime, _fake, task) = setup();
-    let first = zoom(&mut runtime);
+    let first = resize(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
-    let follower = zoom(&mut runtime);
+    let follower = resize(&mut runtime);
     assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
-    confirm_unzoom(&mut runtime, &first);
+    confirm_resize(&mut runtime, &first);
     let lease = ready.try_recv().unwrap().unwrap();
     assert!(runtime.checkout_start_geometry_is_current(task, &lease));
     assert_eq!(runtime.pane_operations[&follower].phase, "queued");
 
-    // Neither a transport ACK nor the intermediate unzoom can stand in for
+    // Neither a transport ACK nor an intermediate layout can stand in for
     // the worker's proof that the exact newly created pane joined the tab.
     assert!(!runtime.ingest_pane_mutation_result(&lease, Ok(PaneControlOutcome::Unchanged), 0));
-    runtime.ingest_session(Ok(session(true)));
     runtime.ingest_session(Ok(session(false)));
+    runtime.ingest_session(Ok(session(true)));
     assert!(runtime.checkout_start_geometry_is_current(task, &lease));
     assert_eq!(runtime.pane_operations[&follower].phase, "queued");
     runtime.finish_checkout_start_geometry(task + 1, &lease, Ok(()));
@@ -89,9 +102,9 @@ fn checkout_start_waits_its_turn_and_holds_followers_through_intermediate_topolo
 #[test]
 fn checkout_start_shares_the_existing_eight_waiter_limit() {
     let (mut runtime, _fake, task) = setup();
-    zoom(&mut runtime);
+    resize(&mut runtime);
     for _ in 0..GEOMETRY_QUEUE_LIMIT {
-        zoom(&mut runtime);
+        resize(&mut runtime);
     }
     assert!(runtime.queue_checkout_start_geometry(task, PANE).is_err());
     assert_eq!(runtime.pane_operations.len(), GEOMETRY_QUEUE_LIMIT + 1);
@@ -100,10 +113,10 @@ fn checkout_start_shares_the_existing_eight_waiter_limit() {
 #[test]
 fn checkout_start_receives_refusal_when_the_operation_ahead_fails() {
     let (mut runtime, _fake, task) = setup();
-    let first = zoom(&mut runtime);
+    let first = resize(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
-    let follower = zoom(&mut runtime);
-    runtime.fail_pane_operation(&first, "Herdr refused zoom".into());
+    let follower = resize(&mut runtime);
+    runtime.fail_pane_operation(&first, "the engine refused the resize".into());
     assert!(ready.try_recv().unwrap().is_err());
     assert!(!runtime.pane_operations.contains_key(&follower));
     assert!(!runtime.geometry_tab_busy(TAB));
@@ -112,16 +125,16 @@ fn checkout_start_receives_refusal_when_the_operation_ahead_fails() {
 #[test]
 fn checkout_start_cancel_covers_both_waiting_and_grant_racing_with_timeout() {
     let (mut runtime, _fake, task) = setup();
-    let first = zoom(&mut runtime);
-    let predecessor = zoom(&mut runtime);
+    let first = resize(&mut runtime);
+    let predecessor = resize(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
-    let follower = zoom(&mut runtime);
+    let follower = resize(&mut runtime);
     runtime.cancel_checkout_start_geometry(task);
     assert!(ready.try_recv().unwrap().is_err());
     assert!(!runtime.pane_operations.contains_key(&follower));
     assert_eq!(runtime.pane_operations[&first].phase, "transmitting");
     assert_eq!(runtime.pane_operations[&predecessor].phase, "queued");
-    confirm_unzoom(&mut runtime, &first);
+    confirm_resize(&mut runtime, &first);
     assert_eq!(runtime.pane_operations[&predecessor].phase, "transmitting");
     runtime.ingest_pane_mutation_result(&predecessor, Ok(PaneControlOutcome::Unchanged), 0);
 
@@ -136,11 +149,11 @@ fn checkout_start_cancel_covers_both_waiting_and_grant_racing_with_timeout() {
 #[test]
 fn checkout_start_abandoned_receiver_cannot_lock_the_tab() {
     let (mut runtime, _fake, task) = setup();
-    let first = zoom(&mut runtime);
+    let first = resize(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
-    let follower = zoom(&mut runtime);
+    let follower = resize(&mut runtime);
     drop(ready);
-    confirm_unzoom(&mut runtime, &first);
+    confirm_resize(&mut runtime, &first);
     assert!(!runtime.geometry_tab_busy(TAB));
     assert!(!runtime.pane_operations.contains_key(&follower));
 }
@@ -150,7 +163,7 @@ fn checkout_start_deadline_revokes_the_lease_and_drops_followers_without_resendi
     let (mut runtime, _fake, task) = setup();
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     let lease = ready.try_recv().unwrap().unwrap();
-    let follower = zoom(&mut runtime);
+    let follower = resize(&mut runtime);
     runtime.expire_pane_operations(unix_milliseconds() + CHECKOUT_START_GEOMETRY_TIMEOUT_MS + 1);
     assert!(!runtime.checkout_start_geometry_is_current(task, &lease));
     assert!(!runtime.pane_operations.contains_key(&follower));
@@ -161,14 +174,14 @@ fn checkout_start_deadline_revokes_the_lease_and_drops_followers_without_resendi
 fn checkout_start_does_not_grant_a_replaced_task_or_connection() {
     for replace_task in [false, true] {
         let (mut runtime, _fake, task) = setup();
-        let first = zoom(&mut runtime);
+        let first = resize(&mut runtime);
         let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
         if replace_task {
             runtime.snapshot.task_operation.as_mut().unwrap().id += 1;
         } else {
             runtime.live_generation += 1;
         }
-        confirm_unzoom(&mut runtime, &first);
+        confirm_resize(&mut runtime, &first);
         assert!(ready.try_recv().unwrap().is_err());
         assert!(!runtime.geometry_tab_busy(TAB));
     }
@@ -178,7 +191,7 @@ fn checkout_start_does_not_grant_a_replaced_task_or_connection() {
 fn checkout_start_revalidates_its_group_target_after_waiting() {
     let (runtime, _fake, task) = setup();
     let mut runtime = super::workspace_view::with_new_views(runtime, "start-geometry-target");
-    runtime.ingest_session(Ok(session(true)));
+    runtime.ingest_session(Ok(session(false)));
     runtime.sync_workspace_view();
     runtime
         .prepare_group_start(
@@ -195,12 +208,12 @@ fn checkout_start_revalidates_its_group_target_after_waiting() {
             false,
         )
         .unwrap();
-    let first = zoom(&mut runtime);
+    let first = resize(&mut runtime);
     let ready = runtime.queue_checkout_start_geometry(task, PANE).unwrap();
     // The checkout presentation was removed while the worker waited. Its
     // unchanged engine pane is insufficient authority to start in that group.
     runtime.workspace_views = None;
-    confirm_unzoom(&mut runtime, &first);
+    confirm_resize(&mut runtime, &first);
     assert!(ready.try_recv().unwrap().is_err());
     assert!(!runtime.geometry_tab_busy(TAB));
 }
@@ -249,7 +262,7 @@ fn queued_checkout_start_refuses_full_tab_and_last_pane_closes_without_native_wo
 fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
     const OTHER: &str = "w-order:p2";
     let (mut runtime, _fake, task) = setup();
-    let mut split = session(true);
+    let mut split = session(false);
     let mut other = split.panes[0].clone();
     other.pane_id = OTHER.into();
     split.panes.push(other);
@@ -268,7 +281,7 @@ fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
             rect: layout.area,
         });
     runtime.ingest_session(Ok(split.clone()));
-    let first = zoom(&mut runtime);
+    let first = resize(&mut runtime);
     runtime.dispatch_json(&explorer_event(
         "close_pane",
         serde_json::json!({
@@ -285,7 +298,7 @@ fn a_close_ahead_of_checkout_start_keeps_its_normal_fifo_turn() {
         }),
         0,
     );
-    split.layouts[0].zoomed = false;
+    split.layouts[0].panes[0].rect.width -= 1;
     runtime.ingest_session(Ok(split));
     assert!(
         runtime
@@ -342,7 +355,6 @@ fn remote_setup() -> (Runtime, Fake, u64, String, String) {
                 workspace_id,
                 tab_id: tab.clone(),
                 focused_pane_id: pane_id.clone(),
-                zoomed: true,
                 frames: vec![
                     crate::model::RemotePaneLayoutFrame {
                         pane_id: pane_id.clone(),
@@ -375,14 +387,16 @@ fn remote_setup() -> (Runtime, Fake, u64, String, String) {
     (runtime, fake, task, tab, pane_id)
 }
 
-fn remote_zoom(runtime: &mut Runtime, pane_id: &str, request: &str) {
+/// Asks the device to close the tab's second pane.
+fn remote_close(runtime: &mut Runtime, request: &str) {
     runtime.request_remote_control(RemoteControlPayload {
         target_id: DEVICE.into(),
         request_id: request.into(),
         report_pane_focus_outcome: false,
         focus_device: false,
-        request: RemoteControlRequest::TogglePaneZoom {
-            pane_id: pane_id.into(),
+        request: RemoteControlRequest::ClosePane {
+            pane_id: crate::address::scoped_pane_id(DEVICE, "w-order:p2"),
+            confirmed: true,
         },
     });
 }
@@ -390,25 +404,31 @@ fn remote_zoom(runtime: &mut Runtime, pane_id: &str, request: &str) {
 #[test]
 fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
     let (mut runtime, _fake, task, tab, pane_id) = remote_setup();
-    remote_zoom(&mut runtime, &pane_id, "first");
+    remote_close(&mut runtime, "first");
     assert_eq!(runtime.remote_operations.len(), 1);
     let ready = runtime
         .queue_checkout_start_geometry(task, &pane_id)
         .unwrap();
     assert_eq!(ready.try_recv(), Err(TryRecvError::Empty));
-    remote_zoom(&mut runtime, &pane_id, "while-queued");
+    remote_close(&mut runtime, "while-queued");
     assert_eq!(
         runtime.snapshot.status.last_error.as_ref().unwrap().kind,
         "remote.control.in_progress"
     );
     runtime.acknowledge_remote_operation(DEVICE, "first", None);
     let session = runtime.snapshot.status.remote[0].session.as_mut().unwrap();
-    session.pane_layouts[0].zoomed = false;
+    let closed = crate::address::scoped_pane_id(DEVICE, "w-order:p2");
+    session.workspaces[0].checkouts[0].tabs[0]
+        .panes
+        .retain(|pane| pane.id != closed);
+    session.pane_layouts[0]
+        .frames
+        .retain(|frame| frame.pane_id != closed);
     let session = session.clone();
     assert!(runtime.observe_remote_operations(DEVICE, &session));
     let lease = ready.try_recv().unwrap().unwrap();
     assert!(runtime.checkout_start_geometry_is_current(task, &lease));
-    remote_zoom(&mut runtime, &pane_id, "while-granted");
+    remote_close(&mut runtime, "while-granted");
     assert!(runtime.remote_operations.is_empty());
     assert_eq!(
         runtime.snapshot.status.last_error.as_ref().unwrap().kind,
@@ -416,14 +436,14 @@ fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
     );
     runtime.finish_checkout_start_geometry(task, &lease, Ok(()));
     assert!(!runtime.geometry_tab_busy(&tab));
-    remote_zoom(&mut runtime, &pane_id, "after-finish");
+    remote_close(&mut runtime, "after-finish");
     assert_eq!(runtime.remote_operations.len(), 1);
 }
 
 #[test]
 fn checkout_start_remote_unknown_does_not_grant_and_reconnect_revokes_held_lease() {
     let (mut runtime, _fake, task, tab, pane_id) = remote_setup();
-    remote_zoom(&mut runtime, &pane_id, "first");
+    remote_close(&mut runtime, "first");
     runtime.expire_remote_operations(unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1);
     let ready = runtime
         .queue_checkout_start_geometry(task, &pane_id)

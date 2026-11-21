@@ -40,8 +40,7 @@ fn ingest_parent(runtime: &mut Runtime) {
             "workspace_label": "hide", "tokens": {"task": "Lead the work"}}],
         "panes": [{"pane_id": "w1:p1", "cwd": "/fixture"}],
         "tabs": [{"workspace_id": "w1", "tab_id": "t0", "label": ""}],
-        "layouts": [{"workspace_id": "w1", "tab_id": "t0", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 120, "height": 40},
+        "layouts": [{"workspace_id": "w1", "tab_id": "t0",             "area": {"x": 0, "y": 0, "width": 120, "height": 40},
             "focused_pane_id": "w1:p1",
             "panes": [{"pane_id": "w1:p1", "rect": {"x": 0, "y": 0, "width": 120, "height": 40}}],
             "splits": []}]

@@ -384,7 +384,6 @@ fn reconciling_with_a_precomputed_catalog_runs_no_git() {
         .map(|index| serde_json::json!({
             "workspace_id": "w1",
             "tab_id": format!("w1:t{index}"),
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": format!("w1:p{index}"),
             "panes": [{"pane_id": format!("w1:p{index}"), "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -491,7 +490,6 @@ fn a_stale_precomputed_catalog_keeps_the_last_accepted_one() {
             "layouts": [{
                 "workspace_id": "w1",
                 "tab_id": "w1:t1",
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w1:p1",
                 "panes": [{"pane_id": "w1:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -2712,7 +2710,6 @@ fn a_pane_in_a_second_directory_projects_into_its_own_project() {
         "layouts": [{
             "workspace_id": "w3M",
             "tab_id": "w3M:t1",
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w3M:p1",
             "panes": [{"pane_id": "w3M:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -2823,7 +2820,6 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
             {
                 "workspace_id": "w3P",
                 "tab_id": "w3P:t1",
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w3P:p1",
                 "panes": [{"pane_id": "w3P:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -2832,7 +2828,6 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
             {
                 "workspace_id": "w3Z",
                 "tab_id": "w3Z:t1",
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w3Z:p1",
                 "panes": [{"pane_id": "w3Z:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3012,7 +3007,6 @@ fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
         "layouts": [{
             "workspace_id": "w5",
             "tab_id": "w5:t1",
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w5:p1",
             "panes": [{"pane_id": "w5:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3126,7 +3120,6 @@ fn closing_the_last_projected_pane_leaves_an_empty_checkout_without_an_error() {
         workspace_id: "w-last".to_owned(),
         tab_id: "w-last:t1".to_owned(),
         focused_pane_id: "w-last:p1".to_owned(),
-        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w-last:p1".to_owned(),
         },
@@ -3211,7 +3204,6 @@ fn a_foreign_stale_projection_is_not_mistaken_for_checkout_pane_retirement() {
         workspace_id: "w-foreign".to_owned(),
         tab_id: "w-foreign:t1".to_owned(),
         focused_pane_id: "w-foreign:p1".to_owned(),
-        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w-foreign:p1".to_owned(),
         },
@@ -3226,7 +3218,6 @@ fn a_foreign_stale_projection_is_not_mistaken_for_checkout_pane_retirement() {
         "layouts": [{
             "workspace_id": "w-focused",
             "tab_id": "w-focused:t1",
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w-focused:p2",
             "panes": [{
@@ -3283,7 +3274,6 @@ fn an_explicit_checkout_waits_without_rendering_stale_projection_when_catalog_is
         workspace_id: "w3P".to_owned(),
         tab_id: "w3P:t1".to_owned(),
         focused_pane_id: "w3P:p1".to_owned(),
-        zoomed: false,
         root: PaneLayoutNodeSnapshot::Pane {
             pane_id: "w3P:p1".to_owned(),
         },
@@ -3310,7 +3300,6 @@ fn an_explicit_checkout_waits_without_rendering_stale_projection_when_catalog_is
         "layouts": [{
             "workspace_id": "w3P",
             "tab_id": "w3P:t1",
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w3P:p1",
             "panes": [{"pane_id": "w3P:p1", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3481,7 +3470,6 @@ fn owner_payload(path: &str, bound: serde_json::Value) -> SessionSnapshotPayload
         serde_json::json!({
             "workspace_id": workspace,
             "tab_id": tab,
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": pane,
             "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -3644,8 +3632,7 @@ fn a_tab_of_a_plain_folders_owner_stays_in_that_folder_while_its_pane_is_in_a_su
             "panes": [{"pane_id": "h1:p4", "cwd": sub}],
             "tabs": [{"workspace_id": "h1", "tab_id": "h1:t2", "label": "복구 작업"}],
             "layouts": [{
-                "workspace_id": "h1", "tab_id": "h1:t2", "zoomed": false,
-                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "h1", "tab_id": "h1:t2",                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "h1:p4",
                 "panes": [{"pane_id": "h1:p4", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                 "splits": []
@@ -3708,8 +3695,7 @@ fn starting_task_agent(
         }],
         "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w1", "tab_id": "t1",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w1:p9",
             "panes": [{"pane_id": "w1:p9",
                        "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],

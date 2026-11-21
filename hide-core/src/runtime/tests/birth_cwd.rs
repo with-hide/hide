@@ -71,7 +71,6 @@ fn payload_with_created_workspace(checkout_path: &str, birth_cwd: &str) -> Sessi
         serde_json::json!({
             "workspace_id": workspace,
             "tab_id": tab,
-            "zoomed": false,
             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": format!("{tab}:p"),
             "panes": [{

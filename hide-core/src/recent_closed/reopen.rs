@@ -1358,8 +1358,7 @@ mod tests {
     fn nested_split_reopen_applies_the_original_outer_and_inner_geometry() {
         let fake = FakeEngine::start(|method, params| match method {
             "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
-                "workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
-                "focused_pane_id":"outer-left",
+                "workspace_id":"w1", "tab_id":"w1:t1",                 "focused_pane_id":"outer-left",
                 "root":{"type":"split", "direction":"right", "ratio":0.4,
                     "first":{"type":"pane", "pane_id":"outer-left", "cwd":"/tmp", "env":{}},
                     "second":{"type":"split", "direction":"right", "ratio":0.65,
@@ -1387,8 +1386,7 @@ mod tests {
                 assert_eq!(root["second"]["second"]["first"]["pane_id"], "inner-left");
                 assert_eq!(root["second"]["second"]["second"]["pane_id"], "inner-right");
                 reply(closed_layout(json!({"type":"layout_apply","layout": {
-                    "workspace_id":"w1", "tab_id":"w1:t1", "zoomed":false,
-                    "focused_pane_id":"reopened",
+                    "workspace_id":"w1", "tab_id":"w1:t1",                     "focused_pane_id":"reopened",
                     "root":{"type":"split", "direction":"right", "ratio":0.4,
                         "first":{"type":"pane", "pane_id":"outer-left", "cwd":"/tmp", "env":{}},
                         "second":{"type":"split", "direction":"down", "ratio":0.3,
@@ -1518,7 +1516,6 @@ mod tests {
             crate::recent_closed::ClosedLayout {
                 workspace_id: "w1".into(),
                 tab_id: "w1:t2".into(),
-                zoomed: false,
                 focused_pane_id: "unknown-extra".into(),
                 root: actual_root,
             },
@@ -1581,8 +1578,7 @@ mod tests {
             "session" => reply(session(json!({"type":"session_snapshot","snapshot": {
                 "workspaces":[], "tabs":[], "agents":[],
                 "panes":[{"pane_id":"w1:p3", "terminal_id": "fixture-terminal","workspace_id":"w1","tab_id":"w1:t1","cwd":"/tmp","focused":false,"agent_status":"idle","revision":0}],
-                "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
-                    "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w1:p1",
+                "layouts":[{"workspace_id":"w1","tab_id":"w1:t1",                    "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w1:p1",
                     "panes":[{"pane_id":"w1:p1","focused":true,"rect":{"x":0,"y":0,"width":40,"height":24}},
                              {"pane_id":"w1:p3","focused":false,"rect":{"x":40,"y":0,"width":40,"height":24}}],
                     "splits":[] }]
@@ -1590,8 +1586,7 @@ mod tests {
             "export_layout" => reply(closed_layout(json!({
                 "type": "layout_export",
                 "layout": {
-                    "workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
-                    "focused_pane_id": "w1:p1",
+                    "workspace_id": "w1", "tab_id": "w1:t1",                     "focused_pane_id": "w1:p1",
                     "root": {"type":"split", "direction":"right", "ratio":0.5,
                         "first":{"type":"pane","pane_id":"w1:p1","cwd":"/tmp","env":{}},
                         "second":{"type":"pane","pane_id":"w1:p3","cwd":"/tmp","env":{}}}
@@ -1682,8 +1677,7 @@ mod tests {
                 "panes":[], "layouts":[], "agents":[]
             }}))),
             "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
-                "workspace_id":"w2", "tab_id":"w2:t1", "zoomed":false,
-                "focused_pane_id":"w2:p9",
+                "workspace_id":"w2", "tab_id":"w2:t1",                 "focused_pane_id":"w2:p9",
                 "root":{"type":"pane","pane_id":"w2:p9","cwd":"/tmp","env":{}}
             }}))),
             "create_workspace" => {
@@ -1702,16 +1696,14 @@ mod tests {
                 layout_apply_count += 1;
                 if layout_apply_count == 1 {
                     reply(closed_layout(json!({"type":"layout_apply","layout": {
-                        "workspace_id":"w3", "tab_id":"w3:t1", "zoomed":false,
-                        "focused_pane_id":"w3:p3",
+                        "workspace_id":"w3", "tab_id":"w3:t1",                         "focused_pane_id":"w3:p3",
                         "root":{"type":"pane","pane_id":"w3:p3","cwd":"/tmp","env":{
                             (REOPEN_INTENT_ENV): reopen_intent_marker("layout-intent", ReopenIntentStage::Layout)
                         }}
                     }})))
                 } else {
                     reply(closed_layout(json!({"type":"layout_apply","layout": {
-                        "workspace_id":"w3", "tab_id":"w3:t1", "zoomed":false,
-                        "focused_pane_id":"w3:p3",
+                        "workspace_id":"w3", "tab_id":"w3:t1",                         "focused_pane_id":"w3:p3",
                         "root":{"type":"split","direction":"right","ratio":0.6,
                             "first":{"type":"pane","pane_id":"w3:p3","cwd":"/tmp","env":{
                                 (REOPEN_INTENT_ENV): reopen_intent_marker("layout-intent", ReopenIntentStage::Layout)
@@ -1812,8 +1804,7 @@ mod tests {
                 "panes":[], "layouts":[], "agents":[]
             }}))),
             "export_layout" => reply(closed_layout(json!({"type":"layout_export","layout": {
-                "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
-                "focused_pane_id":"w1:p2",
+                "workspace_id":"w1", "tab_id":"w1:t2",                 "focused_pane_id":"w1:p2",
                 "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
                     (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
                 }}
@@ -1825,8 +1816,7 @@ mod tests {
                     reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)
                 );
                 reply(closed_layout(json!({"type":"layout_apply","layout": {
-                    "workspace_id":"w1", "tab_id":"w1:t2", "zoomed":false,
-                    "focused_pane_id":"w1:p2",
+                    "workspace_id":"w1", "tab_id":"w1:t2",                     "focused_pane_id":"w1:p2",
                     "root":{"type":"split","direction":"right","ratio":0.6,
                         "first":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
                             (REOPEN_INTENT_ENV): reopen_intent_marker("recovered-intent", ReopenIntentStage::Layout)

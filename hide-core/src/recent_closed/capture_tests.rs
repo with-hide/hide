@@ -318,7 +318,7 @@ fn malformed_create_ack_is_recovered_by_its_marker_without_repeating_the_effect(
         "export_layout" => {
             let id = params["tab"].as_str().unwrap();
             reply(closed_layout(json!({
-                "workspace_id":"w1","tab_id":id,"zoomed":false,"focused_pane_id":"w1:p2",
+                "workspace_id":"w1","tab_id":id,"focused_pane_id":"w1:p2",
                 "root":{"type":"pane","pane_id":"w1:p2","cwd":"/tmp","env":{
                     (REOPEN_INTENT_ENV): if id == "w1:t2" {marker.clone()} else {"other-intent".into()}
                 }}
@@ -380,8 +380,7 @@ fn named_tab_snapshot(shell: bool) -> Value {
     };
     let mut value = snapshot(false);
     value["snapshot"]["panes"] = panes;
-    value["snapshot"]["layouts"] = json!([{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
-        "area":rect(0, 120),"focused_pane_id":"w1:p1","panes":layout_panes,"splits":[]}]);
+    value["snapshot"]["layouts"] = json!([{"workspace_id":"w1","tab_id":"w1:t1",        "area":rect(0, 120),"focused_pane_id":"w1:p1","panes":layout_panes,"splits":[]}]);
     value
 }
 fn named_tab_export(shell: bool) -> Value {
@@ -392,8 +391,7 @@ fn named_tab_export(shell: bool) -> Value {
     } else {
         agent
     };
-    json!({"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,
-        "focused_pane_id":"w1:p1","root":root})
+    json!({"workspace_id":"w1","tab_id":"w1:t1",        "focused_pane_id":"w1:p1","root":root})
 }
 
 /// A named tab's last agent leaves a shell in the same tab: split beside

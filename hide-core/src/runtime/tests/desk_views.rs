@@ -80,8 +80,7 @@ fn split_payload(directory: &Path) -> SessionSnapshotPayload {
         .iter()
         .map(|tab| {
             let mut layout = serde_json::json!({
-                "workspace_id": "w-order", "tab_id": tab, "zoomed": false,
-                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "w-order", "tab_id": tab,                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": format!("{tab}:p"),
                 "panes": [{"pane_id": format!("{tab}:p"), "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
                 "splits": []

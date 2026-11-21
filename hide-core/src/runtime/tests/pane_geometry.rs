@@ -31,7 +31,7 @@ fn rect(x: u16, width: u16) -> SessionLayoutRect {
 }
 
 /// The tab as the engine sends it: one pane, or `LEFT | RIGHT` at `ratio`.
-fn session(right: Option<f32>, zoomed: bool) -> SessionSnapshotPayload {
+fn session(right: Option<f32>) -> SessionSnapshotPayload {
     let mut payload = tab_order_payload(CHECKOUT, &[TAB], &[TAB], TAB);
     if let Some(ratio) = right {
         let layout = &mut payload.layouts[0];
@@ -63,7 +63,6 @@ fn session(right: Option<f32>, zoomed: bool) -> SessionSnapshotPayload {
             terminal_title: None,
         });
     }
-    payload.layouts[0].zoomed = zoomed;
     payload
 }
 
@@ -72,7 +71,7 @@ fn fake_engine() -> Fake {
         "split_pane" | "split_pane_at" => reply(CREATED.to_owned()),
         // The answers reach the runtime only when a test hands them over, so
         // the answer here only has to be the call's own.
-        "toggle_zoom" | "resize_pane" => reply(true),
+        "resize_pane" => reply(true),
         other => refused("unsupported", &format!("fixture has no {other}")),
     })
 }
@@ -115,8 +114,13 @@ fn dispatch(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) {
     );
 }
 
-fn zoom(runtime: &mut Runtime, pane: &str) {
-    dispatch(runtime, "toggle_zoom", serde_json::json!({"pane_id": pane}));
+/// Moves `pane`'s right edge a tenth of the tab to the right.
+fn resize(runtime: &mut Runtime, pane: &str) {
+    dispatch(
+        runtime,
+        "resize_pane",
+        serde_json::json!({"pane_id": pane, "direction": "right", "amount": 0.1}),
+    );
 }
 
 fn drawn(runtime: &Runtime) -> PaneLayoutSnapshot {
@@ -164,20 +168,34 @@ fn accepted() -> Result<PaneControlOutcome, String> {
     })
 }
 
-fn zoom_action(pane: &str) -> PaneControlAction {
-    PaneControlAction::ToggleZoom {
+fn resize_action(pane: &str) -> PaneControlAction {
+    PaneControlAction::Resize {
         pane_id: pane.to_owned(),
+        direction: PaneResizeDirection::Right,
+        amount: 0.1,
     }
 }
 
-/// B8, D-06: a zoom's record counts the first frame after the resize its
-/// drawing sent, so the node is asked for that frame with the resize and
-/// not when the engine accepts or applies the zoom; frames before the resize ask
-/// nothing and end nothing.
+/// The ratio the tab's one split is drawn at.
+fn drawn_ratio(runtime: &Runtime) -> f32 {
+    match drawn(runtime).root {
+        PaneLayoutNodeSnapshot::Split { ratio, .. } => ratio,
+        PaneLayoutNodeSnapshot::Pane { .. } => panic!("the tab is drawn split"),
+    }
+}
+
+fn near(ratio: f32, expected: f32) -> bool {
+    (ratio - expected).abs() < 1e-4
+}
+
+/// B8, D-06: a pane resize's record counts the first frame after the PTY
+/// resize its drawing sent, so the node is asked for that frame with the PTY
+/// resize and not when the engine accepts or applies the pane resize; frames
+/// before the PTY resize ask nothing and end nothing.
 #[test]
-fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it() {
+fn a_resizes_frame_watch_starts_with_its_pty_resize_and_ends_with_the_frame_after_it() {
     let fake = fake_engine();
-    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5), false));
+    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5)));
     let watches = |terminals: &RecordedTerminals| {
         terminals
             .take()
@@ -193,9 +211,9 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
             at_unix_ms: crate::runtime::unix_milliseconds(),
         }]);
     };
-    zoom(&mut runtime, LEFT);
+    resize(&mut runtime, LEFT);
     fake.wait_for_calls(1, Duration::from_secs(5));
-    answer(&mut runtime, zoom_action(LEFT), accepted());
+    answer(&mut runtime, resize_action(LEFT), accepted());
     for _ in 0..3 {
         shown(&mut runtime);
     }
@@ -216,16 +234,16 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
         "a resize before the drawing asks nothing"
     );
     // The drawn snapshot is read for the browser, which fits and reports.
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    runtime.ingest_session(Ok(session(Some(0.5))));
     runtime.snapshot_delta_payload(0);
     dispatch(
         &mut runtime,
         "terminal_resize",
-        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 80}),
+        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 48}),
     );
     assert_eq!(watches(&terminals), 1, "watched once the resize went out");
     shown(&mut runtime);
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    runtime.ingest_session(Ok(session(Some(0.6))));
     assert_eq!(watches(&terminals), 0, "Herdr's layout asks for no watch");
     // The snapshot carrying the engine's layout is read for the browser.
     let (_, records) = crate::diagnostics::capture(|| {
@@ -242,42 +260,42 @@ fn a_zooms_frame_watch_starts_with_its_resize_and_ends_with_the_frame_after_it()
     );
 }
 
-/// B1, B5, B7: a zoom is drawn at the request and the grid its view then
-/// reports reaches the PTY at once; the engine confirming the same layout moves
-/// nothing, and a layout drawn differently makes the view report once more,
-/// which goes out once.
+/// B1, B5, B7: a pane resize is drawn at the request and the grid its view
+/// then reports reaches the PTY at once; the engine confirming the same layout
+/// moves nothing, and a layout drawn differently makes the view report once
+/// more, which goes out once.
 #[test]
-fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_the_engine_confirms_the_same_layout()
+fn a_resize_sends_its_pty_size_at_the_drawing_and_nothing_more_when_the_engine_confirms_the_same_layout()
  {
     let fake = fake_engine();
-    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5), false));
-    zoom(&mut runtime, LEFT);
+    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5)));
+    resize(&mut runtime, LEFT);
     assert!(
         runtime.take_republish_request(),
-        "the zoom asks to be drawn"
+        "the resize asks to be drawn"
     );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
-    assert!(drawn(&runtime).zoomed);
+    runtime.ingest_session(Ok(session(Some(0.5))));
+    assert!(near(drawn_ratio(&runtime), 0.6));
 
     dispatch(
         &mut runtime,
         "terminal_resize",
-        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 80}),
+        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 48}),
     );
     assert_eq!(
         resizes(&terminals, LEFT),
-        [(30, 80)],
-        "the PTY follows the drawing before Herdr answers"
+        [(30, 48)],
+        "the PTY follows the drawing before the engine answers"
     );
 
     fake.wait_for_calls(1, Duration::from_secs(5));
-    answer(&mut runtime, zoom_action(LEFT), accepted());
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    answer(&mut runtime, resize_action(LEFT), accepted());
+    runtime.ingest_session(Ok(session(Some(0.6))));
     assert!(
         runtime.pane_operations.is_empty(),
-        "Herdr's layout confirmed it"
+        "the engine's layout confirmed it"
     );
-    assert!(drawn(&runtime).zoomed);
+    assert!(near(drawn_ratio(&runtime), 0.6));
     assert_eq!(
         resizes(&terminals, LEFT),
         [],
@@ -289,9 +307,9 @@ fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_the_engine_con
     dispatch(
         &mut runtime,
         "terminal_resize",
-        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 76}),
+        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 46}),
     );
-    assert_eq!(resizes(&terminals, LEFT), [(30, 76)]);
+    assert_eq!(resizes(&terminals, LEFT), [(30, 46)]);
 }
 
 /// A view reporting the size its pane already runs at sends its node
@@ -300,7 +318,7 @@ fn a_zoom_sends_its_pty_size_at_the_drawing_and_nothing_more_when_the_engine_con
 #[test]
 fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
     let fake = fake_engine();
-    let (mut runtime, terminals) = runtime_on(&fake, session(None, false));
+    let (mut runtime, terminals) = runtime_on(&fake, session(None));
     let report = |runtime: &mut Runtime, rows: u16| {
         dispatch(
             runtime,
@@ -322,7 +340,7 @@ fn a_view_reporting_the_size_its_pane_runs_at_sends_no_resize() {
 #[test]
 fn a_split_is_drawn_with_the_pane_the_engine_named_before_its_layout_arrives() {
     let fake = fake_engine();
-    let (mut runtime, terminals) = runtime_on(&fake, session(None, false));
+    let (mut runtime, terminals) = runtime_on(&fake, session(None));
     let split = PaneControlAction::Split {
         pane_id: LEFT.to_owned(),
         direction: PaneSplitDirection::Right,
@@ -347,7 +365,7 @@ fn a_split_is_drawn_with_the_pane_the_engine_named_before_its_layout_arrives() {
     );
     assert!(runtime.take_republish_request());
     // The coordinator's republish carries the session the engine last sent.
-    runtime.ingest_session(Ok(session(None, false)));
+    runtime.ingest_session(Ok(session(None)));
     let layout = drawn(&runtime);
     assert_eq!(
         layout.root,
@@ -396,7 +414,7 @@ fn a_split_is_drawn_with_the_pane_the_engine_named_before_its_layout_arrives() {
 /// The tab as an engine lays it out once it holds the split of `LEFT`:
 /// `LEFT | CREATED` at `ratio`, the new pane focused.
 fn split_by_engine(ratio: f32) -> SessionSnapshotPayload {
-    let mut payload = session(Some(ratio), false);
+    let mut payload = session(Some(ratio));
     let layout = &mut payload.layouts[0];
     for pane in &mut layout.panes {
         if pane.pane_id == RIGHT {
@@ -418,7 +436,7 @@ fn split_by_engine(ratio: f32) -> SessionSnapshotPayload {
 /// split is handed over before it, as the engine's worker returns first.
 fn split_confirmed_by_the_first_publish(ratio: f32) -> Vec<serde_json::Value> {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(None, false));
+    let (mut runtime, _) = runtime_on(&fake, session(None));
     dispatch(
         &mut runtime,
         "create_pane",
@@ -482,17 +500,18 @@ fn a_split_the_engine_lays_out_otherwise_than_predicted_is_reported_in_the_same_
 }
 
 /// B19: operations in one tab leave one at a time, in order, and the ninth
-/// waiting is refused and logged.
+/// waiting is refused and logged. The two panes take turns, so no resize
+/// folds into the one waiting before it.
 #[test]
 fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
-    for _ in 0..10 {
-        zoom(&mut runtime, LEFT);
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
+    for press in 0..10 {
+        resize(&mut runtime, if press % 2 == 0 { LEFT } else { RIGHT });
     }
     fake.wait_for_calls(1, Duration::from_secs(5));
     assert_eq!(
-        sent(&fake, "toggle_zoom"),
+        sent(&fake, "resize_pane"),
         1,
         "the rest wait for the first answer"
     );
@@ -503,17 +522,13 @@ fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
     );
     assert_eq!(runtime.pane_operations.len(), 9);
 
-    // The line is drawn as it will end.
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
-    assert!(drawn(&runtime).zoomed, "nine zooms in a row end zoomed");
-
-    answer(&mut runtime, zoom_action(LEFT), accepted());
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    answer(&mut runtime, resize_action(LEFT), accepted());
+    runtime.ingest_session(Ok(session(Some(0.6))));
     fake.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
-        sent(&fake, "toggle_zoom"),
+        sent(&fake, "resize_pane"),
         2,
-        "the next leaves once Herdr confirms"
+        "the next leaves once the engine confirms"
     );
 }
 
@@ -522,36 +537,35 @@ fn operations_in_one_tab_wait_their_turn_and_the_ninth_waiting_is_refused() {
 #[test]
 fn the_next_operation_in_a_line_waits_for_its_own_layout() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
-    zoom(&mut runtime, LEFT);
-    zoom(&mut runtime, LEFT);
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
+    resize(&mut runtime, LEFT);
+    resize(&mut runtime, RIGHT);
     fake.wait_for_calls(1, Duration::from_secs(5));
 
-    answer(&mut runtime, zoom_action(LEFT), accepted());
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    answer(&mut runtime, resize_action(LEFT), accepted());
+    runtime.ingest_session(Ok(session(Some(0.6))));
     fake.wait_for_calls(2, Duration::from_secs(5));
-    answer(&mut runtime, zoom_action(LEFT), accepted());
+    answer(&mut runtime, resize_action(RIGHT), accepted());
     // The coordinator's republish carries the layout the engine last sent.
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    runtime.ingest_session(Ok(session(Some(0.6))));
     let phases = runtime
         .pane_operations
         .values()
         .map(|operation| operation.phase.as_str())
         .collect::<Vec<_>>();
     assert_eq!(phases, ["awaiting_topology"], "the second is not confirmed");
-    assert!(!drawn(&runtime).zoomed, "two zooms in a row end unzoomed");
 
-    zoom(&mut runtime, LEFT);
-    runtime.ingest_session(Ok(session(Some(0.5), true)));
+    resize(&mut runtime, LEFT);
+    runtime.ingest_session(Ok(session(Some(0.6))));
     assert_eq!(
-        sent(&fake, "toggle_zoom"),
+        sent(&fake, "resize_pane"),
         2,
         "the third waits for the second's layout"
     );
 
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    runtime.ingest_session(Ok(session(Some(0.7))));
     fake.wait_for_calls(3, Duration::from_secs(5));
-    assert_eq!(sent(&fake, "toggle_zoom"), 3);
+    assert_eq!(sent(&fake, "resize_pane"), 3);
 }
 
 /// B16, B19, grid-ahead-of-herdr B6: a refusal drops what waited behind it
@@ -560,37 +574,28 @@ fn the_next_operation_in_a_line_waits_for_its_own_layout() {
 #[test]
 fn a_refused_operation_drops_the_line_behind_it_and_draws_what_the_engine_confirmed() {
     let fake = fake_engine();
-    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5), false));
-    zoom(&mut runtime, LEFT);
-    dispatch(
-        &mut runtime,
-        "resize_pane",
-        serde_json::json!({"pane_id": LEFT, "direction": "right", "amount": 0.1}),
-    );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
-    assert!(drawn(&runtime).zoomed);
+    let (mut runtime, terminals) = runtime_on(&fake, session(Some(0.5)));
+    resize(&mut runtime, LEFT);
+    resize(&mut runtime, RIGHT);
+    runtime.ingest_session(Ok(session(Some(0.5))));
+    assert!(!near(drawn_ratio(&runtime), 0.5), "drawn ahead of the engine");
     dispatch(
         &mut runtime,
         "terminal_resize",
-        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 80}),
+        serde_json::json!({"pane_id": LEFT, "rows": 30, "cols": 48}),
     );
-    assert_eq!(resizes(&terminals, LEFT), [(30, 80)]);
+    assert_eq!(resizes(&terminals, LEFT), [(30, 48)]);
     fake.wait_for_calls(1, Duration::from_secs(5));
     runtime.take_republish_request();
 
     answer(
         &mut runtime,
-        zoom_action(LEFT),
+        resize_action(LEFT),
         Err("pane is gone".to_owned()),
     );
     assert!(runtime.take_republish_request());
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
-    let layout = drawn(&runtime);
-    assert!(!layout.zoomed);
-    assert!(matches!(
-        layout.root,
-        PaneLayoutNodeSnapshot::Split { ratio, .. } if ratio == 0.5
-    ));
+    runtime.ingest_session(Ok(session(Some(0.5))));
+    assert!(near(drawn_ratio(&runtime), 0.5));
     // The view is back in its confirmed rectangle and reports that grid.
     dispatch(
         &mut runtime,
@@ -604,7 +609,7 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_the_engine_confir
     );
     assert_eq!(
         sent(&fake, "resize_pane"),
-        0,
+        1,
         "the waiting resize was dropped"
     );
     assert_eq!(
@@ -613,23 +618,22 @@ fn a_refused_operation_drops_the_line_behind_it_and_draws_what_the_engine_confir
     );
 }
 
-/// B14, D-12: the engine answering that a zoom changed nothing ends it there, and
-/// the tab's next operation leaves at once.
+/// B14, D-12: the engine answering that a resize changed nothing ends it
+/// there, and the tab's next operation leaves at once.
 #[test]
-fn a_zoom_the_engine_says_changed_nothing_ends_and_the_next_operation_leaves() {
+fn a_resize_the_engine_says_changed_nothing_ends_and_the_next_operation_leaves() {
     let fake = fake_engine();
-    // Two panes: the core sends no zoom for a tab's only pane.
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
-    zoom(&mut runtime, LEFT);
-    zoom(&mut runtime, LEFT);
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
+    resize(&mut runtime, LEFT);
+    resize(&mut runtime, RIGHT);
     fake.wait_for_calls(1, Duration::from_secs(5));
     answer(
         &mut runtime,
-        zoom_action(LEFT),
+        resize_action(LEFT),
         Ok(PaneControlOutcome::Unchanged),
     );
     fake.wait_for_calls(2, Duration::from_secs(5));
-    assert_eq!(sent(&fake, "toggle_zoom"), 2);
+    assert_eq!(sent(&fake, "resize_pane"), 2);
 }
 
 /// B17: an operation past its deadline draws what the engine confirmed, drops the
@@ -637,9 +641,9 @@ fn a_zoom_the_engine_says_changed_nothing_ends_and_the_next_operation_leaves() {
 #[test]
 fn an_operation_past_its_deadline_draws_what_the_engine_confirmed_and_frees_the_tab() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
-    zoom(&mut runtime, LEFT);
-    zoom(&mut runtime, RIGHT);
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
+    resize(&mut runtime, LEFT);
+    resize(&mut runtime, RIGHT);
     fake.wait_for_calls(1, Duration::from_secs(5));
     let late = unix_milliseconds() + CLOSE_STAGE_TIMEOUT_MS + 1;
     runtime.tick_async_operations(late);
@@ -650,15 +654,15 @@ fn an_operation_past_its_deadline_draws_what_the_engine_confirmed_and_frees_the_
             .map(|operation| operation.phase.as_str())
             .collect::<Vec<_>>(),
         ["unknown"],
-        "the zoom waiting behind it was dropped"
+        "the resize waiting behind it was dropped"
     );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
-    assert!(!drawn(&runtime).zoomed);
+    runtime.ingest_session(Ok(session(Some(0.5))));
+    assert!(near(drawn_ratio(&runtime), 0.5));
 
-    zoom(&mut runtime, RIGHT);
+    resize(&mut runtime, RIGHT);
     fake.wait_for_calls(2, Duration::from_secs(5));
     assert_eq!(
-        sent(&fake, "toggle_zoom"),
+        sent(&fake, "resize_pane"),
         2,
         "an unknown result does not hold the line"
     );
@@ -669,7 +673,7 @@ fn an_operation_past_its_deadline_draws_what_the_engine_confirmed_and_frees_the_
 #[test]
 fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
     dispatch(
         &mut runtime,
         "resize_pane",
@@ -704,7 +708,7 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
         Some(LEFT),
         "the keyboard leaves a pane drawn gone"
     );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    runtime.ingest_session(Ok(session(Some(0.5))));
     assert_eq!(drawn(&runtime).pane_ids(), [LEFT]);
     assert_eq!(drawn(&runtime).focused_pane_id, LEFT);
 
@@ -717,7 +721,7 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
         },
         accepted(),
     );
-    runtime.ingest_session(Ok(session(Some(0.6), false)));
+    runtime.ingest_session(Ok(session(Some(0.6))));
     assert!(
         runtime
             .close_operations
@@ -734,7 +738,7 @@ fn a_pane_close_waits_behind_a_resize_and_is_drawn_gone_at_once() {
 #[test]
 fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5), false));
+    let (mut runtime, _) = runtime_on(&fake, session(Some(0.5)));
     dispatch(
         &mut runtime,
         "resize_pane",
@@ -746,7 +750,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         "close_pane",
         serde_json::json!({"pane_id": RIGHT, "confirmed": true}),
     );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    runtime.ingest_session(Ok(session(Some(0.5))));
     assert_eq!(drawn(&runtime).pane_ids(), [LEFT]);
 
     dispatch(
@@ -778,7 +782,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         runtime.snapshot().recent_closed.notices.is_empty(),
         "no close was refused"
     );
-    runtime.ingest_session(Ok(session(Some(0.5), false)));
+    runtime.ingest_session(Ok(session(Some(0.5))));
     assert_eq!(
         drawn(&runtime).pane_ids(),
         [LEFT],
@@ -794,7 +798,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         },
         accepted(),
     );
-    runtime.ingest_session(Ok(session(Some(0.6), false)));
+    runtime.ingest_session(Ok(session(Some(0.6))));
     assert!(
         runtime
             .close_operations
@@ -815,7 +819,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         operation.phase = "awaiting_topology".to_owned();
     }
     let (_, records) =
-        crate::diagnostics::capture(|| runtime.ingest_session(Ok(session(None, false))));
+        crate::diagnostics::capture(|| runtime.ingest_session(Ok(session(None))));
     assert!(queued_closes(&runtime).is_empty());
     let last = runtime
         .close_operations
@@ -824,7 +828,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
         .expect("the last pane's close started");
     assert_eq!(last.scope_pane_ids, [LEFT]);
     assert_eq!(last.leaving_tab(), Some(TAB));
-    runtime.ingest_session(Ok(session(None, false)));
+    runtime.ingest_session(Ok(session(None)));
     assert!(
         runtime
             .close_operations
@@ -847,7 +851,7 @@ fn closing_the_pane_left_drawn_alone_waits_behind_the_close_ahead() {
 #[test]
 fn a_created_tab_is_drawn_at_its_answer_until_the_engine_lays_it_out() {
     let fake = fake_engine();
-    let (mut runtime, _) = runtime_on(&fake, session(None, false));
+    let (mut runtime, _) = runtime_on(&fake, session(None));
     for checkout in runtime
         .snapshot
         .navigator
@@ -879,7 +883,7 @@ fn a_created_tab_is_drawn_at_its_answer_until_the_engine_lays_it_out() {
         runtime.take_republish_request(),
         "the answer asks to be drawn"
     );
-    runtime.ingest_session(Ok(session(None, false)));
+    runtime.ingest_session(Ok(session(None)));
     let tab_panes = |runtime: &Runtime| {
         runtime
             .snapshot()

@@ -23,7 +23,6 @@ fn semantic_selection_preserves_large_sections_and_legacy_complete_rest() {
     remote.session = Some(super::device_catalog::session(rows));
     runtime.snapshot.status.remote.push(remote);
     let initial = runtime.snapshot_delta_payload(0);
-    runtime.snapshot.zoomed = Some("fixture:p1".to_owned());
     runtime.snapshot.navigator.focused_checkout_id = Some("project-1".to_owned());
     let selected = runtime.snapshot_delta_payload(initial.revision);
     assert!(Arc::ptr_eq(
@@ -35,7 +34,6 @@ fn semantic_selection_preserves_large_sections_and_legacy_complete_rest() {
         &selected.current_rest.status.remote.value
     ));
     let wire = semantic(&selected);
-    assert_eq!(wire["rest"]["zoomed"], "fixture:p1");
     assert_eq!(
         wire["rest"]["navigator"],
         serde_json::json!({"focused_checkout_id": "project-1"})
@@ -323,7 +321,6 @@ fn snapshot_delivery_leaves_the_rest_section_alone_when_a_republish_moves_nothin
             "layouts": [{
                 "workspace_id": "w1",
                 "tab_id": "w1:t1",
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": "w1:p1",
                 "panes": [{

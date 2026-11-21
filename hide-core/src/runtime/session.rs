@@ -2455,7 +2455,7 @@ impl Runtime {
     /// selected pane is not authority until a fresh read agrees. That read
     /// waits on the engine, so it never gates this update: the layout, the panes
     /// and every other part of the update are taken now, and the differing
-    /// focus (and the zoom of the pane it names) stays Hide's until
+    /// focus stays Hide's until
     /// [`Self::finish_pane_focus_readback`] hears the answer. At most one
     /// read is outstanding.
     #[cfg(test)]
@@ -2549,7 +2549,7 @@ impl Runtime {
     /// move this answer did not cover.
     ///
     /// A confirmed answer applies the layout the session already stored,
-    /// now with its focus and zoom. The identity is checked again there:
+    /// now with its focus. The identity is checked again there:
     /// a newer selection, a pending focus request or another connection
     /// leaves the answer without authority. An unconfirmed answer changes
     /// nothing and is not asked again until the next session update; an
@@ -3854,7 +3854,6 @@ impl Runtime {
             .map(|pane| pane.pane_id.clone())
             .collect::<Vec<_>>();
         let previous_selected = self.snapshot.terminal.pane_id.clone();
-        let previous_zoomed = self.snapshot.zoomed.clone();
 
         // A pane a visited tab left behind keeps its projection entry. The
         // terminal view the shell holds open for that tab reads its transport
@@ -3961,10 +3960,6 @@ impl Runtime {
             self.snapshot.terminal.pane_id = Some(layout.focused_pane_id.clone());
             self.snapshot.focused.pane_id = Some(layout.focused_pane_id.clone());
             self.release_operator_focus_if_moved(&previous_focus, &layout.focused_pane_id);
-            // Zoom is the engine's, and its subject is the focused pane. While
-            // Hide keeps a focus the engine has not confirmed, taking the zoom
-            // would hide the pane the operator just clicked behind another.
-            self.snapshot.zoomed = layout.zoomed.then(|| layout.focused_pane_id.clone());
         }
         if previous_focus != self.snapshot.focused.pane_id {
             sync_pane_status(
@@ -3996,7 +3991,6 @@ impl Runtime {
         let projection_changed = notice_cleared
             || previous_selected != self.snapshot.terminal.pane_id
             || previous_focus != self.snapshot.focused.pane_id
-            || previous_zoomed != self.snapshot.zoomed
             || previous_pane_ids
                 != self
                     .snapshot

@@ -8,8 +8,8 @@
 //!
 //! The rules were measured under Herdr v0.9.1 on a private server:
 //! a split puts the new pane second at ratio 0.5 and focuses it; a
-//! close collapses the parent split into the sibling, focuses the sibling and
-//! ends a zoom on the closed pane; a zoom focuses its pane; a resize moves the
+//! close collapses the parent split into the sibling and focuses the sibling;
+//! a resize moves the
 //! split on the pane's edge toward its direction (the opposite edge at the
 //! tab's side) by the amount, clamped to 0.1..0.9.
 //! Where the prediction and the engine still differ (a focus the engine places
@@ -36,8 +36,6 @@ pub(super) enum Prediction {
     },
     /// `pane` gone, its sibling in its place.
     Close { pane: String },
-    /// The tab zoomed onto `pane` or not zoomed, with `pane` focused.
-    Zoom { pane: String, zoomed: bool },
     /// The split a resize of `pane` toward `direction` moves, at `ratio`.
     Resize {
         pane: String,
@@ -100,7 +98,6 @@ pub(super) fn overlay_session_layout(
     Some(SessionLayoutPayload {
         workspace_id: raw.workspace_id.clone(),
         tab_id: raw.tab_id.clone(),
-        zoomed: predicted.zoomed,
         area: raw.area,
         focused_pane_id: predicted.focused_pane_id,
         panes,
@@ -120,8 +117,6 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
             }
             split_leaf(&mut layout.root, target, *direction, created);
             layout.focused_pane_id = created.clone();
-            // The engine shows the new pane, so a zoom does not survive the split.
-            layout.zoomed = false;
         }
         Prediction::Close { pane } => {
             // The last pane of a tab is a tab close, which `leaving_tab` owns.
@@ -133,15 +128,7 @@ fn apply(layout: &mut PaneLayoutSnapshot, prediction: &Prediction) {
             };
             if layout.focused_pane_id == *pane {
                 layout.focused_pane_id = sibling_first_leaf;
-                layout.zoomed = false;
             }
-        }
-        Prediction::Zoom { pane, zoomed } => {
-            if !contains(&layout.root, pane) {
-                return;
-            }
-            layout.zoomed = *zoomed;
-            layout.focused_pane_id = pane.clone();
         }
         Prediction::Resize {
             pane,
@@ -183,7 +170,6 @@ mod tests {
             workspace_id: "w1".to_owned(),
             tab_id: "w1:t1".to_owned(),
             focused_pane_id: focused.to_owned(),
-            zoomed: false,
             root,
         }
     }
@@ -205,7 +191,6 @@ mod tests {
         SessionLayoutPayload {
             workspace_id: "w1".to_owned(),
             tab_id: "w1:t1".to_owned(),
-            zoomed: false,
             area: rect(0, 0, 120, 40),
             focused_pane_id: "w1:p1".to_owned(),
             panes: vec![
@@ -353,38 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_zoomed_pane_ends_the_zoom_and_another_close_keeps_it() {
-        let mut zoomed = layout(split(Right, 0.5, pane("w1:p1"), pane("w1:p2")), "w1:p1");
-        zoomed.zoomed = true;
-        let closed_zoomed = predict(
-            &zoomed,
-            &[Prediction::Close {
-                pane: "w1:p1".to_owned(),
-            }],
-        );
-        assert!(!closed_zoomed.zoomed);
-        assert_eq!(closed_zoomed.root, pane("w1:p2"));
-        let mut three = layout(
-            split(
-                Right,
-                0.5,
-                pane("w1:p1"),
-                split(Down, 0.5, pane("w1:p2"), pane("w1:p3")),
-            ),
-            "w1:p1",
-        );
-        three.zoomed = true;
-        let closed_other = predict(
-            &three,
-            &[Prediction::Close {
-                pane: "w1:p3".to_owned(),
-            }],
-        );
-        assert!(closed_other.zoomed);
-        assert_eq!(closed_other.focused_pane_id, "w1:p1");
-    }
-
-    #[test]
     fn the_last_pane_of_a_tab_is_not_removed_by_a_pane_close() {
         let single = layout(pane("w1:p1"), "w1:p1");
         assert_eq!(
@@ -396,19 +349,6 @@ mod tests {
             ),
             single
         );
-    }
-
-    #[test]
-    fn a_zoom_sets_the_state_and_focus_whatever_it_started_from() {
-        let before = layout(split(Right, 0.5, pane("w1:p1"), pane("w1:p2")), "w1:p1");
-        let zoom = Prediction::Zoom {
-            pane: "w1:p2".to_owned(),
-            zoomed: true,
-        };
-        let once = predict(&before, std::slice::from_ref(&zoom));
-        assert!(once.zoomed);
-        assert_eq!(once.focused_pane_id, "w1:p2");
-        assert_eq!(predict(&once, &[zoom]), once);
     }
 
     #[test]

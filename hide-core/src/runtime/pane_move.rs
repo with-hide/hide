@@ -2,7 +2,7 @@
 //! precedes every external effect, and recovery only reads authoritative state.
 use super::*;
 use crate::address::{Kind, Scoped};
-use crate::engine::{Engine, SharedEngine, Wait, Zoom};
+use crate::engine::{Engine, SharedEngine, Wait};
 use crate::sidebar::SessionSnapshotPayload;
 use crate::split_tree::Edge;
 use crate::workspace_views;
@@ -1294,14 +1294,9 @@ fn execute(engine: &dyn Engine, intent: &Intent, local: bool) -> Result<(), Stri
     let source = raw(Kind::Pane, &request.source.pane_id)?;
     let source_tab = raw(Kind::Tab, &request.source.tab_id)?;
     let mut current = source.clone();
-    // Explicit off is harmless for a nonzoomed tab and never runs during drag.
-    engine.set_zoom(CALL_WAIT, &source, Zoom::Off)?;
     if let Some((tab, pane, edge)) = request.destination.target() {
         let tab = raw(Kind::Tab, tab)?;
         let pane = raw(Kind::Pane, pane)?;
-        if tab != source_tab {
-            engine.set_zoom(CALL_WAIT, &pane, Zoom::Off)?;
-        }
         if tab == source_tab {
             let result =
                 engine.move_pane_to_new_tab(CALL_WAIT, &current, &intent.workspace_id, "")?;
@@ -1488,19 +1483,13 @@ fn run(
         })
     {
         let before = baseline.as_ref().expect("checked");
-        if let Err(error) = restore_refused_presentation(engine.as_ref(), before, &intent) {
+        if let Err(error) = restore_refused_presentation(engine.as_ref(), before) {
             restore_failed = true;
             effect = Err(format!(
-                "The move was refused; its previous zoom or focus could not be restored: {error}"
+                "The move was refused; its previous focus could not be restored: {error}"
             ));
         }
         final_payload = read_final();
-        if final_payload
-            .as_ref()
-            .is_ok_and(|(after, _)| !same_zoom(before, after, &intent))
-        {
-            restore_failed = true;
-        }
     }
     if let Some(runtime) = context.runtime.upgrade() {
         let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
@@ -1606,54 +1595,15 @@ fn run(
     }
 }
 
-fn affected_before<'a>(
-    before: &'a SessionSnapshotPayload,
-    intent: &Intent,
-) -> impl Iterator<Item = &'a crate::sidebar::SessionLayoutPayload> {
-    let terminals = [
-        Some(intent.terminal_id.as_str()),
-        intent.target_terminal.as_deref(),
-    ];
-    let panes = before
-        .panes
-        .iter()
-        .filter(|pane| terminals.contains(&pane.terminal_id.as_deref()))
-        .map(|pane| pane.pane_id.as_str())
-        .collect::<HashSet<_>>();
-    before.layouts.iter().filter(move |layout| {
-        layout
-            .panes
-            .iter()
-            .any(|pane| panes.contains(pane.pane_id.as_str()))
-    })
-}
 fn restore_refused_presentation(
     engine: &dyn Engine,
     before: &SessionSnapshotPayload,
-    intent: &Intent,
 ) -> Result<(), String> {
-    for layout in affected_before(before, intent).filter(|layout| layout.zoomed) {
-        engine.set_zoom(CALL_WAIT, &layout.focused_pane_id, Zoom::On)?;
-    }
     if let Some(pane) = before.focused_pane_id.as_deref() {
         engine.focus_pane(CALL_WAIT, pane)?;
     }
     Ok(())
 }
-fn same_zoom(
-    before: &SessionSnapshotPayload,
-    after: &SessionSnapshotPayload,
-    intent: &Intent,
-) -> bool {
-    affected_before(before, intent).all(|layout| {
-        after
-            .layouts
-            .iter()
-            .find(|new| new.tab_id == layout.tab_id)
-            .is_some_and(|new| new.zoomed == layout.zoomed)
-    })
-}
-
 fn confirms(payload: &SessionSnapshotPayload, intent: &Intent, local: bool) -> bool {
     let Ok((pane, tab, _)) = locate(payload, &intent.terminal_id) else {
         return false;
@@ -1802,7 +1752,7 @@ mod tests {
             "agents":[],"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1"}],
             "tabs":[{"workspace_id":"w1","tab_id":"w1:t1"}],
             "panes":[{"pane_id":"w1:p1","terminal_id":"term-original"},{"pane_id":"w1:p2","terminal_id":"term-target"}],
-            "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p2", "panes":[{"pane_id":"w1:p1","rect":first},{"pane_id":"w1:p2","rect":second}],"splits":[]}]
+            "layouts":[{"workspace_id":"w1","tab_id":"w1:t1","area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p2", "panes":[{"pane_id":"w1:p1","rect":first},{"pane_id":"w1:p2","rect":second}],"splits":[]}]
         })).unwrap()
     }
     fn rect(x: u16, y: u16, width: u16, height: u16) -> serde_json::Value {
@@ -2069,7 +2019,7 @@ mod tests {
     fn same_tab_insertion_detaches_once_and_swaps_only_for_left_or_up() {
         for edge in [Edge::Left, Edge::Right, Edge::Up, Edge::Down] {
             let server = FakeEngine::start(|method, _| match method {
-                "set_zoom" | "swap_panes" => reply(()),
+                "swap_panes" => reply(()),
                 "move_pane_to_new_tab" => moved("w1:p1", "w1:temporary", "term-original"),
                 "move_pane_beside" => moved("w1:p1", "w1:t1", "term-original"),
                 other => panic!("unexpected request {other}"),
@@ -2089,21 +2039,19 @@ mod tests {
     #[test]
     fn a_lost_or_refused_move_answer_is_never_replayed() {
         let server = FakeEngine::start(|method, _| match method {
-            "set_zoom" => reply(()),
             "move_pane_beside" => refused("target_pane_not_found", "target ended"),
             other => panic!("unexpected {other}"),
         });
         assert!(execute(server.engine().as_ref(), &intent(Edge::Left, "w1:t2"), true).is_err());
         assert_eq!(
             server.methods(),
-            ["set_zoom", "set_zoom", "move_pane_beside"]
+            ["move_pane_beside"]
         );
     }
 
     #[test]
     fn changed_terminal_on_detach_stops_before_the_join() {
         let server = FakeEngine::start(|method, _| match method {
-            "set_zoom" => reply(()),
             "move_pane_to_new_tab" => moved("w1:p1", "w1:temporary", "another-terminal"),
             other => panic!("unexpected {other}"),
         });
@@ -2116,7 +2064,7 @@ mod tests {
             .unwrap_err()
             .contains("different terminal")
         );
-        assert_eq!(server.methods(), ["set_zoom", "move_pane_to_new_tab"]);
+        assert_eq!(server.methods(), ["move_pane_to_new_tab"]);
     }
 
     #[test]
@@ -2204,26 +2152,17 @@ mod tests {
         assert!(!runtime.pane_move_holds_tab("w1:t2"));
     }
     #[test]
-    fn refusal_restores_only_original_zoomed_tab_and_original_keyboard_target() {
+    fn refusal_restores_the_original_keyboard_target() {
         let server = FakeEngine::start(|_, _| reply(()));
-        let mut before = payload(rect(0, 0, 40, 24), rect(40, 0, 40, 24));
-        before.layouts[0].zoomed = true;
-        restore_refused_presentation(
-            server.engine().as_ref(),
-            &before,
-            &intent(Edge::Right, "w1:t1"),
-        )
-        .unwrap();
+        let before = payload(rect(0, 0, 40, 24), rect(40, 0, 40, 24));
+        restore_refused_presentation(server.engine().as_ref(), &before).unwrap();
         assert_eq!(
             server.calls(),
-            vec![
-                ("set_zoom", json!({"pane":"w1:p2","zoom":true})),
-                ("focus_pane", json!({"pane":"w1:p2"}))
-            ]
+            vec![("focus_pane", json!({"pane":"w1:p2"}))]
         );
     }
     fn native_snapshot() -> crate::session_sync::ProjectionState {
-        let layout = json!({"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","rect":rect(0,0,80,24)}],"splits":[]});
+        let layout = json!({"workspace_id":"w1","tab_id":"w1:t1","area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","rect":rect(0,0,80,24)}],"splits":[]});
         session(json!({
             "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
             "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"}],
@@ -2293,7 +2232,7 @@ mod tests {
     fn at_destination_snapshot() -> crate::session_sync::ProjectionState {
         let first = json!({"pane_id":"w1:p2","rect":rect(0,0,40,24)});
         let second = json!({"pane_id":"w1:p1","rect":rect(40,0,40,24)});
-        let layout = json!({"workspace_id":"w1","tab_id":"w1:t2","zoomed":false,"area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[first,second],"splits":[{"direction":"right","ratio":0.5,"rect":rect(0,0,80,24)}]});
+        let layout = json!({"workspace_id":"w1","tab_id":"w1:t2","area":rect(0,0,80,24),"focused_pane_id":"w1:p1","panes":[first,second],"splits":[{"direction":"right","ratio":0.5,"rect":rect(0,0,80,24)}]});
         session(json!({
             "focused_workspace_id":"w1","focused_pane_id":"w1:p1",
             "workspaces":[{"workspace_id":"w1","number":1,"label":"fixture","focused":true,"pane_count":2,"tab_count":1,"active_tab_id":"w1:t2","agent_status":"unknown"}],

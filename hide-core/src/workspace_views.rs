@@ -11,7 +11,7 @@
 //! (its View areas with their displays, [`crate::view_layout`]), the shelf of
 //! the checkout's Views on no desk, and the window's pair view mode
 //! ([`PairMode`], D-45, D-47) - and never a
-//! terminal layout: the engine keeps panes, splits and zoom. Whether an open
+//! terminal layout: the engine keeps panes and splits. Whether an open
 //! lane is floating over the agents right now, and an expanded lane, are the
 //! shell's own moment and are never stored (D-11).
 //!

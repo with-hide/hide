@@ -1036,24 +1036,6 @@ impl Runtime {
                 );
                 true
             }
-            (
-                PaneControlAction::ToggleZoom { pane_id },
-                Ok(PaneControlOutcome::Acknowledged { .. }),
-            ) => {
-                self.push_diagnostic(
-                    "pane.zoom_toggled",
-                    format!(
-                        "Pane {pane_id} zoom acknowledged in {elapsed_ms} ms; awaiting authoritative event"
-                    ),
-                );
-                crate::diagnostic!(serde_json::json!({
-                    "component": "pane_control",
-                    "kind": "pane.zoom_ready",
-                    "pane_id": pane_id,
-                    "duration_ms": elapsed_ms,
-                }));
-                true
-            }
             (PaneControlAction::Close { pane_id }, Ok(PaneControlOutcome::Acknowledged { .. })) => {
                 self.push_diagnostic(
                     "pane.close",
@@ -1069,11 +1051,7 @@ impl Runtime {
                 }));
                 true
             }
-            (
-                PaneControlAction::Resize { pane_id, .. }
-                | PaneControlAction::ToggleZoom { pane_id },
-                Ok(PaneControlOutcome::Unchanged),
-            ) => {
+            (PaneControlAction::Resize { pane_id, .. }, Ok(PaneControlOutcome::Unchanged)) => {
                 self.push_diagnostic(
                     "pane.unchanged",
                     format!("The engine changed nothing for pane {pane_id} in {elapsed_ms} ms"),
@@ -1092,7 +1070,6 @@ impl Runtime {
                 PaneControlAction::Focus { .. }
                 | PaneControlAction::Split { .. }
                 | PaneControlAction::Resize { .. }
-                | PaneControlAction::ToggleZoom { .. }
                 | PaneControlAction::Close { .. },
                 Ok(PaneControlOutcome::Projected { .. }),
             ) => {
@@ -1146,21 +1123,6 @@ impl Runtime {
                 }
                 true
             }
-            (PaneControlAction::ToggleZoom { .. }, Err(error)) => {
-                if error.is_ambiguous() {
-                    self.set_error(
-                        "pane.zoom_unknown",
-                        format!(
-                            "Pane zoom result is unknown; no zoom was resent: {}",
-                            error.message()
-                        ),
-                        true,
-                    );
-                } else {
-                    self.set_error("pane.zoom_failed", error.message().to_owned(), true);
-                }
-                true
-            }
             (PaneControlAction::Close { .. }, Err(error)) => {
                 if error.is_ambiguous() {
                     self.set_error(
@@ -1188,20 +1150,12 @@ impl Runtime {
     /// retained tab's renderer, and the layouts likewise stay, or the canvas
     /// passes through a blank frame on the way to the tab asked for.
     pub(super) fn clear_selected_terminal_state(&mut self) {
-        self.snapshot.zoomed = None;
         self.snapshot.terminal.closed = false;
         self.snapshot.terminal.exit_code = None;
     }
     /// Points the terminal projection at another pane without discarding
     /// anything the engine has said.
-    ///
-    /// Zoom is re-read from that pane's own layout rather than carried over,
-    /// so leaving a zoomed tab does not leak its zoom into the next one.
     pub(super) fn select_terminal_pane(&mut self, pane_id: Option<String>) {
-        let zoomed = pane_id
-            .as_deref()
-            .and_then(|pane_id| self.layout_holding_pane(pane_id))
-            .and_then(|layout| layout.zoomed.then(|| layout.focused_pane_id.clone()));
         let pane_ids = pane_id
             .as_deref()
             .and_then(|pane_id| self.layout_holding_pane(pane_id))
@@ -1224,7 +1178,6 @@ impl Runtime {
             crate::agent_sleep::SleepMachine::Core,
         );
         self.sync_active_tab_projection();
-        self.snapshot.zoomed = zoomed;
         for pane_id in pane_ids {
             self.ensure_terminal_pane(&pane_id);
         }
@@ -1233,7 +1186,7 @@ impl Runtime {
     /// Typing into a remote pane makes it the terminal pane (`Event::Key`),
     /// while this machine's selection stays in `ui_state.selected_pane_id`.
     /// Coming back to this machine hands the keyboard back to that pane, or to
-    /// the focused pane of the tab being drawn, so a split, a zoom or a find
+    /// the focused pane of the tab being drawn, so a split or a find
     /// never names a pane this machine's engine does not have. The next local
     /// session ingest would repair it too, but an idle session sends nothing.
     pub(super) fn return_keyboard_to_local_pane(&mut self) {

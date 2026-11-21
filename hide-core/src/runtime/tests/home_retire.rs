@@ -148,8 +148,7 @@ fn fake_engine() -> Fake {
         "pane_layout" => {
             assert_eq!(params["pane"], "w4:p1");
             reply(serde_json::from_value::<crate::sidebar::SessionLayoutPayload>(json!({
-                "workspace_id":"w4", "tab_id":"w4:t1", "zoomed":false,
-                "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w4:p1",
+                "workspace_id":"w4", "tab_id":"w4:t1",                 "area":{"x":0,"y":0,"width":80,"height":24}, "focused_pane_id":"w4:p1",
                 "panes":[{"pane_id":"w4:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}], "splits":[]
             })).unwrap())
         }

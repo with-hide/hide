@@ -423,8 +423,7 @@ fn reads_follow_the_look_with_no_window_pulling_snapshots() {
 fn local_two_tabs(path: &str, turns: [u64; 2]) -> SessionSnapshotPayload {
     let tab = |tab_id: &str| {
         json!({
-            "workspace_id": "w-look", "tab_id": tab_id, "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w-look", "tab_id": tab_id,             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": format!("{tab_id}:p"),
             "panes": [{"pane_id": format!("{tab_id}:p"), "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
             "splits": []
@@ -953,8 +952,7 @@ fn order_engine_session(
         "layouts": tabs.iter().map(|(tab, panes)| {
             let width = 80 / panes.len() as u32;
             json!({
-                "workspace_id": "w-order", "tab_id": tab, "zoomed": false,
-                "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                "workspace_id": "w-order", "tab_id": tab,                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": panes[0],
                 "panes": panes.iter().enumerate().map(|(index, pane)| json!({
                     "pane_id": pane,
@@ -1036,8 +1034,7 @@ fn a_pane_the_move_worker_focuses_as_the_move_ends_is_read_with_no_window() {
             let width = 80 / panes.len() as u32;
             crate::engine::fake::reply(
                 serde_json::from_value::<crate::sidebar::SessionLayoutPayload>(json!({
-                    "workspace_id": "w-order", "tab_id": tab, "zoomed": false,
-                    "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+                    "workspace_id": "w-order", "tab_id": tab,                     "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                     "focused_pane_id": pane,
                     "panes": panes.iter().enumerate().map(|(index, row)| json!({
                         "pane_id": row, "focused": *row == pane,

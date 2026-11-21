@@ -466,9 +466,9 @@ pub(super) fn context_payload() -> SessionSnapshotPayload {
         "tabs":[{"workspace_id":"w1","tab_id":"w1:t1","label":"1"},{"workspace_id":"w2","tab_id":"w2:t1","label":"1"}],
         "panes":[{"pane_id":"w1:p1","cwd":"/tmp/hide-context-alpha"},{"pane_id":"w2:p1","cwd":"/tmp/hide-context-zeta"}],
         "layouts":[
-            {"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},
+            {"workspace_id":"w1","tab_id":"w1:t1","area":{"x":0,"y":0,"width":80,"height":24},
              "focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]},
-            {"workspace_id":"w2","tab_id":"w2:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},
+            {"workspace_id":"w2","tab_id":"w2:t1","area":{"x":0,"y":0,"width":80,"height":24},
              "focused_pane_id":"w2:p1","panes":[{"pane_id":"w2:p1","rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}
         ]
     })).unwrap()
@@ -693,8 +693,7 @@ fn finished_tab_payload(panes: &[(&str, u64)], focused: &str) -> SessionSnapshot
         "workspaces": [{"workspace_id": "w1", "label": "fixture", "active_tab_id": "t1"}],
         "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 90, "height": 24},
+            "workspace_id": "w1", "tab_id": "t1",             "area": {"x": 0, "y": 0, "width": 90, "height": 24},
             "focused_pane_id": focused,
             "panes": layout_panes,
             "splits": [
@@ -719,8 +718,7 @@ fn working_payload() -> SessionSnapshotPayload {
         }],
         "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w1", "tab_id": "t1",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w1:p1",
             "panes": [{"pane_id": "w1:p1",
                        "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
@@ -906,7 +904,6 @@ fn tab_order_payload(
             serde_json::json!({
                 "workspace_id": "w-order",
                 "tab_id": tab_id,
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": format!("{tab_id}:p"),
                 "panes": [{
@@ -965,7 +962,6 @@ fn split_checkout_payload(
             layouts.push(serde_json::json!({
                 "workspace_id": workspace_id,
                 "tab_id": tab_id,
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": format!("{tab_id}:p"),
                 "panes": [{
@@ -1446,7 +1442,6 @@ fn split_workspace_payload(
             serde_json::json!({
                 "workspace_id": "w-order",
                 "tab_id": tab_id,
-                "zoomed": false,
                 "area": {"x": 0, "y": 0, "width": 80, "height": 24},
                 "focused_pane_id": format!("{tab_id}:p"),
                 "panes": [{

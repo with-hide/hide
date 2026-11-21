@@ -1,6 +1,6 @@
 //! Core-owned records for every engine-owned mutation still in flight.
 //!
-//! A split, zoom, resize, tab move, remote mutation or close is one record
+//! A split, resize, tab move, remote mutation or close is one record
 //! from the moment the operator asks until fresh topology confirms it, with
 //! a host connection generation, target and conflict-scope ids, phase, stage,
 //! start time and absolute deadline. Transport success is never topology
@@ -96,7 +96,7 @@ pub(super) struct PendingPaneOperation {
     /// Its place in its tab's line.
     pub(super) sequence: u64,
     /// What the canvas draws for it ahead of the engine (D-07): set at the request
-    /// for a close, zoom or resize and at the answer for a split, and cleared
+    /// for a close or resize and at the answer for a split, and cleared
     /// when it settles, fails, or its result becomes unknown.
     pub(super) prediction: Option<super::pane_prediction::Prediction>,
 }
@@ -105,7 +105,7 @@ pub(super) struct PendingPaneOperation {
 /// answering; the next is refused and logged (D-10, engineering 15).
 pub(super) const GEOMETRY_QUEUE_LIMIT: usize = 8;
 
-/// A start holds the tab through creation, durable identity saves, unzoom,
+/// A start holds the tab through creation, durable identity saves,
 /// move and authoritative confirmation. Bound each wait/lease by the existing
 /// agent start's deadline, rather than a single five-second RPC.
 pub(super) const CHECKOUT_START_GEOMETRY_TIMEOUT_MS: u64 =
@@ -117,7 +117,7 @@ pub(super) enum GeometryRequest {
         task: u64,
         ready: std::sync::mpsc::SyncSender<Result<String, String>>,
     },
-    /// A split, zoom or resize, sent as this action.
+    /// A split or resize, sent as this action.
     Pane(PaneControlAction),
     /// The operator's close of one pane, started through the ordinary close
     /// (`close_local_pane`) when its turn comes; from then on the close keeps
@@ -139,7 +139,6 @@ pub(super) struct PendingRemoteOperation {
     pub(super) message: Option<String>,
     pub(super) retryable: bool,
     pub(super) created_pane_id: Option<String>,
-    pub(super) baseline_zoomed: Option<bool>,
 }
 
 pub(super) type PaneRect = (String, u16, u16, u16, u16);
@@ -147,7 +146,6 @@ pub(super) type SplitRect = (u8, u32, u16, u16, u16, u16);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct PaneTopologySignature {
-    pub(super) zoomed: bool,
     pub(super) focused_pane_id: String,
     pub(super) pane_ids: Vec<String>,
     pub(super) splits: Vec<(u8, u32)>,
@@ -199,26 +197,6 @@ pub(super) struct RemoteMutationDescriptor {
     pub(super) kind: String,
     pub(super) target_id: String,
     pub(super) scope_id: String,
-    pub(super) baseline_zoomed: Option<bool>,
-}
-
-/// A device's [`Runtime::pane_alone_unzoomed`]: whether `pane_id` is the only
-/// pane of an unzoomed tab in that device's session.
-pub(super) fn remote_pane_alone_unzoomed(session: &RemoteSessionSnapshot, pane_id: &str) -> bool {
-    let Some(tab) = session
-        .workspaces
-        .iter()
-        .flat_map(|workspace| workspace.checkouts.iter())
-        .flat_map(|checkout| checkout.tabs.iter())
-        .find(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
-    else {
-        return false;
-    };
-    tab.panes.len() == 1
-        && !session
-            .pane_layouts
-            .iter()
-            .any(|layout| tab.id.as_deref() == Some(layout.tab_id.as_str()) && layout.zoomed)
 }
 
 pub(super) fn remote_mutation_descriptor(
@@ -228,7 +206,6 @@ pub(super) fn remote_mutation_descriptor(
     let kind = request.mutation_kind()?.to_owned();
     match request {
         RemoteControlRequest::SplitPane { pane_id, .. }
-        | RemoteControlRequest::TogglePaneZoom { pane_id, .. }
         | RemoteControlRequest::ClosePane { pane_id, .. } => {
             let tab = session
                 .workspaces
@@ -237,18 +214,10 @@ pub(super) fn remote_mutation_descriptor(
                 .flat_map(|checkout| checkout.tabs.iter())
                 .find(|tab| tab.panes.iter().any(|pane| pane.id == *pane_id))?;
             let scope_id = tab.id.clone()?;
-            let baseline_zoomed = (kind == "pane.zoom").then(|| {
-                session
-                    .pane_layouts
-                    .iter()
-                    .find(|layout| layout.tab_id == scope_id)
-                    .is_some_and(|layout| layout.zoomed)
-            });
             Some(RemoteMutationDescriptor {
                 kind,
                 target_id: pane_id.clone(),
                 scope_id,
-                baseline_zoomed,
             })
         }
         RemoteControlRequest::CloseTab { tab_id, .. } => {
@@ -262,7 +231,6 @@ pub(super) fn remote_mutation_descriptor(
                 kind,
                 target_id: tab_id.clone(),
                 scope_id: tab_id.clone(),
-                baseline_zoomed: None,
             })
         }
         RemoteControlRequest::FocusPane { .. }
@@ -314,13 +282,6 @@ fn remote_operation_confirmed_by(
                 tab.id.as_deref() == Some(operation.scope_id.as_str())
                     && tab.panes.iter().any(|pane| pane.id == *created)
             })
-        }),
-        "pane.zoom" => operation.baseline_zoomed.is_some_and(|baseline| {
-            session
-                .pane_layouts
-                .iter()
-                .find(|layout| layout.tab_id == operation.scope_id)
-                .is_some_and(|layout| layout.zoomed != baseline)
         }),
         _ => false,
     }
@@ -422,7 +383,6 @@ impl Runtime {
                 message: None,
                 retryable: false,
                 created_pane_id: None,
-                baseline_zoomed: descriptor.baseline_zoomed,
             },
         );
         self.sync_async_operations();
@@ -693,8 +653,8 @@ impl Runtime {
         true
     }
 
-    /// The confirmable shape of a model layout: pane ids, split geometry, zoom
-    /// and focus. It carries no PTY rectangles, so a resize cannot be
+    /// The confirmable shape of a model layout: pane ids, split geometry and
+    /// focus. It carries no PTY rectangles, so a resize cannot be
     /// confirmed against it; only a fresh session layout can do that.
     pub(super) fn model_layout_signature(layout: &PaneLayoutSnapshot) -> PaneTopologySignature {
         fn collect(
@@ -724,7 +684,6 @@ impl Runtime {
         }
 
         let mut signature = PaneTopologySignature {
-            zoomed: layout.zoomed,
             focused_pane_id: layout.focused_pane_id.clone(),
             ..PaneTopologySignature::default()
         };
@@ -738,7 +697,6 @@ impl Runtime {
         layout: &crate::sidebar::SessionLayoutPayload,
     ) -> PaneTopologySignature {
         let mut signature = PaneTopologySignature {
-            zoomed: layout.zoomed,
             focused_pane_id: layout.focused_pane_id.clone(),
             pane_ids: layout
                 .panes
@@ -812,18 +770,6 @@ impl Runtime {
             .map(|layout| layout.tab_id.clone())
     }
 
-    /// Whether `pane_id` is the only pane of an unzoomed tab, where zoom has
-    /// nothing to hide. The engine answers such a zoom unchanged (`single_pane`),
-    /// so no topology would ever confirm it, and the operation left waiting
-    /// would turn away every later split, zoom, resize and close in the tab.
-    pub(super) fn pane_alone_unzoomed(&self, pane_id: &str) -> bool {
-        self.snapshot
-            .pane_layouts
-            .iter()
-            .find(|layout| layout.pane_ids().contains(&pane_id))
-            .is_some_and(|layout| !layout.zoomed && layout.pane_ids().len() == 1)
-    }
-
     pub(super) fn pane_operation_baseline(&self, pane_id: &str) -> Option<PaneTopologySignature> {
         self.snapshot
             .pane_layouts
@@ -869,7 +815,6 @@ impl Runtime {
             return Some((
                 layout.tab_id.clone(),
                 PaneTopologySignature {
-                    zoomed: layout.zoomed,
                     focused_pane_id: layout.focused_pane_id.clone(),
                     pane_ids,
                     ..Default::default()
@@ -1001,8 +946,8 @@ impl Runtime {
         }
     }
 
-    /// Admits a split, zoom or resize into its tab's line and sends it when
-    /// nothing ahead of it is still waiting for the engine (D-10). A zoom or resize
+    /// Admits a split or resize into its tab's line and sends it when
+    /// nothing ahead of it is still waiting for the engine (D-10). A resize
     /// is drawn at once on top of what the operations ahead of it will leave
     /// (D-07); a split is drawn when the engine names the pane it made.
     pub(super) fn begin_pane_operation(
@@ -1060,11 +1005,11 @@ impl Runtime {
             prediction,
         );
         self.begin_op_timing(&id, kind, Some(&scope_id), &[&target_id]);
-        // A zoom or resize is drawn at the request, and the pane's grid
+        // A resize is drawn at the request, and the pane's grid
         // follows the drawing, so its record waits for the frame after the
         // resize that drawing sends (PRD grid-ahead-of-herdr D-06); a
         // split's record learns its pane from the engine's answer.
-        if matches!(kind, "pane.zoom" | "pane.resize") {
+        if kind == "pane.resize" {
             self.await_op_frame(&id, &target_id, true);
         }
         if let Some(request_id) = input_request {
@@ -1340,12 +1285,6 @@ impl Runtime {
     ) -> Option<super::pane_prediction::Prediction> {
         let layout = self.predicted_tab_layout(scope_id)?;
         match action {
-            PaneControlAction::ToggleZoom { pane_id } => {
-                Some(super::pane_prediction::Prediction::Zoom {
-                    pane: pane_id.clone(),
-                    zoomed: !layout.zoomed,
-                })
-            }
             PaneControlAction::Resize {
                 pane_id,
                 direction,
@@ -1967,7 +1906,7 @@ impl Runtime {
         operation: &PendingPaneOperation,
         current: &PaneTopologySignature,
     ) -> bool {
-        // An unzoom or unrelated split is an intermediate observation. Only
+        // An unrelated split is an intermediate observation. Only
         // the start worker can confirm that its exact new pane joined the tab.
         if matches!(operation.request, GeometryRequest::Task { .. }) {
             return false;
@@ -1982,10 +1921,6 @@ impl Runtime {
                 .created_pane_id
                 .as_ref()
                 .is_some_and(|created| current.pane_ids.contains(created)),
-            // Zoom has no geometry contract of its own. The zoom bit is the
-            // authoritative confirmation, while a focus change is a separate
-            // event and must not settle it.
-            "pane.zoom" => current.zoomed != operation.baseline_signature.zoomed,
             // Resize must be proven by fresh raw rectangles. A no-op
             // acknowledgement or a focus-only event cannot settle a resize,
             // and a model projection has no rectangles to invent.
@@ -2099,7 +2034,6 @@ impl Runtime {
         };
         if drawn.pane_ids == confirmed.pane_ids
             && drawn.splits == confirmed.splits
-            && drawn.zoomed == confirmed.zoomed
             && drawn.focused_pane_id == confirmed.focused_pane_id
         {
             return;
@@ -2121,8 +2055,6 @@ impl Runtime {
             "confirmed_pane_ids": confirmed.pane_ids,
             "drawn_ratios": ratios(&drawn),
             "confirmed_ratios": ratios(confirmed),
-            "drawn_zoomed": drawn.zoomed,
-            "confirmed_zoomed": confirmed.zoomed,
             "drawn_focus": drawn.focused_pane_id,
             "confirmed_focus": confirmed.focused_pane_id,
         }));

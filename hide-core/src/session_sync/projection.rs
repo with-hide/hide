@@ -357,7 +357,6 @@ impl ProjectionState {
                 ),
                 tab_id: crate::address::scoped_tab_id(target_id, &layout.tab_id),
                 focused_pane_id: crate::address::scoped_pane_id(target_id, &layout.focused_pane_id),
-                zoomed: layout.zoomed,
                 frames: frames
                     .into_iter()
                     .map(|mut frame| {

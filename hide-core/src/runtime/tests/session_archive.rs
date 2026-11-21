@@ -475,8 +475,7 @@ fn resuming_starts_the_root_with_its_resume_arguments_and_it_leaves_the_archive_
         "tabs": [{"workspace_id": "w1", "tab_id": "w1:t9", "label": ""}],
         "panes": [{"pane_id": "w1:p9", "cwd": A}],
         "layouts": [{
-            "workspace_id": "w1", "tab_id": "w1:t9", "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "workspace_id": "w1", "tab_id": "w1:t9",             "area": {"x": 0, "y": 0, "width": 80, "height": 24},
             "focused_pane_id": "w1:p9",
             "panes": [{"pane_id": "w1:p9", "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
             "splits": []
@@ -644,8 +643,7 @@ fn an_archived_childs_registration_is_held_and_passes_to_the_pane_it_resumes_in(
 
     // The root comes back in w1:p1 and the child in a new pane, w1:p8.
     let layouts = ["w1:t1", "w1:t8"].iter().zip(["w1:p1", "w1:p8"]).map(|(tab, pane)| serde_json::json!({
-            "workspace_id": "w1", "tab_id": tab, "zoomed": false,
-            "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": pane,
+            "workspace_id": "w1", "tab_id": tab,             "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": pane,
             "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}], "splits": []
         })).collect::<Vec<_>>();
     let resumed = crate::sidebar::owned_label_fixture(serde_json::json!({
