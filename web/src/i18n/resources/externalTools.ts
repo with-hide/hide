@@ -37,7 +37,7 @@ const ko = {
   "externalTools.mode.own": "자기 공간",
   "externalTools.mode.all": "전체",
   "externalTools.mode.ownDescription": "자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요",
-  "externalTools.mode.allDescription": "내가 쓰는 workspace와 에이전트까지, 연결된 기기 전부에서 다뤄요",
+  "externalTools.mode.allDescription": "내가 쓰는 작업공간과 에이전트까지, 연결된 기기 전부에서 다뤄요",
   "externalTools.approve.own": "자기 공간으로 승인",
   "externalTools.approve.all": "전체로 승인",
   "externalTools.refuse": "거절",

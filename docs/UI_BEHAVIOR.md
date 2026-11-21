@@ -3397,7 +3397,7 @@ Every bot runs on the core's machine, so each line names that machine the way Se
 Each bot is drawn as its owl on its tile colour, the same as its rail tile, with the lime ring while it is 전체.
 
 승인 대기 (with its count) leads the page while a request waits, one row per request: the owl the bot will get and the name it asked under, then the machine, the program that asked (or 알 수 없는 프로그램 when the system did not say) and when it asked.
-Under them two choices with one line each, 자기 공간 · 자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요 and 전체 · 내가 쓰는 workspace와 에이전트까지, 연결된 기기 전부에서 다뤄요, with 자기 공간 chosen, the narrower.
+Under them two choices with one line each, 자기 공간 · 자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요 and 전체 · 내가 쓰는 작업공간과 에이전트까지, 연결된 기기 전부에서 다뤄요, with 자기 공간 chosen, the narrower.
 The approve button names the choice, 자기 공간으로 승인 or 전체로 승인, in the secondary grey beside 거절; the core's answer takes the request out of the group, and an approved one appears in the list below.
 
 연결된 봇 · n / 16 lists the approved bots in the order they were approved.
