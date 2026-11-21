@@ -155,11 +155,6 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
-    /// The pane drawn alone for having no View of its own whose desk stands
-    /// beside it all the same, since a View the operator opened came onto
-    /// it (D-53, conductor decision on #2775 review 1). Runtime only, and
-    /// gone when the mode moves to another pane or ends.
-    pub(super) pair_stood: Option<super::pair_view::PairLeft>,
     /// When focus mode last came on, in the layouts' focus stamps' clock:
     /// a tab nobody's agent owns shows on the drawn desk's strip only once
     /// the operator brought it in front since then (D-60). Runtime only, so
@@ -409,7 +404,6 @@ impl WorkspaceViewStore {
                 card_read_again: false,
                 pair_left: None,
                 pair_before: None,
-                pair_stood: None,
                 pair_since: unix_milliseconds(),
                 pair_drawn: Vec::new(),
                 tray_floats: None,
@@ -466,7 +460,7 @@ impl Runtime {
     /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        self.settle_pair_desk();
+        self.keep_pair_front_shown();
         let tab = self.front_tab(key);
         let Some(tray) = self
             .workspace_views
@@ -533,7 +527,6 @@ impl Runtime {
                     && view.tray.count > 0
             })
         });
-        self.stand_pair_desk(key, tab);
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };

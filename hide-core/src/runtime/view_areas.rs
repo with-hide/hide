@@ -687,7 +687,7 @@ impl Runtime {
         // A pair view the move left with nothing to show stays on, its desk
         // settled as after a close (D-64).
         if matches!(from, Place::Tray(_)) {
-            self.settle_pair_desk();
+            self.keep_pair_front_shown();
         }
         true
     }
@@ -2105,9 +2105,6 @@ impl Runtime {
         if let (Ok((key, display_id)), Some(pane)) = (&outcome, opener_pane.as_deref()) {
             let by = self.link_owner(pane);
             self.stamp_view_opener(key, display_id, by);
-            // The lane call stood the desk before the stamp made the View
-            // the pane's own (D-53).
-            self.settle_pair_stood();
         }
         crate::diagnostic!(serde_json::json!({
             "component": "view_areas",
