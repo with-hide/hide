@@ -462,7 +462,7 @@ export const PaneView = memo(function PaneView({
             narrow one ◧ too, which the pane menu then holds; its hint carries ⌘. */}
         <PaneSplit paneId={paneId} name={title} agent={Boolean(agentKind)} actions={actions} />
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
-        {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneOpenAsksMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>

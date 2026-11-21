@@ -444,13 +444,13 @@ it("shows a pane's list as its 태스크 row does: a parent's holds its descenda
   try {
     expect(own.container.querySelector("[data-agent-pr=child]")?.textContent).toBe("#" + "1073");
   } finally { await own.unmount(); }
-  // Several PRs are counted per state in each state's colour, worst first:
-  // a mergeable PR beside a merged one is green 1 purple 1, not green 2. The
+  // Several PRs are one mark: how many are still open, in the worst open
+  // state's colour; the name still counts each state, the merged one too. The
   // child that made them has ended; the parent's list keeps them.
   const several = await mountChip("parent", [pullRow("parent", [sessionPull(1074, "mergeable", { own: false }), sessionPull(1073, "merged", { own: false })])]);
   try {
     const mark = several.container.querySelector<HTMLButtonElement>("[data-agent-pr=parent]")!;
-    expect(Array.from(mark.querySelectorAll("[data-pr-count]"), (part) => [part.getAttribute("data-pr-count"), part.textContent])).toEqual([["mergeable", "1"], ["merged", "1"]]);
+    expect([mark.querySelector("[data-pr-count]")?.getAttribute("data-pr-count"), mark.textContent]).toEqual(["mergeable", "1"]);
     expect(mark.getAttribute("aria-label")).toBe("PR 2 · Mergeable 1 · Merged 1");
   } finally { await several.unmount(); }
   const none = await mountChip("parent", [pullRow("parent", [])]);
@@ -726,10 +726,12 @@ it("says what a waiting turn waits for on the card, in the sidebar's words", asy
   }
 });
 
-// docs/UI_BEHAVIOR.md, the pane head: the questions still waiting ride after
-// the title as plain words, `질문 N` (`Questions N`), whose press opens the turn
-// card that lists them; a pane with none draws nothing there.
-it("counts a pane's waiting questions in words that open the turn card, and draws nothing without them", async () => {
+// docs/UI_BEHAVIOR.md, Pane turn row mode: the questions still waiting end
+// the pane's second row's turn as words, `· 질문 N` (`Questions N`), whose press
+// opens the turn card that lists them; with nothing else on the row the oldest
+// question's words follow them; the head draws them only while the row is off,
+// and a pane with none draws nothing in either place.
+it("counts a pane's waiting questions as the tail of its second row, on the head only when the row is off, and draws nothing without them", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
@@ -743,13 +745,40 @@ it("counts a pane's waiting questions in words that open the turn card, and draw
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><PaneOpenAsksMark paneId="solo" actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span></TooltipProvider>));
+  const header = { working: true, notice: null, band: null } as PaneHeader;
+  const draw = () => act(async () => root.render(<TooltipProvider><span data-head="true"><PaneOpenAsksMark paneId="solo" header={header} actions={actions} /></span><PaneHeaderBand paneId="solo" header={header} actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" header={undefined} actions={actions} /></span><span data-quiet-row="true"><PaneHeaderBand paneId="quiet" header={undefined} actions={actions} /></span></TooltipProvider>));
+  await draw();
   try {
-    const mark = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    // With the row off the head holds them and no row is drawn.
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
+    await draw();
+    expect(container.querySelector("[data-head] [data-pane-open-asks=solo]")?.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-pane-header-band]")).toBeNull();
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
+    await draw();
+    expect(container.querySelector("[data-head]")?.childElementCount).toBe(0);
+    const mark = container.querySelector<HTMLButtonElement>('[data-pane-header-band="open_asks"] [data-pane-open-asks=solo]')!;
     expect(mark.textContent).toBe("Questions 2");
+    expect(container.querySelector('[data-pane-header-band="open_asks"]')?.textContent).toBe("Questions 2Decide the closed tab defect");
+    // Beside a request and its progress they follow the progress, and the question's own words stay in the card.
+    await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, request: { text: "Proceed as proposed", images: 0 }, progress: "Reading the tab code" } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect(container.querySelector('[data-pane-header-band="progress"]')?.textContent).toBe("Proceed as proposed→Reading the tab code· Questions 2");
+    // Beside the pane's own question the tail counts the others, right after the ask's words.
+    const question: PaneBand = { kind: "answer", reason: "Merge now or wait for CI", since_unix_ms: null, read: false, action: null, more: 0 };
+    await act(async () => root.render(<TooltipProvider><PaneHeaderBand paneId="solo" header={{ ...header, working: false, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect(container.querySelector('[data-pane-header-band="answer"]')?.textContent).toBe("Merge now or wait for CI· +1 more");
+    // With the row off the question's own mark counts them all, and the count beside it is gone.
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "off" } } as unknown as SnapshotRest });
+    await act(async () => root.render(<TooltipProvider><PaneAskMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /><PaneOpenAsksMark paneId="solo" header={{ ...header, band: question } as PaneHeader} actions={actions} /></TooltipProvider>));
+    expect([container.querySelector("[data-pane-ask-mark]")?.textContent, container.querySelector("[data-pane-open-asks]")]).toEqual(["Questions 2", null]);
+    useShellStore.setState({ rest: { ...useShellStore.getState().rest, ui_state: { pane_turn_row_mode: "one_line" } } as unknown as SnapshotRest });
+    await draw();
     expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
-    await act(async () => mark.click());
-    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("[data-quiet-row] [data-pane-header-band]")).toBeNull();
+    // The row was drawn again above, so the mark is read again before the press.
+    const pressed = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    await act(async () => pressed.click());
+    expect(pressed.getAttribute("aria-expanded")).toBe("true");
     expect(document.querySelector("[data-pane-turn-card=solo] [data-turn-card-asks]")?.querySelectorAll("[data-record-ask]")).toHaveLength(2);
   } finally {
     await act(async () => root.unmount());
@@ -955,7 +984,8 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
   expect((await draw(own, "off"))?.getAttribute("aria-label")).toBe("Approval: Stopped at a permission request");
   expect(await draw(own, "one_line")).toBeNull();
   const left = await draw({ ...own, band: { ...own.band!, kind: "stopped", reason: "Three tests left" } }, "off");
-  expect([left?.getAttribute("aria-label"), left?.className.includes("border-warning")]).toEqual(["Unfinished: Three tests left", false]);
+  // Words alone, no box and no wait: work left in the text colour, an ask in the warning one.
+  expect([left?.getAttribute("aria-label"), left?.className.includes("text-warning"), left?.className.includes("border")]).toEqual(["Unfinished: Three tests left", false, false]);
   // A raised descendant's ask stays on the children button, not the parent's head.
   expect(await draw(header, "off")).toBeNull();
 });
