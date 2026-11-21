@@ -37,7 +37,7 @@ use super::keys::PaneKey;
 use super::{
     AgentLaunch, AgentState, Answer, CreatedWorktree, DeliveryAgent, Engine, EngineError, Env,
     Gate, OpenedWorktree, PaneJoinResult, PanePlace, PaneProcessGroup, PaneProof, PaneSession,
-    PaneSessionKind, PaneText, PreparedStart, ServerPong, StartedAgent, Wait, Wake, Zoom,
+    PaneSessionKind, PaneText, PreparedStart, PromptBy, ServerPong, StartedAgent, Wait, Wake, Zoom,
 };
 use crate::model::PaneLayoutDirection;
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
@@ -2726,7 +2726,7 @@ impl<'g> Engine for OwnEngine<'g> {
     }
 
     #[allow(clippy::disallowed_methods)] // the prompt's submit delay, a production wait
-    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
+    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()> {
         self.check()?;
         if text.is_empty() {
             return Err(refused(
@@ -2737,13 +2737,13 @@ impl<'g> Engine for OwnEngine<'g> {
         let (pane, paste, kind) = {
             let topology = self.topology();
             let (pane, held, agent) = topology.agent(target)?;
-            if agent.live.status == agents::Status::Blocked {
+            if by == PromptBy::Letter && agent.live.status == agents::Status::Blocked {
                 return Err(refused(
                     "agent_blocked",
                     format!("agent {target} is blocked and requires interactive input"),
                 ));
             }
-            if !agent.takes_input(std::time::Instant::now()) {
+            if by == PromptBy::Letter && !agent.takes_input(std::time::Instant::now()) {
                 return Err(refused(
                     "agent_not_ready",
                     format!("agent {target} is not ready for input"),
@@ -6627,7 +6627,7 @@ mod tests {
             other => panic!("expected a refusal, got {other:?}"),
         };
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_not_ready"
         );
         let idle = PaneFacts {
@@ -6636,12 +6636,14 @@ mod tests {
         };
         holders.say(&pane, &idle);
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_not_ready",
             "a screen drawn within the start's settle"
         );
         settle_start(&engine, &pane);
-        engine.prompt_agent(WAIT, "worker", "a\nb").unwrap();
+        engine
+            .prompt_agent(WAIT, "worker", "a\nb", PromptBy::Letter)
+            .unwrap();
         assert!(
             holders
                 .typed(&pane)
@@ -6651,8 +6653,19 @@ mod tests {
         );
         holders.say(&pane, &running("codex", ScreenState::Blocked));
         assert_eq!(
-            refused(engine.prompt_agent(WAIT, "worker", "hi")),
+            refused(engine.prompt_agent(WAIT, "worker", "hi", PromptBy::Letter)),
             "agent_blocked"
+        );
+        // The operator's own words may answer the question on screen.
+        engine
+            .prompt_agent(WAIT, "worker", "other answer", PromptBy::Operator)
+            .unwrap();
+        assert!(
+            holders
+                .typed(&pane)
+                .ends_with("<letter>other answer<Enter></letter>"),
+            "{:?}",
+            holders.typed(&pane)
         );
     }
 
@@ -6826,7 +6839,7 @@ mod tests {
         };
         holders.say(&pane, &at(Some(true)));
         let refused = |when: &str| {
-            match engine.prompt_agent(WAIT, "worker", "brief") {
+            match engine.prompt_agent(WAIT, "worker", "brief", PromptBy::Letter) {
                 Err(EngineError::Refused { code, .. }) => assert_eq!(code, "agent_not_ready"),
                 other => panic!("{when}: expected the agent not ready, got {other:?}"),
             }
@@ -6855,7 +6868,9 @@ mod tests {
                 .readiness
                 .accepts_input()
         );
-        engine.prompt_agent(WAIT, "worker", "brief").unwrap();
+        engine
+            .prompt_agent(WAIT, "worker", "brief", PromptBy::Letter)
+            .unwrap();
         assert!(
             holders.typed(&pane).ends_with("brief<Enter></letter>"),
             "{:?}",

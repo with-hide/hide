@@ -6828,6 +6828,62 @@ fn an_interruption_is_read_from_the_session_file_with_summaries_off() {
     assert_eq!(harness.backend.calls(), 0, "nothing is analyzed");
 }
 
+/// #2591: an operator refused a permission menu by key. The engine read the
+/// pane at rest before Claude Code wrote the refusal, so that state's read
+/// found the call still open, and with the agent-summary switch off no read
+/// came again: the approval the hook reported, and every letter it held,
+/// waited until someone typed a line. The stop is read again, and the
+/// refusal reaches the row's facts for that same state.
+#[test]
+fn a_refusal_written_after_the_stops_read_is_read_again_with_summaries_off() {
+    let harness = Harness::new();
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    let path = harness.session("refused", "refused", &[("user", "디렉터리를 지워줘")]);
+    let append = |records: &[serde_json::Value]| {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for record in records {
+            std::io::Write::write_all(&mut file, format!("{record}\n").as_bytes()).unwrap();
+        }
+    };
+    append(&[
+        json!({"type":"assistant","sessionId":"refused","timestamp":"2026-10-01T00:00:02Z",
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":"call-rm",
+                "name":"Bash","input":{"command":"rm -rf \"$(dirname \"$P\")\""}}]}}),
+    ]);
+    let stopped = agent(&path, "idle", 5);
+    observe(&mut worker, &stopped);
+    settle(&mut worker, &woken);
+    let reads = source.reads.load(Ordering::SeqCst);
+    assert_eq!(
+        shown_facts(&worker, &stopped).and_then(|facts| facts.turn_ended),
+        None,
+        "the read under the stop finds the call still open"
+    );
+
+    append(&[
+        json!({"type":"user","sessionId":"refused","timestamp":"2026-10-01T00:00:09Z",
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-rm",
+                "is_error":true,"content":"The user doesn't want to proceed with this tool use."}]}}),
+        json!({"type":"user","sessionId":"refused","timestamp":"2026-10-01T00:00:09Z",
+            "message":{"role":"user","content":[{"type":"text",
+                "text":"[Request interrupted by user for tool use]"}]}}),
+    ]);
+    worker.tick(Instant::now() + super::worker::FOLLOW_UP_READ);
+    settle(&mut worker, &woken);
+
+    assert_eq!(source.reads.load(Ordering::SeqCst), reads + 1);
+    let facts = shown_facts(&worker, &stopped).expect("the stop's facts");
+    assert_eq!(
+        facts.turn_ended,
+        Some(hide_session::turns::TurnEnded::Interrupted)
+    );
+    assert_eq!(harness.backend.calls(), 0, "nothing is analyzed");
+}
+
 /// A session reader that refuses with a given reason while one is set.
 struct Refusing {
     inner: NodeTranscripts,
