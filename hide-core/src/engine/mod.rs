@@ -765,14 +765,17 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
-    /// Types `text` into a pane and submits it.
-    pub fn submit_text(
+    /// Types `text` into the agent's input in `pane` and submits it, as a
+    /// letter's bell is typed ([`Engine::prompt_agent`]): an agent reads a
+    /// slash command sent this way as the command (#2354). A refusal typed
+    /// nothing.
+    pub fn prompt_agent(
         &self,
         pane: &str,
         text: &str,
         timeout: Duration,
     ) -> Result<(), EngineError> {
-        self.engine.submit_text(Wait::Each(timeout), pane, text)
+        self.engine.prompt_agent(Wait::Each(timeout), pane, text)
     }
 
     /// Presses one key in a pane.

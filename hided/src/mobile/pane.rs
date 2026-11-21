@@ -124,12 +124,19 @@ pub fn wait_for_input(
     }
 }
 
+/// A reply is typed as a letter's bell is (`EngineHandle::prompt_agent`), so
+/// an agent reads a slash command from the phone as the command (#2354). The
+/// engine refuses it, typing nothing, while the agent sits at its blocked
+/// prompt or is still starting: the quick keys answer a menu.
 pub fn send(engine: &EngineHandle, pane_id: &str, input: Input<'_>) -> Result<(), PaneError> {
     match input {
-        Input::Reply(text) => engine.submit_text(pane_id, text, TIMEOUT),
+        Input::Reply(text) => engine.prompt_agent(pane_id, text, TIMEOUT),
         Input::Key(key) => engine.press_key(pane_id, key, TIMEOUT),
     }
-    .map_err(classify)
+    .map_err(|error| match error.code() {
+        Some(code) if !code.contains("not_found") => PaneError::InputRefused,
+        _ => classify(error),
+    })
 }
 
 #[cfg(test)]

@@ -1382,7 +1382,7 @@ A device whose link is down keeps the thread it drew, dimmed by `connected` fals
 
 The input box sends its words to the thread's pane only (B29, D-62): the same pane, terminal and session the thread was opened for, else it refuses as `pane_changed` or `pane_gone` and nothing is typed anywhere, checked again just before the words go, after their files are staged and the pane let them in.
 Files picked or pasted into the box are staged as a terminal attachment's are and their quoted paths go before the words, a device's files staged on that device first; one input is in flight at a time.
-The words reach the agent as a phone's reply does, through the engine's `submit_text`, which types the words as they are, with no bracketed-paste wrapper, and then Enter, not as keys typed into the terminal.
+The words reach the agent as a phone's reply and a letter's bell do, through the engine's `prompt_agent`: one paste where the program takes bracketed paste, then Enter after the prompt's gap, so a slash command typed in the box runs as the command; while the agent sits at a permission or question menu, or is still starting, nothing is typed and the send is refused.
 Control characters other than a new line and a tab are refused before anything is sent, and the text is capped at 16 KiB.
 The input's state, `sending`, `sent` or `refused` with its reason, is the thread section's `input`; a refusal hided makes before the core (a file it never staged, a full staging area) reaches the thread as `threadInputRefusal` under the input's request id.
 Enter sends and Shift+Enter starts a line; an Enter that ends an IME composition only commits it, and the `@` menu keeps its own Enter.
