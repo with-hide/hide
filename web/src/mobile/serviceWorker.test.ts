@@ -122,6 +122,17 @@ it("leads with the status word with no detail too, and works with older payloads
   expect(newPhone.shown).toEqual([{ title: "task", body: "배포 완료 · project", tag: undefined }]);
 });
 
+// PRD device-connect-iroh D-70: the phones already paired hear once that a new one connected, named by the computer and the
+// new phone; a page from before the words says the new phone alone.
+it("words a new phone paired with a computer, under that computer's name", async () => {
+  const phone = phoneWorker();
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", phone_paired: "새 폰이 연결됐어요" });
+  await phone.push({ title: "build-box", state: "phone_paired", detail: "Pixel 9", place: "", tag: "|" });
+  await phone.words({ needs_you: "내 차례", done: "읽을 것" });
+  await phone.push({ title: "build-box", state: "phone_paired", detail: "Pixel 9", place: "", tag: "|" });
+  expect(phone.shown.map(({ title, body }) => `${title}: ${body}`)).toEqual(["build-box: 새 폰이 연결됐어요 · Pixel 9", "build-box: Pixel 9"]);
+});
+
 it("a hosted push stays bound to its registration's device and opens that agent in the loader", async () => {
   for (const room of ["a".repeat(43), "b".repeat(43)]) {
     const handlers = new Map<string, (event: unknown) => void>();

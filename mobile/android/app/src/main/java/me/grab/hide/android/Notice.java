@@ -64,10 +64,11 @@ public final class Notice {
         String title = text(object, "title", 1, 512);
         String state = text(object, "state", 0, 64);
         String tag = text(object, "tag", 1, 768);
-        String deviceId = text(object, "device_id", 1, 256);
-        String paneId = text(object, "pane_id", 1, 512);
+        // A notice about the computer itself, such as a new phone paired with it, names no agent: both empty, never one.
+        String deviceId = text(object, "device_id", 0, 256);
+        String paneId = text(object, "pane_id", 0, 512);
         String room = text(object, "room", 0, 64);
-        if (title == null || state == null || tag == null || deviceId == null || paneId == null || !SealedFiles.isRoom(room)) return null;
+        if (title == null || state == null || tag == null || deviceId == null || paneId == null || deviceId.isEmpty() != paneId.isEmpty() || !SealedFiles.isRoom(room)) return null;
         String place = text(object, "place", 0, 512);
         return new Notice(title, state, text(object, "status_code", 0, 64), text(object, "detail", 1, 1024), place == null ? "" : place, tag, deviceId, paneId, room, tags(object.optJSONArray("clear")));
     }

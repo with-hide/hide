@@ -827,7 +827,7 @@ async fn run(
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heard = tokio::time::Instant::now();
     let record = mobile.phone(phone_id);
-    let hello = json!({
+    let mut hello = json!({
         "type": "hello",
         "mac_name": mobile.mac_name(),
         "phone_id": phone_id,
@@ -839,6 +839,12 @@ async fn run(
             _ => "unasked",
         },
     });
+    // An addition (docs/ARCHITECTURE.md, The mobile companion): a bundle
+    // shows the gathered view only for a computer that says it offers
+    // connections between two Hides; an older bundle ignores the field.
+    if mobile.device_connect() {
+        hello["device_connect"] = json!(true);
+    }
     let mut agents_omitted = 0;
     let (agents, omitted) = agents_frame(&projection.borrow_and_update());
     note_agents_omitted(phone_id, &mut agents_omitted, omitted);

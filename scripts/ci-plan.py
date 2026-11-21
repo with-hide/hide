@@ -547,6 +547,7 @@ HELP_SOURCES = (
     "hided/src/plan_cli.rs",
     "hided/src/automation_cli.rs",
     "hided/src/pane_cli.rs",
+    "hided/src/phone_cli.rs",
     "hided/src/session_cli.rs",
 )
 NAMED_LANES = (

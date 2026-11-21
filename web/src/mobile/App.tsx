@@ -36,6 +36,7 @@ import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
 import { HOST_LIST_LINK } from "./hosts";
 import { DemoBar } from "./Demo";
+import { ComputerChoice, GatheredList, openRoom, useConnectableHosts, type Watch } from "./Gathered";
 
 export function App() {
   const demo = usePhone((s) => s.demo);
@@ -131,7 +132,7 @@ function standalone(): boolean {
  * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
  * with the device sheet already open on the Mac it names. A phone passes none.
  */
-export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
+export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hosted?: boolean; picker?: { room: string; open: boolean }; /** The gallery's: the computer the page is open on and how other computers are watched, in place of the address and sockets. */ gathered?: { room: string; watch: Watch } }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
@@ -143,6 +144,15 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
   const asks = usePhone((s) => s.automationAsks.length);
+  const scope = usePhone((s) => s.listScope);
+  // A hosted phone paired with two computers or more chooses between all of them and this one (PRD device-connect-iroh B55).
+  const hosts = useConnectableHosts();
+  const activeRoom = gathered?.room ?? openRoom();
+  const deviceConnect = usePhone((s) => s.deviceConnect);
+  const open = hosts?.find((host) => host.room === activeRoom);
+  // Before this computer's hello on this page, its saved answer stands, so a computer that is off still gathers the others (B62).
+  const offered = deviceConnect ?? open?.deviceConnect === true;
+  const computers = offered && hosted && open && hosts && hosts.length > 1 ? hosts : null;
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);
@@ -164,7 +174,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
             </button>
           </div>
         </div>
-        {hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
+        {computers && activeRoom ? <ComputerChoice hosts={computers} activeRoom={activeRoom} /> : hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
           <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones, devices)}>
             <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones, devices)}</span>
@@ -179,7 +189,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
       ) : null}
       {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
-      <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
+      {computers && activeRoom && scope === "all" ? <GatheredList hosts={computers} activeRoom={activeRoom} dim={dim} watch={gathered?.watch} /> : <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
         {groups && groups.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
             {t("mobile.noAgents")}
@@ -207,7 +217,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
         {groups && omitted > 0 ? (
           <p className="px-xl py-md text-body text-muted-foreground" data-phone-agents-omitted={omitted}>{t("mobile.omitted", { count: omitted })}</p>
         ) : null}
-      </div>
+      </div>}
       <TabBar active="agents" />
       <StartSheet />
     </main>

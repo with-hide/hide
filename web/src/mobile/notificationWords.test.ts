@@ -27,6 +27,7 @@ function catalog(): Record<string, string> {
     done: translate("mobile.group.done"),
     observer_unconfirmed: translate("mobile.notice.observerUnconfirmed"),
     letter_undelivered: translate("mobile.notice.letterUndelivered"),
+    phone_paired: translate("mobile.notice.phonePaired"),
     ...Object.fromEntries(STATUS.map((code) => [`status_${code}`, translate(`agents.status.${code}`)])),
     status_look: translate("agents.mark.look"),
   };

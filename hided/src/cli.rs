@@ -59,6 +59,8 @@ pub enum CommandKind {
         reason: String,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide phone pair|list|remove`: the phones paired with this computer.
+    Phone(crate::phone_cli::PhoneCli),
     /// `hide always-on …`: a paired machine's login item and firewall rules.
     AlwaysOn(crate::always_on::cli::Command),
     /// `hide access request|status|leave|list`: an external tool's own
@@ -213,6 +215,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "skill" => usage(crate::store_cli::SKILL_USAGE),
         "mcp" => usage(crate::store_cli::MCP_USAGE),
         "device" => usage(crate::device_cli::usage_here()),
+        "phone" => usage(crate::phone_cli::USAGE),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
@@ -258,6 +261,7 @@ fn help_text() -> String {
         crate::store_cli::SKILL_USAGE,
         crate::store_cli::MCP_USAGE,
         crate::device_cli::usage_here(),
+        crate::phone_cli::usage_here().unwrap_or_default(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
         crate::automation_cli::USAGE,
@@ -530,6 +534,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::device_cli::parse(iter)
                 .map(CommandKind::Device)
                 .map_err(|reason| wrong(reason, crate::device_cli::usage_here()))
+        }
+        Some("phone") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::phone_cli::USAGE)))?;
+            crate::phone_cli::parse(iter)
+                .map(CommandKind::Phone)
+                .map_err(|reason| wrong(reason, crate::phone_cli::USAGE))
         }
         Some("access") => {
             crate::cli_contract::admit(&args[1..])
@@ -996,6 +1007,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentArchive { .. }
                     | CommandKind::FoldAsk { .. }
                     | CommandKind::Device(_)
+                    | CommandKind::Phone(_)
                     | CommandKind::Access(_)
                     | CommandKind::Pane(_)
                     | CommandKind::WorkspaceRemove(_)
@@ -1038,6 +1050,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
         CommandKind::FoldAsk { id, reason } => crate::session_cli::run_fold_ask(&env, &id, &reason),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
+        CommandKind::Phone(cli) => crate::phone_cli::run(&env, &cli),
         CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::WorkspaceRemove(cli) => crate::worktree_cli::run(&env, cli),

@@ -2,9 +2,10 @@
 // settings-cleanup B57-B59): the switch, one ready line or only the failing
 // Tailscale steps with their fix, the QR once hided has confirmed its serve
 // entry and Show QR is pressed, and the paired phones with Revoke; the push
-// mode is on Settings > Notifications (PRD settings-left-nav B6, B7). Every
-// value is the daemon's `mobile` frame; every control sends one `mobile_*`
-// event.
+// mode is on Settings > Notifications (PRD settings-left-nav B6, B7). A screen
+// another machine shows of this one keeps the relay line and Revoke only
+// (PRD device-connect-iroh D-53, D-70). Every value is the daemon's `mobile`
+// frame; every control sends one `mobile_*` event.
 
 import { AlertTriangleIcon, CircleAlertIcon, ExternalLinkIcon } from "lucide-react";
 import qrcode from "qrcode-generator";
@@ -24,6 +25,7 @@ import {
   type FailedStep,
   type MobileState,
 } from "./mobileSettings";
+import { ownWindow } from "./pairing";
 import { coreMachineName } from "./screenMachine";
 import { useShellStore } from "./store";
 
@@ -31,15 +33,33 @@ export function MobileTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const mobile = useShellStore((s) => s.mobile);
   const live = useShellStore((s) => s.connection === "live");
+  // A phone pairs only from this machine's own window; a screen another machine shows of this one lists the phones and can
+  // remove one (PRD device-connect-iroh D-53, D-70), and hided sends it no code to show.
+  const own = useShellStore((s) => ownWindow(s.pairing));
+  const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
   // hided rechecks the checklist while this tab is open (B3). Opening it
   // makes no code and voids none: only Show QR does (B58). A restarted daemon
-  // has forgotten the tab, so every live connection says so again.
+  // has forgotten the tab, so every live connection says so again; hided
+  // counts no other machine's screen, whose leaving would end this machine's code.
   useEffect(() => {
-    if (!live) return;
+    if (!live || !own) return;
     actions.observeMobile(true);
     return () => actions.observeMobile(false);
-  }, [actions, live]);
+  }, [actions, live, own]);
   if (!mobile) return <Note tone="pending">{t("mobileSetup.connecting")}</Note>;
+  // Turning Mobile on or off and changing its method decide whether a phone can pair, and either ends a code shown here, so
+  // hided refuses them from another machine's screen, which keeps only what it may still do.
+  if (!own) {
+    return (
+      <div data-mobile-tab="true" data-mobile-exposure={mobile.exposure} data-mobile-remote="true">
+        <Note data-mobile-remote-line="true">{t("mobileSetup.remoteScreen", { machine })}</Note>
+        {(mobile.enabled || mobile.exposure === "failed") && mobile.method === "relay" ? (
+          <Group title={t("mobileSetup.title")}><RelayConnection state={mobile} actions={actions} /></Group>
+        ) : null}
+        {mobile.phones.length > 0 ? <Phones state={mobile} actions={actions} /> : null}
+      </div>
+    );
+  }
   return (
     <div data-mobile-tab="true" data-mobile-exposure={mobile.exposure}>
       <Group title={t("mobileSetup.title")}>

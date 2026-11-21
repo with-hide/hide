@@ -147,3 +147,17 @@ it("opens the computer the address names, or the only one kept unless it refused
   expect(open(`?host=${other.room}`, [host, other])).toBe(other.room);
   expect(open(`?host=${other.room}`, [host])).toBeNull();
 });
+
+// PRD device-connect-iroh B62: a computer's last answer to whether it offers connections between two Hides stays with its record in
+// both stores, so a page opened on it while it is off still offers the gathered view; a record that says something else is refused.
+it("keeps each computer's last connections answer in the browser and in the app", async () => {
+  const browser = storage();
+  await browserStore(browser).save({ ...host, deviceConnect: true });
+  expect(readHosts(browser)[0]!.deviceConnect).toBe(true);
+  const app = storage();
+  await appStore(app).save({ ...host, deviceConnect: true });
+  expect((await appStore(app).list())[0]!.deviceConnect).toBe(true);
+  const odd = storage();
+  odd.setItem(HOSTS_KEY, JSON.stringify([{ ...host, deviceConnect: "yes" }]));
+  expect(() => readHosts(odd)).toThrow("host_storage_invalid");
+});
