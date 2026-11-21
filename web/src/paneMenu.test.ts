@@ -121,15 +121,15 @@ describe("what the pane head moved into its menus (PRD lane-desk-pair-view B19, 
   it("leads an agent pane's menu with @ and pair view, apart from the rest", () => {
     const items = paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "off" });
     expect(items.map((item) => item.id)).toEqual(["mention", "pair_view", "copy_reference", "close_pane"]);
-    expect(items[1]).toMatchObject({ label: "Pair view", unavailable: null });
+    expect(items[1]).toMatchObject({ label: "Focus mode", unavailable: null });
     expect(items[2]?.separated).toBe(true);
   });
 
-  it("names the way back on the pane in pair view, and offers pair view on a shell too (D-53)", () => {
+  it("names the way back on the pane in pair view, and offers focus mode on a shell too (D-53, D-55)", () => {
     expect(paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "on" })[1]).toMatchObject({ label: "Back to the usual view", unavailable: null });
     const shell = paneMenuItems(row, "zsh", undefined, undefined, false, false, { mention: false, pair: "off" });
     expect(shell.map((item) => item.id)).toEqual(["pair_view", "copy_reference", "close_pane"]);
-    expect(shell[0]).toMatchObject({ label: "Pair view", unavailable: null });
+    expect(shell[0]).toMatchObject({ label: "Focus mode", unavailable: null });
   });
 
   it("draws pair view with a terminal's layout items, and @ with the pane's own", () => {

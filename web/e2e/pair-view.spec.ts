@@ -96,7 +96,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await paneView(page, shell).locator("[data-terminal-host]").click();
     await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
     await pairButton(page, left!).hover();
-    await expect(page.getByRole("tooltip")).toContainText("Pair view");
+    await expect(page.getByRole("tooltip")).toContainText("Focus mode");
     await expect(page.getByRole("tooltip")).toContainText(commandLabel("pair_view"));
     await screenshot(page, "pair-pane-button");
 
