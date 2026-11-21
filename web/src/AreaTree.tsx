@@ -63,7 +63,8 @@ function selectedTabNeed(list: HTMLElement): number | undefined {
   const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
   const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
   if (!tab || !title || title.offsetParent === null) return undefined;
-  return Math.ceil(tab.offsetWidth - title.clientWidth + titleTextWidth(title));
+  // Fractional boxes throughout, so rounding never leaves the title a pixel short of its text.
+  return Math.ceil(tab.getBoundingClientRect().width - title.getBoundingClientRect().width + titleTextWidth(title));
 }
 
 /** A title's whole text width: what overflows a cut title, else the text's own box inside a title stretched wider. */

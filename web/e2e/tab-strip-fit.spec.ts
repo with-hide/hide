@@ -71,7 +71,7 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
     const selected = selectedTab?.getBoundingClientRect();
     const title = selectedTab?.querySelector<HTMLElement>("[data-tab-title]");
     return {
-      need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.offsetWidth - title.clientWidth + (() => {
+      need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.getBoundingClientRect().width - title.getBoundingClientRect().width + (() => {
         // The whole text's width: what overflows a cut title, else the text's own box, which a stretched title hides.
         if (title.scrollWidth > title.clientWidth) return title.scrollWidth;
         const text = document.createRange();

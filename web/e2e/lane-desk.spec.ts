@@ -158,7 +158,7 @@ test("a crowded desk reads its front tab whole and shrinks the others, and the r
     // its marks, its tooltip naming it whole.
     const cut = (tab: ReturnType<typeof front>) => tab.locator("[data-tab-title]").evaluate((title: HTMLElement) => title.offsetParent === null || title.scrollWidth > title.clientWidth);
     await expect(front(page)).toContainText(names[3]!);
-    expect(await cut(front(page))).toBe(false);
+    await expect.poll(() => cut(front(page))).toBe(false);
     expect(await cut(deskTabs(page).first())).toBe(true);
     await deskTabs(page).first().hover();
     await expect(page.getByRole("tooltip")).toContainText(names[0]!);
