@@ -1157,6 +1157,8 @@ pub struct Answering {
     pub desktop_renderers: Arc<AtomicUsize>,
     /// What `hide device` asks about pairing (`crate::pairing`).
     pub pairing: Arc<crate::pairing::Pairing>,
+    /// What `hide phone` asks (`crate::mobile::command`).
+    pub mobile: Arc<crate::mobile::Mobile>,
     /// What the listener's accept thread does, for `/health`.
     pub health: Arc<crate::accepting::ListenerHealth>,
 }
@@ -1178,6 +1180,7 @@ pub async fn serve(
         port,
         desktop_renderers,
         pairing,
+        mobile,
         health,
     } = answering;
     let mut closing = CloseOnDrop::new(listener.closer());
@@ -1233,6 +1236,7 @@ pub async fn serve(
         let engine = engine.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
         let pairing = Arc::clone(&pairing);
+        let mobile = Arc::clone(&mobile);
         let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -1243,7 +1247,11 @@ pub async fn serve(
                 engine.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
-                Some((&pairing, &runtime)),
+                Some(Operators {
+                    pairing: &pairing,
+                    mobile: &mobile,
+                    runtime: &runtime,
+                }),
             );
         });
     }
@@ -1260,6 +1268,14 @@ fn note_bootstrap_stopped(message: &str) {
     }));
 }
 
+/// What answers `hide device` and `hide phone` on the bootstrap socket, and
+/// the runtime their asks wait on.
+struct Operators<'a> {
+    pairing: &'a Arc<crate::pairing::Pairing>,
+    mobile: &'a Arc<crate::mobile::Mobile>,
+    runtime: &'a tokio::runtime::Handle,
+}
+
 /// Reads one bootstrap request from a caller, attests the caller by the pid
 /// the system reports for it, and writes the answer.
 fn answer_bootstrap(
@@ -1269,7 +1285,7 @@ fn answer_bootstrap(
     engine: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
-    pairing: Option<(&Arc<crate::pairing::Pairing>, &tokio::runtime::Handle)>,
+    operators: Option<Operators<'_>>,
 ) {
     use std::io::{BufRead, BufReader};
     let Some(peer) = stream
@@ -1322,18 +1338,51 @@ fn answer_bootstrap(
         && line.len() <= 4096
     {
         let answer = match (
-            pairing,
+            &operators,
             serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
         ) {
-            (Some((pairing, runtime)), Ok(ask)) => {
+            (Some(operators), Ok(ask)) => {
                 let caller = if crate::access::in_a_pane(peer, request, engine, core) {
                     crate::pairing::Caller::Pane
                 } else {
                     crate::pairing::Caller::Operator
                 };
-                runtime.block_on(pairing.ask(ask, caller))
+                operators
+                    .runtime
+                    .block_on(operators.pairing.ask(ask, caller))
             }
             _ => crate::pairing::refused("invalid_request"),
+        };
+        let _ = writeln!(stream, "{answer}");
+        return;
+    }
+    // What `hide phone` asks (PRD device-connect-iroh D-70): answered in
+    // this one exchange, and a pairing refused to a caller the kernel places
+    // in a pane, as `hide device` is above. A build that does not offer
+    // connections between two Hides answers none of it.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.phone
+        && line.len() <= 4096
+    {
+        use crate::mobile::command;
+        let answer = match (
+            &operators,
+            serde_json::from_value::<command::Ask>(ask.clone()),
+        ) {
+            (Some(operators), _) if !operators.mobile.device_connect() => {
+                command::refused(crate::pairing::DEVICE_CONNECT_OFF)
+            }
+            (Some(operators), Ok(ask)) => {
+                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
+                    command::Caller::Pane
+                } else {
+                    command::Caller::Operator
+                };
+                operators
+                    .runtime
+                    .block_on(operators.mobile.answer_cli(ask, caller))
+            }
+            _ => command::refused("invalid_request"),
         };
         let _ = writeln!(stream, "{answer}");
         return;
@@ -2220,6 +2269,7 @@ mod tests {
         let request = |pane_id: &str| PaneRequest {
             access: None,
             device: None,
+            phone: None,
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,

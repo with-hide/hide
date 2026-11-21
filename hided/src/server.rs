@@ -880,6 +880,19 @@ async fn client_loop(
     screen_loop(socket, state, connection, handshake, None).await;
 }
 
+/// The `mobile` frame for a screen. A screen another machine shows of this
+/// one gets no pairing code: a phone pairs only from this machine's own
+/// window or terminal, and only removing a phone is open to that screen (PRD
+/// device-connect-iroh D-53, D-70).
+fn mobile_frame(payload: &Value, own_screen: bool) -> Value {
+    let mut payload = payload.clone();
+    if !own_screen && let Some(fields) = payload.as_object_mut() {
+        fields.insert("qr".to_owned(), Value::Null);
+        fields.insert("code_expires_at_ms".to_owned(), Value::Null);
+    }
+    json!({"type": "mobile", "payload": payload})
+}
+
 /// One screen's session after its handshake: the snapshot stream, the
 /// answers to its events and, for a screen of this machine, its terminals.
 /// A linked node's screen (`relay`) draws terminals from its own node's hub
@@ -967,9 +980,9 @@ async fn screen_loop(
     let mut agent_notices = desktop.then(|| state.desktop_notices.subscribe());
     // Settings > Mobile reads one `mobile` frame, sent now and on each change.
     let mut mobile_frames = state.mobile.subscribe_frame();
+    let own_screen = relay.is_none();
     if renderer {
-        let frame =
-            json!({"type": "mobile", "payload": mobile_frames.borrow_and_update().as_ref()});
+        let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
         if socket
             .send(Message::Text(frame.to_string().into()))
             .await
@@ -1161,7 +1174,7 @@ async fn screen_loop(
                 if changed.is_err() {
                     break;
                 }
-                let frame = json!({"type": "mobile", "payload": mobile_frames.borrow_and_update().as_ref()});
+                let frame = mobile_frame(&mobile_frames.borrow_and_update(), own_screen);
                 if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
@@ -6591,6 +6604,20 @@ mod tests {
                 &hide_platform::fs::identity::canonical(&app).unwrap()
             )
         );
+    }
+
+    /// A screen another machine shows of this one lists the phones and can
+    /// remove one, and never receives a live pairing code (PRD
+    /// device-connect-iroh D-53, D-70).
+    #[test]
+    fn a_screen_of_another_machine_gets_no_pairing_code() {
+        let payload = json!({"qr": "https://app.withhide.dev/#pair=x", "code_expires_at_ms": 9, "phones": [{"id": "a"}]});
+        let own = mobile_frame(&payload, true);
+        assert_eq!(own["payload"], payload);
+        let other = mobile_frame(&payload, false);
+        assert_eq!(other["payload"]["qr"], Value::Null);
+        assert_eq!(other["payload"]["code_expires_at_ms"], Value::Null);
+        assert_eq!(other["payload"]["phones"], payload["phones"]);
     }
 
     /// Add a project's folder list words a node's refusal by the code the

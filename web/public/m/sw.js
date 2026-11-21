@@ -7,7 +7,8 @@
 // A push carries the core's chosen row sentence as detail (or, for a question
 // the core asks for the agent, its subject, worded here), the status_code,
 // the agent's title, its state
-// ("needs_you" | "done" | "observer_unconfirmed" | "letter_undelivered") and
+// ("needs_you" | "done" | "observer_unconfirmed" | "letter_undelivered" |
+// "phone_paired", a new phone paired with that computer) and
 // its place. The words for the state belong to the
 // language the phone page is in, so the page posts `{type: "words", words}` on
 // load, on every language change and when a subscription is created, and this
@@ -102,10 +103,10 @@ function isWord(value) {
 self.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
-  const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
+  const { needs_you, done, observer_unconfirmed, letter_undelivered, phone_paired } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
   const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished", "look"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision", "subject_mission_attention", ...["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"].map((reason) => `subject_mission_attention_${reason}`), "subject_input_unconfirmed_brief", "subject_input_unconfirmed_letter", "subject_input_unconfirmed_brief_held", "subject_input_unconfirmed_letter_held", "subject_human_turn", "subject_human_turn_auth", "subject_human_turn_permission", "subject_human_turn_install"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
-  const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
+  const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, phone_paired, ...statusWords });
   event.waitUntil(
     caches
       .open(WORDS_CACHE)

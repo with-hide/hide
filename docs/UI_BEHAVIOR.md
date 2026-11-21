@@ -3432,6 +3432,9 @@ A foreign HTTPS entry or Funnel is refused; a failed removal remains visible unt
 The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
 The phone pause switch is on Settings > Notifications, and its choice survives a restart.
 A phone is told only when an agent waits on the operator’s answer, a question, an approval or a block, never when it finishes (status-model.md, Phone notices).
+On a screen another machine shows of this one, the page lists the phones with 연결 해제 and offers no QR: a phone pairs only from this machine's own window or its terminal, and hided sends that screen no code (PRD device-connect-iroh D-53, D-70).
+Once connections between two Hides are offered (`HIDE_DEVICE_CONNECT` until that feature ships), a computer with no window pairs a phone from its terminal with `hide phone pair`, which turns Mobile on when it is off, draws the same QR in the terminal and says which phone connected; `hide phone list` and `hide phone remove <phone>` are this page's list and 연결 해제 ([INSTALL.md](INSTALL.md#connect-your-phone)).
+When a new phone pairs, each phone already paired with this computer is told once, 새 폰이 연결됐어요 under the computer's name with the new phone's, whether or not the computer is in use, so a pairing the operator did not make is seen.
 
 ### Settings > External tools
 

@@ -3209,6 +3209,51 @@
             "title": "PaneSent",
             "type": "object"
         },
+        "phone_list": {
+            "properties": {
+                "enabled": {
+                    "type": "object"
+                },
+                "max_phones": {
+                    "type": "object"
+                },
+                "phones": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "enabled",
+                "phones",
+                "max_phones"
+            ],
+            "type": "object"
+        },
+        "phone_paired": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "type": "object"
+        },
+        "phone_removed": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                },
+                "phone_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "phone_id",
+                "name"
+            ],
+            "type": "object"
+        },
         "plan": {
             "properties": {
                 "plan": {
@@ -6926,6 +6971,73 @@
         },
         {
             "answers": [
+                "phone_paired"
+            ],
+            "arguments": [],
+            "command": "phone pair",
+            "hidden": true,
+            "options": [],
+            "refusals": [
+                "phone_pair_from_pane",
+                "phone_pair_needs_terminal",
+                "phone_window_small",
+                "phone_limit",
+                "phone_pair_ended",
+                "mobile_unreachable",
+                "mobile_failed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "phone_list"
+            ],
+            "arguments": [],
+            "command": "phone list",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "phone_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "phone",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "phone remove",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "phone_unknown",
+                "phone_ambiguous"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "pane_read"
             ],
             "arguments": [
@@ -9257,7 +9369,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b789620df8c066dc4d232d14377a00066c8973c8d98396a6b34e0ee26ea6fae4",
+    "digest": "sha256:6e9f652aa0d38570d8fe8a98022f00356be594dbdfb96574dd88eb672c18071e",
     "envelopes": {
         "access": {
             "answer": "value",

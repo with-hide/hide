@@ -213,6 +213,7 @@ fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
         install: env.install.clone(),
         access: None,
         device: None,
+        phone: None,
     };
     let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
@@ -314,6 +315,26 @@ pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
 /// [`pairing_ask`] for an ask whose answer is the end of work the daemon
 /// does first, which `within` bounds.
 pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
+    operator_ask(env, Some(ask), None, within)
+}
+
+/// How long `hide phone` waits for one answer: past `pair` turning Mobile on
+/// and waiting for the relay (`mobile::command`).
+const PHONE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// One ask about the phones paired with this computer
+/// (`crate::mobile::command`), answered as [`pairing_ask`] is.
+pub fn phone_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    operator_ask(env, None, Some(ask), PHONE_TIMEOUT)
+}
+
+/// One `hide device` or `hide phone` ask of this machine's own daemon.
+fn operator_ask(
+    env: &Env,
+    device: Option<Value>,
+    phone: Option<Value>,
+    within: Duration,
+) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     let request = serde_json::to_value(PaneRequest {
@@ -325,7 +346,8 @@ pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Val
         hook: None,
         install: None,
         access: None,
-        device: Some(ask),
+        device,
+        phone,
     })
     .map_err(|_| "reference_unavailable".to_owned())?;
     let mut stream = connect_bootstrap(&env.state_dir)?;
@@ -352,6 +374,7 @@ fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
         install: None,
         access: Some(ask),
         device: None,
+        phone: None,
     })
     .map_err(|_| "reference_unavailable".to_owned())
 }

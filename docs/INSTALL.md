@@ -578,6 +578,12 @@ If you used the older Tailscale address, scan the new QR and enable notification
 The device name in the phone header lets you switch computers; **다른 기기 연결** adds another one, including inside the Home Screen app.
 Each computer allows four paired phones, and Settings > Mobile lets you disconnect any of them.
 
+On a computer with no screen, such as a server you reach over SSH, run `hide phone pair` in a terminal outside Hide's panes: it turns Mobile on, draws the QR in the terminal and waits until a phone scans it.
+It needs a terminal window big enough for the QR, about 80 columns by 45 rows, and says how big when the window is smaller; it never prints the link the QR holds.
+`hide phone list` shows the paired phones and `hide phone remove <phone>` disconnects one, by its name or the id the list shows.
+When a new phone pairs, the phones already paired with that computer are told once.
+These commands come with connections between two Hides and are refused until that feature ships.
+
 **고급 · Tailscale로 직접 연결** keeps the existing direct option on systems that support it.
 Switching connection method shows only that method's paired phones; scan its QR to pair again, or switch back to see the earlier phones.
 Turning Mobile off closes the relay and all phone connections.

@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { MobileTab } from "./MobileTab";
 import type { MobileState } from "./mobileSettings";
+import { NOTHING_UNDER_WAY } from "./pairing";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
@@ -40,7 +41,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(mobile: MobileState) {
+/** `own`: this machine's own window, which hided sends the `pairing` frame; a screen another machine shows of this one gets none. */
+async function mount(mobile: MobileState, own = true) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -50,7 +52,7 @@ async function mount(mobile: MobileState) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", mobile } as never);
+    useShellStore.setState({ connection: "live", mobile, pairing: own ? NOTHING_UNDER_WAY : null } as never);
     root.render(<MobileTab actions={actions} />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
@@ -146,5 +148,16 @@ it("keeps a direct cleanup failure in the connection line while relay pairing re
   expect(container.querySelector("[data-mobile-connection]")?.textContent).not.toContain("Connected · Hide relay");
   expect(q('[data-mobile-show-code="true"]')).not.toBeNull();
   expect(container.querySelector('[role="alert"], [role="dialog"]')).toBeNull();
+  await unmount();
+});
+
+// PRD device-connect-iroh D-53, D-70: a screen another machine shows of this one removes a phone and never pairs one.
+it("offers no pairing on a screen of another machine, and keeps Revoke there", async () => {
+  const phone = { id: "p1", name: "iPhone", last_seen_ms: 0, connected: true, notifications: "on", revoke_at_ms: 1 } as MobileState["phones"][number];
+  const { events, q, unmount } = await mount(frame({ method: "relay", checklist: null, phones: [phone] }), false);
+  expect(q("[data-mobile-pairing]")).toBeNull();
+  expect(q("[data-mobile-show-code]")).toBeNull();
+  await act(async () => { q('[data-mobile-revoke="p1"]')?.click(); });
+  expect(kinds(events)).toContain("mobile_revoke");
   await unmount();
 });

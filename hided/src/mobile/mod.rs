@@ -12,6 +12,7 @@
 //! What the renderer sees is one `mobile` frame, republished on every
 //! change; what it asks is one of the `mobile_*` events.
 
+pub mod command;
 pub mod conversation;
 pub mod html_look;
 pub mod looks;
@@ -261,6 +262,9 @@ struct Inner {
     missed_check: bool,
     /// Whether a pass is owed for a change no pass has read yet.
     reconcile_owed: PassOwed,
+    /// The last code a phone paired with, by its `command::code_id`, and
+    /// that phone's name: what `hide phone pair` waits for.
+    paired_code: Option<(String, String)>,
 }
 
 /// A change of hide's own settings, or the start, that no pass has read yet.
@@ -482,6 +486,7 @@ impl Mobile {
                 inputs: HashMap::new(),
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
+                paired_code: None,
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
@@ -625,12 +630,12 @@ impl Mobile {
             .send_modify(|generation| *generation = generation.wrapping_add(1));
     }
 
-    /// The mac's name on the phone: its tailnet name, else the system's.
     /// Whether this build offers connections between two Hides (`Config::device_connect`).
     pub fn device_connect(&self) -> bool {
         self.config.device_connect
     }
 
+    /// The mac's name on the phone: its tailnet name, else the system's.
     pub fn mac_name(&self) -> Option<String> {
         let inner = self.lock();
         inner
@@ -1418,28 +1423,38 @@ impl Mobile {
         Ok(payload)
     }
 
+    /// Every phone a notice can reach, but `except`.
+    fn routes(inner: &Inner, except: Option<&str>) -> Vec<(String, Route)> {
+        inner
+            .phones
+            .current()
+            .filter(|phone| Some(phone.id.as_str()) != except)
+            .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
+            .take(phones::MAX_PHONES)
+            .collect()
+    }
+
+    /// The contact a Web Push request names (RFC 8292's `sub`).
+    fn push_subject(inner: &Inner) -> String {
+        inner
+            .settings
+            .serve
+            .as_ref()
+            .map(|serve| format!("https://{}", serve.dns_name))
+            .unwrap_or_else(|| "mailto:hide@localhost".into())
+    }
+
     fn push_delivery(&self, notice: &HumanNotice) -> Result<(), &'static str> {
         let (targets, subject) = {
             let inner = self.lock();
-            let targets = inner
-                .phones
-                .current()
-                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
-                .take(4)
-                .collect::<Vec<_>>();
+            let targets = Self::routes(&inner, None);
             push::notice_route(
                 inner.settings.push_mode,
                 inner.settings.enabled,
                 self.config.desktop.rests_phone(),
                 targets.len(),
             )?;
-            let subject = inner
-                .settings
-                .serve
-                .as_ref()
-                .map(|serve| format!("https://{}", serve.dns_name))
-                .unwrap_or_else(|| "mailto:hide@localhost".into());
-            (targets, subject)
+            (targets, Self::push_subject(&inner))
         };
         let payload = self.push_payload(
             &push::Notice {
@@ -1467,6 +1482,59 @@ impl Mobile {
             },
             &BTreeSet::new(),
         )?;
+        self.send_notice(targets, &subject, &payload)
+    }
+
+    /// A new phone paired: each phone already paired hears it once, whether
+    /// or not the computer is in use, so a pairing the operator did not make
+    /// is seen (PRD device-connect-iroh D-70). The notice names this computer
+    /// and the new phone, and opens this computer's list.
+    fn push_phone_paired(&self, phone: &PhoneRecord) {
+        let title = self.mac_name().unwrap_or_else(|| "Hide".to_owned());
+        let (targets, subject) = {
+            let inner = self.lock();
+            if !inner.settings.enabled {
+                return;
+            }
+            (
+                Self::routes(&inner, Some(&phone.id)),
+                Self::push_subject(&inner),
+            )
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let notice = push::Notice {
+            key: AgentKey {
+                device_id: String::new(),
+                pane_id: String::new(),
+            },
+            title,
+            status_code: None,
+            detail: Some(phone.name.clone()),
+            subject: None,
+            state: push::NoticeState::PhonePaired,
+            place: String::new(),
+        };
+        let sent = self
+            .push_payload(&notice, &BTreeSet::new())
+            .and_then(|payload| self.send_notice(targets, &subject, &payload));
+        if let Err(reason) = sent {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_pairing", "kind": "phone.paired_notice_failed",
+                "phone_id": phone.id, "reason": reason,
+            }));
+        }
+    }
+
+    /// Sends one notice to `targets`: `Ok` when a phone got it, else why
+    /// none did (`send_failed`, `subscription_gone` or `stopping`).
+    fn send_notice(
+        &self,
+        targets: Vec<(String, Route)>,
+        subject: &str,
+        payload: &Value,
+    ) -> Result<(), &'static str> {
         let (mut delivered, mut failed) = (false, false);
         for (phone_id, route) in targets {
             if *self.stopping.borrow() {
@@ -1475,7 +1543,7 @@ impl Mobile {
             let subscription = match route {
                 Route::Web(subscription) => subscription,
                 Route::App => {
-                    match self.push_to_app(&phone_id, &payload) {
+                    match self.push_to_app(&phone_id, payload) {
                         Ok(()) => delivered = true,
                         Err("token_gone") => {}
                         Err(_) => failed = true,
@@ -1487,7 +1555,7 @@ impl Mobile {
                 failed = true;
                 continue;
             };
-            match self.send_web(&phone_id, vapid, &subject, &subscription, &payload) {
+            match self.send_web(&phone_id, vapid, subject, &subscription, payload) {
                 push::SendOutcome::Delivered => delivered = true,
                 push::SendOutcome::Gone(_) => {
                     self.lock()
@@ -1754,7 +1822,11 @@ impl Mobile {
 
     /// Pairs a phone with the live code (the phone's `pair` handshake). A
     /// code exists only while Mobile is exposed.
-    pub fn pair(&self, code: &str, user_agent: &str) -> Result<(PhoneRecord, String), PairRefusal> {
+    pub fn pair(
+        self: &Arc<Self>,
+        code: &str,
+        user_agent: &str,
+    ) -> Result<(PhoneRecord, String), PairRefusal> {
         let (result, route) = {
             use hide_core::product_analytics::PhoneRoute;
             let mut inner = self.lock();
@@ -1763,10 +1835,14 @@ impl Mobile {
                 Exposure::Relay => Some(PhoneRoute::Relay),
                 _ => None,
             };
+            let spent = inner.phones.code().map(|(code, _)| command::code_id(code));
             let result = match route {
                 Some(_) if inner.settings.enabled => inner.phones.pair(code, user_agent, now_ms()),
                 _ => Err(PairRefusal::CodeExpired),
             };
+            if let (Ok((phone, _)), Some(spent)) = (&result, spent) {
+                inner.paired_code = Some((spent, phone.name.clone()));
+            }
             // The code is spent; the next phone needs `mobile_show_code`.
             (result, route)
         };
@@ -1779,6 +1855,10 @@ impl Mobile {
                     self.config.core.capture_product_event(
                         hide_core::product_analytics::Event::PhonePaired { route },
                     );
+                }
+                if self.config.device_connect {
+                    let (mobile, phone) = (Arc::clone(self), phone.clone());
+                    tokio::task::spawn_blocking(move || mobile.push_phone_paired(&phone));
                 }
             }
             Err(refusal) => hide_core::diagnostic!(json!({

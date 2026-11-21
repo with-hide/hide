@@ -1,7 +1,8 @@
 // Settings > Mobile (PRD mobile-companion B1-B7, B10, B14, B15, B29, B39;
 // settings-cleanup B57-B59): the switch, one ready line or only the failing
 // Tailscale steps with their fix, the QR once hided has confirmed its serve
-// entry and Show QR is pressed, and the paired phones with Revoke; the push
+// entry and Show QR is pressed (in this machine's own window only), and the
+// paired phones with Revoke, which any screen of this machine offers; the push
 // mode is on Settings > Notifications (PRD settings-left-nav B6, B7). Every
 // value is the daemon's `mobile` frame; every control sends one `mobile_*`
 // event.
@@ -24,6 +25,7 @@ import {
   type FailedStep,
   type MobileState,
 } from "./mobileSettings";
+import { ownWindow } from "./pairing";
 import { coreMachineName } from "./screenMachine";
 import { useShellStore } from "./store";
 
@@ -31,6 +33,9 @@ export function MobileTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const mobile = useShellStore((s) => s.mobile);
   const live = useShellStore((s) => s.connection === "live");
+  // A phone pairs only from this machine's own window; a screen another machine shows of this one lists the phones and can
+  // remove one (PRD device-connect-iroh D-53, D-70), and hided sends it no code to show.
+  const own = useShellStore((s) => ownWindow(s.pairing));
   // hided rechecks the checklist while this tab is open (B3). Opening it
   // makes no code and voids none: only Show QR does (B58). A restarted daemon
   // has forgotten the tab, so every live connection says so again.
@@ -55,14 +60,14 @@ export function MobileTab({ actions }: { actions: Actions }) {
         </Row>
         {(mobile.enabled || mobile.exposure === "failed") && mobile.method === "relay" ? <RelayConnection state={mobile} actions={actions} /> : null}
         {/* A removal that failed at switch-off stays on screen until it is finished (B7). */}
-        {mobile.method === "relay" && mobile.enabled && mobile.exposure === "exposed" ? <Pairing state={mobile} actions={actions} /> : null}
+        {own && mobile.method === "relay" && mobile.enabled && mobile.exposure === "exposed" ? <Pairing state={mobile} actions={actions} /> : null}
         <Disclosure title={t("mobileSetup.relay.advanced")}>
           <Row label={t("mobileSetup.relay.tailscale")}>
             <Switch checked={mobile.method === "tailscale"} aria-label={t("mobileSetup.relay.tailscale")}
               onCheckedChange={(direct) => actions.setMobileMethod(direct ? "tailscale" : "relay")} />
           </Row>
           {mobile.method === "tailscale" && mobile.enabled ? <Checks state={mobile} /> : null}
-          {mobile.method === "tailscale" && (mobile.enabled || mobile.exposure === "failed") ? <Pairing state={mobile} actions={actions} /> : null}
+          {own && mobile.method === "tailscale" && (mobile.enabled || mobile.exposure === "failed") ? <Pairing state={mobile} actions={actions} /> : null}
         </Disclosure>
       </Group>
       {mobile.phones.length > 0 ? <Phones state={mobile} actions={actions} /> : null}

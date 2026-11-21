@@ -51,6 +51,7 @@ pub mod page_forward;
 pub mod pairing;
 pub mod pairing_ssh;
 pub mod pane_cli;
+pub mod phone_cli;
 pub mod pane_install;
 pub mod plan_cli;
 pub mod profile_cli;
@@ -780,6 +781,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             port,
             desktop_renderers: Arc::clone(&app.desktop_renderers),
             pairing,
+            mobile: Arc::clone(&mobile),
             health: Arc::clone(&listeners.pane_bootstrap),
         },
         shutdown.clone(),

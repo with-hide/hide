@@ -105,3 +105,14 @@ fn without_the_hook_the_same_print_still_panics() {
         },
     );
 }
+
+/// A command that draws a picture asks for its window first: standard output
+/// that is a pipe has none, on every system, so the command refuses to draw
+/// rather than guess a size.
+#[test]
+fn a_pipe_has_no_window() {
+    isolated_case("stdio::a_pipe_has_no_window", || {
+        assert!(hide_platform::stdio::stdout_window().is_err());
+        assert!(hide_platform::stdio::stdout_escapes().is_err());
+    });
+}
