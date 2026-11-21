@@ -2,7 +2,7 @@
 // B24): the status mark the desktop row draws, the provider mark, the
 // task name, and the project · branch with the SSH device's chip.
 
-import { ServerIcon } from "lucide-react";
+import { LaptopIcon, ServerIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { AgentMark } from "../AgentMark";
 import { StatusMark } from "../components/status-mark";
@@ -46,20 +46,29 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
   );
 }
 
-/** The SSH device's chip: where an agent or a mission runs when that is not this Mac. */
-export function DeviceTag({ label }: { label: string }) {
+/**
+ * The SSH device's chip: where an agent or a mission runs when that is not this Mac. `computer` is the gathered view's mark of the
+ * paired computer whose work the row is (`gather.ts`), drawn outlined so it reads apart from a device the work runs on.
+ */
+export function DeviceTag({ label, computer = false }: { label: string; computer?: boolean }) {
+  const Icon = computer ? LaptopIcon : ServerIcon;
   return (
-    <span className="inline-flex shrink-0 items-center gap-xs rounded-md bg-secondary px-sm text-body text-subtle-foreground" data-phone-device={label}>
-      <ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+    <span
+      className={`inline-flex shrink-0 items-center gap-xs rounded-md px-sm text-body text-subtle-foreground ${computer ? "border border-border" : "bg-secondary"}`}
+      {...(computer ? { "data-phone-computer": label } : { "data-phone-device": label })}
+    >
+      <Icon aria-hidden="true" className="size-(--size-icon-sm)" />
       {label}
     </span>
   );
 }
 
-export function Place({ agent, inset }: { agent: PhoneAgent; inset: string }) {
-  if (!agent.place && !agent.device_label && !agent.tool) return null;
+/** The row's place line: `computer` leads it in the gathered view, the computer whose work the row is. */
+export function Place({ agent, inset, computer }: { agent: PhoneAgent; inset: string; computer?: string }) {
+  if (!agent.place && !agent.device_label && !agent.tool && !computer) return null;
   return (
     <span className={`flex min-w-0 items-center gap-sm ${inset} text-body text-muted-foreground`}>
+      {computer ? <DeviceTag label={computer} computer /> : null}
       {/* The tool whose work this is leads the line, as on the desktop's sidebar row (PRD hide-external-control B46). */}
       {agent.tool ? <span className="flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs" data-phone-tool={agent.tool}><span className="min-w-0 truncate">{agent.tool}</span>{agent.place ? <span aria-hidden="true">·</span> : null}</span> : null}
       {agent.place ? <span className="min-w-0 truncate">{agent.place}</span> : null}

@@ -10,6 +10,7 @@ import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
+import { listScopeOf } from "./gather";
 
 export type Screen =
   /** The native app is still reading its saved connection, so no destination is known yet. */
@@ -145,6 +146,8 @@ type PhoneState = {
   detail: Detail | null;
   /** The bottom bar's place while no detail is open, and the mission whose page is open on the missions tab; an agent opened from a step returns to it. */
   tab: PhoneTab;
+  /** The agents tab of a phone paired with two computers or more: every computer's 내 차례 and 읽을 것 (`all`), or this computer's list (`one`). */
+  listScope: "all" | "one";
   missionOpen: string | null;
   /** Null until the first missions frame; kept across a lost connection, dimmed under the unreachable line (B45). */
   missions: PhoneMission[] | null;
@@ -228,6 +231,7 @@ const initial: PhoneState = {
   foldsOpen: {},
   detail: null,
   tab: "agents",
+  listScope: typeof location === "undefined" ? "all" : listScopeOf(new URLSearchParams(location.search)),
   missionOpen: null,
   missions: null,
   missionsFailed: false,
@@ -267,6 +271,15 @@ export const usePhone = create<PhoneState>(() => initial);
 
 export function patch(next: Partial<PhoneState>): void {
   usePhone.setState(next);
+}
+
+/** Switches the agents tab between every computer and this one, and keeps the choice in the address so a reload keeps it too. */
+export function setListScope(scope: "all" | "one"): void {
+  patch({ listScope: scope });
+  const query = new URLSearchParams(location.search);
+  if (scope === "one") query.set("one", "1"); else query.delete("one");
+  const search = query.toString();
+  window.history.replaceState(window.history.state, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`);
 }
 
 /** Applies one frame from hided; the socket owns what the frame asks it to do next. */

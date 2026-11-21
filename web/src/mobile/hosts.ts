@@ -204,8 +204,10 @@ export function hostToOpen(query: URLSearchParams, hosts: readonly PairedHost[])
   return hosts[0]!.credential === null ? null : hosts[0]!;
 }
 
-export function hostLink(host: PairedHost, tag?: string): string {
+/** The start page that opens `host`: at `tag`'s agent when given, and on that computer's list alone with `one` (`gather.ts`). */
+export function hostLink(host: Pick<PairedHost, "room">, tag?: string, one = false): string {
   const query = new URLSearchParams({ host: host.room });
   if (tag) query.set("open", tag);
+  if (one) query.set("one", "1");
   return `/?${query}`;
 }
