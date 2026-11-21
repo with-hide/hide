@@ -174,6 +174,63 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
   }
 });
 
+test("focus mode's desk shows the left pane's tabs and what the operator opens meanwhile, folds the rest, and a closed tab is followed by the left pane's own (D-60)", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const fixture = path.join(engine.root, "fixture");
+    for (const name of ["a.md", "c.md", "b.md", "notes.md", "later.md"]) fs.writeFileSync(path.join(fixture, name), `# ${name}\n`);
+    daemon = await startHided(engine, "pair-view-own-tabs");
+    const [left, other] = engine.panes;
+    const otherAgent = await agentPane(engine, daemon.stateDir, other!);
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
+    await withControl(daemon, (control) => focusPane(control, left!));
+    const open = async (agent: typeof leftAgent, name: string) => {
+      const answer = await agent(["file", "open", name]);
+      expect(answer.status, answer.out).toBe(0);
+    };
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+
+    // Before focus mode: the left agent's two files, the other agent's file brought onto the desk, and one the operator opened.
+    await open(leftAgent, "a.md");
+    await open(leftAgent, "c.md");
+    await open(otherAgent, "b.md");
+    await showDocuments(page);
+    await page.locator(`[data-pane-views="${other}"]`).click();
+    await page.getByRole("menuitem", { name: /b\.md/ }).click();
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
+    await expect(deskTabs(page)).toHaveCount(4);
+
+    // (1)-(3): the strip holds the left agent's tabs only; the other agent's and the operator's earlier one fold.
+    await pairButton(page, left!).click();
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    const labels = () => deskTabs(page).evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute("aria-label") ?? "").map((label) => label.split(" · ")[0]!.replace(/.*\//, "")).sort());
+    await expect.poll(labels).toEqual(["a.md", "c.md"]);
+    await expect(page.locator('[data-pair-others="2"]')).toBeVisible();
+
+    // (5): closing the tab in front brings the left agent's other tab in front, never a folded one.
+    await front(page).click();
+    await page.keyboard.press(chord("close_tab"));
+    await expect(deskTabs(page)).toHaveCount(1);
+    await expect(front(page)).toHaveAttribute("aria-label", /\/(a|c)\.md/);
+    await expect(page.locator('[data-pair-others="2"]')).toBeVisible();
+
+    // (4): what the operator opens while the mode is on stands in front, on the strip.
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/later.md"]').click();
+    await expect(front(page)).toHaveAttribute("aria-label", /\/later\.md/);
+    await expect(deskTabs(page)).toHaveCount(2);
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await screenshot(page, "pair-own-tabs");
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
 test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep it on the agent gone to, a restart keeps it, off stays off, and it ends when its pane closes", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const engine = await startFixture({ agents: false });

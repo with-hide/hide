@@ -3289,10 +3289,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * ⌘. (B18, B26, D-45, D-53): the mode turns off wherever the keyboard
-     * is; otherwise the focused pane enters it, beside its desk or alone.
+     * is; otherwise, with the keyboard on a desk tab, that tab enters it in
+     * front beside the pane it belongs to, as its pin does; elsewhere the
+     * focused pane enters it, beside its desk or alone. One key, one event.
      */
     pairViewKey() {
-      if (pairModeOn(workspaceViewOf(rest()))) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      const view = workspaceViewOf(rest());
+      if (pairModeOn(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      const owner = keyboardCommandOwner();
+      const onDesk = owner.kind === "view" && view?.layout ? findArea(view.layout.root, owner.areaId)?.active ?? null : null;
+      if (onDesk) return this.pinPairView(onDesk);
       const paneId = useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("pair_view: no focused pane");
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
@@ -3963,6 +3969,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
             name: granted.name,
             kind: granted.kind,
             request_id,
+            // The pane whose link was pressed owns the View, a shell's too (D-54).
+            ...(openerPane ? { opener_pane: openerPane } : {}),
             ...(front ? { workspace: front } : { pane_id: openerPane, reveal: true }),
           },
         });
