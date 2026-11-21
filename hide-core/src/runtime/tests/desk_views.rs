@@ -2886,7 +2886,11 @@ fn e_folds_and_shows_the_desk_in_focus_mode() {
     assert!(pair_desk_event(&mut runtime, true));
     runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
-    assert_eq!(front_pair(&runtime).shown, 1, "the web reads what can stand");
+    assert_eq!(
+        front_pair(&runtime).shown,
+        1,
+        "the web reads what can stand"
+    );
 
     // The left agent's open onto the folded desk stands it again (D-21).
     assert!(pair_desk_event(&mut runtime, false));
