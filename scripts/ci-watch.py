@@ -9,8 +9,8 @@ every `--interval` seconds and ends as soon as one has finished failed, naming
 it and the command that prints its log. A failed step alone decides nothing: a
 step marked `continue-on-error` (a flaky report, a plan record) can fail in a
 job that passes.
-It ends 0 when the run's `verify` job passes, and a run without one (a hand run
-of another workflow) when the run succeeds.
+It ends 0 only when the run's `verify` job passed: a run that ends without a
+passed `verify` (none, skipped or cancelled) never reads as a pass.
 
     python3 scripts/ci-watch.py --pr <number>          the newest verify run on the pull request's head
     python3 scripts/ci-watch.py --branch main --sha <commit>   main's push run of a merge
@@ -104,10 +104,8 @@ def judge(run, jobs):
         return None
     if run["conclusion"] == "cancelled":
         return 2, [f"cancelled: run {run['id']} ended before {WORKFLOW} did; a newer push replaces it ({run['html_url']})"]
-    if run["conclusion"] == PASSED and not verify:
-        return 0, [f"passed: run {run['id']} ({run['html_url']})"]
-    # A run that ended failed with no failed job or step: a job its own limit
-    # cancelled, or `verify` skipped.
+    # The run ended and `verify` did not pass: a job its own limit cancelled,
+    # or no `verify` verdict at all (none, or skipped), which is not a pass.
     ended = [job for job in jobs if job["conclusion"] not in (PASSED, "skipped")]
     if ended:
         job = min(ended, key=lambda job: (job.get("completed_at") or "", job["id"]))

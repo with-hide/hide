@@ -114,9 +114,18 @@ class Passing(unittest.TestCase):
         status, lines, sleeps = follow(github)
         self.assertEqual((status, sleeps), (0, 1))
 
-    def test_a_run_without_verify_passes_when_it_succeeds(self):
-        github = GitHub([(run("completed", "success", name="repeat"), [passed("repeat web specs")])])
-        self.assertEqual(follow(github)[0], 0)
+    def test_a_run_that_ends_without_verify_passing_is_never_a_pass(self):
+        green = [passed("plan"), passed("rust workspace / build tests")]
+        for case, jobs, conclusion, expected in (
+            ("no verify job", green, "success", 2),
+            ("verify skipped", green + [job("verify", "completed", "skipped", "2026-11-21T12:20:00Z")], "success", 2),
+            ("verify cancelled", green + [job("verify", "completed", "cancelled", "2026-11-21T12:20:00Z")], "failure", 1),
+            ("another workflow", [passed("repeat web specs")], "success", 2),
+        ):
+            with self.subTest(case):
+                status, lines, _ = follow(GitHub([(run("completed", conclusion), jobs)]))
+                self.assertEqual(status, expected, lines)
+                self.assertFalse(any(line.startswith("passed") for line in lines))
 
 
 class Replaced(unittest.TestCase):
