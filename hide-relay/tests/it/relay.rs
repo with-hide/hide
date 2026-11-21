@@ -615,14 +615,18 @@ fn cli_config_rejects_unknown_duplicate_and_malformed_arguments_without_values()
 }
 
 #[tokio::test]
-#[ignore = "capacity load: requires at least 1100 file descriptors for both ends of 512 sockets"]
-async fn production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513() {
+#[ignore = "capacity load: requires at least 3200 file descriptors for both ends of 1536 sockets"]
+async fn production_capacity_keeps_384_rooms_live_and_refuses_only_socket_1537() {
     let mut fixture = Fixture::start(Limits::default()).await;
+    assert_eq!(hide_relay::limits::MAX_CONNECTIONS, 384 * 4);
     let mut rooms = Vec::new();
-    for room in 0..128u8 {
-        let ip = format!("192.0.2.{}", room + 1);
+    for room in 0..384u16 {
+        // Four sockets an address, well inside one address's window.
+        let ip = format!("10.0.{}.{}", room / 200, room % 200 + 1);
+        let mut seed = [7u8; 32];
+        seed[..2].copy_from_slice(&room.to_le_bytes());
         let mut device = fixture.socket(&ip).await;
-        let hello = register(&mut device, &DeviceKey::from_seed(&[room; 32])).await;
+        let hello = register(&mut device, &DeviceKey::from_seed(&seed)).await;
         let mut phones = Vec::new();
         for _ in 0..3 {
             let mut phone = fixture.socket(&ip).await;
@@ -635,15 +639,14 @@ async fn production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513() 
     let mut excess = fixture.socket("198.51.100.1").await;
     refused(&mut excess, Refusal::ConnectionLimit).await;
     closed(&mut excess, 1013).await;
-    // All 384 Noise sessions remain usable while all 512 slots are occupied.
-    // Three bursts carry 72 MiB of application data in both directions.
+    // All 1,152 Noise sessions remain usable while all 1,536 slots are
+    // occupied: one burst carries 72 MiB of application data in both
+    // directions.
     let payload = vec![42; 32 * 1024];
-    for _ in 0..3 {
-        for (device, phones) in &mut rooms {
-            for (phone, p, d) in phones {
-                exchange(phone, device, p, d, &payload).await;
-                exchange(device, phone, d, p, &payload).await;
-            }
+    for (device, phones) in &mut rooms {
+        for (phone, p, d) in phones {
+            exchange(phone, device, p, d, &payload).await;
+            exchange(device, phone, d, p, &payload).await;
         }
     }
     fixture.cap("connections");
