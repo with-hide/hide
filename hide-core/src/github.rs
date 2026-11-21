@@ -29,7 +29,7 @@ use crate::model::{
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
-    GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS,
+    AUTH_STATUS, GhAnswer, OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS,
     REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN,
     is_number,
 };
@@ -399,7 +399,7 @@ fn read_root(
 fn authentication(node: &dyn NodeLink) -> Result<Signed, GhFailure> {
     use std::hash::{Hash, Hasher};
     supported_version(gh(node, None, &VERSION))?;
-    let status = gh(node, None, &["auth", "status"])?;
+    let status = gh(node, None, &AUTH_STATUS)?;
     let mut token = std::collections::hash_map::DefaultHasher::new();
     status.hash(&mut token);
     let token = token.finish();
@@ -3725,7 +3725,13 @@ mod tests {
             let unscoped = *self.auth_status.lock().unwrap() == UNSCOPED;
             let answer = match words.as_slice() {
                 ["--version"] => output(self.version),
-                ["auth", "status"] => output(*self.auth_status.lock().unwrap()),
+                ["auth", "status", "--active"] => output(*self.auth_status.lock().unwrap()),
+                // What gh 2.105 answers when another stored account's token
+                // has lapsed, though the active one is signed in (#2767).
+                ["auth", "status"] => GhAnswer::Failed {
+                    category: GithubFailureCategory::NotLoggedIn,
+                    reason: "X Failed to log in to github.com account other (default)\n  - Active account: false\n  - The token in default is invalid.".to_owned(),
+                },
                 // What GitHub answers a token without `read:project` (gh 2.76).
                 ["issue", ..] if unscoped && words.iter().any(|w| w.contains("projectItems")) => {
                     GhAnswer::Failed {
@@ -3766,6 +3772,15 @@ mod tests {
         let current = Repository::new("gh version 2.72.0 (2025-04-30)\n", false);
         let project = current.read();
         assert_eq!(project.status.failure_category, None);
+        assert!(project.pull_requests_read && project.issues_read);
+    }
+
+    #[test]
+    fn a_lapsed_inactive_account_beside_a_signed_in_active_one_still_reads_github() {
+        let repository = Repository::new("gh version 2.76.2 (2025-07-30)\n", false);
+        let project = repository.read();
+        assert_eq!(project.status.failure_category, None);
+        assert_eq!(project.status.unavailable_reason, None);
         assert!(project.pull_requests_read && project.issues_read);
     }
 

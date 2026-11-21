@@ -84,7 +84,7 @@ impl Programs {
     }
 }
 
-/// `gh auth status` exits 0: the core reads GitHub with this machine's
+/// `gh auth status --active` exits 0: the core reads GitHub with this machine's
 /// login once it runs here (PRD core-host-node-remote-core D-16).
 pub(crate) fn gh_signed_in(
     home: &Path,
@@ -103,7 +103,7 @@ pub(crate) fn gh_signed_in(
         }
     };
     command
-        .args(["auth", "status"])
+        .args(hide_node_link::gh::AUTH_STATUS)
         .env(hide_platform::host::HOME_VARIABLE, home);
     let finished = match hide_platform::process::run_to_end(&mut command, PROGRAM_WITHIN, stop) {
         Err(hide_platform::process::RunFailure::Start(error))
