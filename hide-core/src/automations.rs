@@ -739,6 +739,12 @@ pub enum Call {
         id: String,
         run: u64,
         on: bool,
+        /// With `on` false, the pane the operator was on before the screen
+        /// gave the run's pane the focus: it takes the focus back unless
+        /// something since moved it off the run's pane (operator decision
+        /// 2026-11-21).
+        #[serde(default)]
+        restore: Option<String>,
     },
     /// The operator looked at the automation's runs (B11).
     Seen {

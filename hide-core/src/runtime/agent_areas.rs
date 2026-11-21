@@ -1151,8 +1151,9 @@ impl Runtime {
     /// a local close is taking away (`PendingClose::leaving_tab`), so its chip
     /// leaves when the close is approved and each area shows what it will show
     /// once the engine confirms. The stored layout keeps the tab, so a close that
-    /// does not happen puts it back where it stood. Nothing is cloned while
-    /// no close is running.
+    /// does not happen puts it back where it stood. An automation run's tab is
+    /// left out too (`automation_run_tabs`). Nothing is cloned while no close
+    /// is running and no run's tab is in the layout.
     pub(super) fn shown_agent_layout<'a>(
         &self,
         key: &WorkspaceKey,
@@ -1161,11 +1162,13 @@ impl Runtime {
         if key.0 != self.node.as_str() {
             return Cow::Borrowed(layout);
         }
+        let runs = self.automation_run_tabs(key);
         let leaving = self
             .close_operations
             .values()
             .filter(|operation| operation.request.context.checkout_path == key.1)
             .filter_map(|operation| operation.leaving_tab())
+            .chain(runs.iter().map(String::as_str))
             .filter(|id| {
                 layout.tree.display(id).is_some() || layout.canvases.values().any(|tab| tab == id)
             })
@@ -1184,12 +1187,36 @@ impl Runtime {
         Cow::Owned(shown)
     }
 
+    /// The tabs of `key` that hold only automation runs' terminals: a run
+    /// lives in the automation screen, never in its folder's tab row (PRD
+    /// automations B12), also when that folder is one of the operator's
+    /// projects.
+    fn automation_run_tabs(&self, key: &WorkspaceKey) -> Vec<String> {
+        let runs: HashSet<&str> = self.automation_run_panes().collect();
+        if runs.is_empty() {
+            return Vec::new();
+        }
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == key.0)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == key.1)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter(|tab| {
+                !tab.panes.is_empty()
+                    && tab.panes.iter().all(|pane| runs.contains(pane.id.as_str()))
+            })
+            .filter_map(|tab| tab.id.clone())
+            .collect()
+    }
+
     pub(super) fn agent_layout_snapshot(
         &self,
         key: &WorkspaceKey,
         layout: &Layout,
     ) -> crate::model::AgentLayoutSnapshot {
         let layout = self.shown_agent_layout(key, layout);
+        let runs = self.automation_run_tabs(key);
+        let listed = |id: &String| !runs.contains(id);
         let view = self
             .workspace_views
             .as_ref()
@@ -1204,18 +1231,22 @@ impl Runtime {
                         .tree
                         .displays()
                         .map(|t| t.id.clone())
+                        .filter(listed)
                         .collect(),
                 })
-                .chain(
-                    view.agent_groups
-                        .items
-                        .iter()
-                        .map(|g| crate::model::AgentGroupSnapshot {
-                            id: Some(g.id.clone()),
-                            name: Some(g.name.clone()),
-                            tabs: g.layout.tree.displays().map(|t| t.id.clone()).collect(),
-                        }),
-                )
+                .chain(view.agent_groups.items.iter().map(|g| {
+                    crate::model::AgentGroupSnapshot {
+                        id: Some(g.id.clone()),
+                        name: Some(g.name.clone()),
+                        tabs: g
+                            .layout
+                            .tree
+                            .displays()
+                            .map(|t| t.id.clone())
+                            .filter(listed)
+                            .collect(),
+                    }
+                }))
                 .collect()
             })
             .unwrap_or_default();

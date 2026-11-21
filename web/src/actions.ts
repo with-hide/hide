@@ -2127,8 +2127,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
     },
     /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
-    automationRunViewing(id: string, run: number, on: boolean) {
-      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on } });
+    automationRunViewing(id: string, run: number, on: boolean, restore: string | null = null) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on, ...(restore ? { restore } : {}) } });
     },
 
     /**
