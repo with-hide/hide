@@ -21,7 +21,7 @@ export const automationScreenEnglish = {
   "automationScreen.examples": "Start from one of these",
   "automationScreen.exampleOpen": "Start from the {{name}} example",
   "automationScreen.example.report.name": "Weekly analysis report",
-  "automationScreen.example.report.task": "Look at last week's PRs, issues and CI history, and build a report with charts of what grew and what shrank, then open it for me.",
+  "automationScreen.example.report.task": "Look at last week's PRs, issues and CI history, and open a report with charts of what grew and what shrank.",
   "automationScreen.example.briefing.name": "Morning briefing",
   "automationScreen.example.briefing.task": "Read yesterday's issues, PRs and notifications, and sum up only what to look at first today.",
   "automationScreen.example.ci.name": "Fix failed CI",
