@@ -7,8 +7,8 @@
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
 import type { AgentScope, AgentTreeScope, ProjectTasksScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
-import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, DetailItem, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, ViewDisplaySnapshot, Workspace } from "../../snapshot";
-import type { CoreEvent, WorldSnapshot } from "../world";
+import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, DetailItem, EditorDocumentSnapshot, EditorTabSnapshot, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, ViewDisplaySnapshot, Workspace } from "../../snapshot";
+import type { CoreEvent, WorldFrames, WorldSnapshot } from "../world";
 
 export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
 /** A pane, and the agent running in it; a pane with no agent is a plain shell. */
@@ -36,7 +36,8 @@ export type PracticeDesk = { place: PracticePlace; model: DeskModel };
 const ROOT = "/work";
 
 const projectPath = (place: PracticePlace) => `${ROOT}/${place.project}`;
-const checkoutId = (place: PracticePlace) => `${place.project}:${place.branch}`;
+/** The id of a desk's one checkout. */
+export const checkoutId = (place: PracticePlace) => `${place.project}:${place.branch}`;
 
 // --- The layout tree -------------------------------------------------------
 
@@ -554,6 +555,29 @@ function everyScope(rest: SnapshotRest, change: (scope: AgentScope) => AgentScop
  * kit lists every agent as a root.
  */
 type WorldView = NonNullable<WorldSnapshot["rest"]["workspace_view"]>;
+
+/** A Markdown file an agent opened for the operator, as the View shows it: where it is, its name and what it says. */
+export type ViewedFile = { path: string; label: string; contents: string; workspaceId: string; checkoutId: string };
+
+/** The id of the editor tab that holds the viewed file. */
+const VIEWED_FILE_TAB = "file1";
+
+/** `view` with `file` as the one display of the desk in front, as the core draws a file opened with `hide file open`. */
+export function withViewedFile(view: WorldView, file: ViewedFile): WorldView {
+  const display: ViewDisplaySnapshot = { id: "view1", tab_id: VIEWED_FILE_TAB, path: file.path, label: file.label, kind: "file", committed: null, preview: true, state: "open", reason: null };
+  return {
+    ...view,
+    tray: { ...view.tray, shown: true, count: 1 },
+    layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } },
+  };
+}
+
+/** The editor tab and document the core sends beside a desk that shows `file`. */
+export function viewedFileFrames(file: ViewedFile): Pick<WorldFrames, "editor" | "documents"> {
+  const tab: EditorTabSnapshot = { id: VIEWED_FILE_TAB, device_id: "local", workspace_id: file.workspaceId, checkout_id: file.checkoutId, path: file.path, label: file.label, kind: "file", diff_committed: null, markdown_live: true, wrap: false, dirty: false, preview: true };
+  const document: EditorDocumentSnapshot = { path: file.path, language: "markdown", document_kind: "markdown", contents_utf8: file.contents, revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
+  return { editor: { tabs: [tab], active_tab_id: VIEWED_FILE_TAB }, documents: { [VIEWED_FILE_TAB]: document } };
+}
 
 /** The id of the card tab a world draws `index`-th on the desk. */
 export const cardDisplayId = (index: number) => `card-${index}`;

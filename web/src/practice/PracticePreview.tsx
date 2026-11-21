@@ -115,6 +115,19 @@ const DRAWINGS: Record<PracticePreviewKind, () => ReactElement> = {
       </div>
     </>
   ),
+  // An automation's card going from grey to working to done, the sidebar's row counting it, and its result coming up in the list.
+  automation: () => (
+    <>
+      <div className="pv-side">
+        <i className="pv-r pv-come" style={{ width: "86%" }}><b className="pv-dot ask" /></i>
+        <Row width={70} />
+        <i className="pv-r" style={{ width: "78%" }}><b className="pv-dot pv-badge" /></i>
+      </div>
+      <div className="pv-main">
+        <div className="pv-pane pv-card"><Line width={50} /><Line width={30} /><b className="pv-state" /></div>
+      </div>
+    </>
+  ),
 };
 
 /** The chapter's picture; `playing` runs its move, and a still one holds the move's middle. */
@@ -201,6 +214,15 @@ export const PREVIEW_CSS = `
 .pv-hit.h2{top:55%;animation-delay:.24s}
 @keyframes pv-hit{0%,36%{opacity:0}44%,90%{opacity:1}100%{opacity:0}}
 @keyframes pv-hit-on{0%,36%{opacity:0}44%{opacity:1;background:var(--popover)}54%,90%{opacity:1;background:var(--practice-accent)}100%{opacity:0}}
+
+.pv-card{inset:var(--spacing-sm) var(--spacing-sm) auto var(--spacing-sm);height:42%;animation-name:pv-card}
+@keyframes pv-card{0%,6%{opacity:0;transform:translateY(30%)}16%,100%{opacity:1;transform:none}}
+.pv-state{position:absolute;right:var(--spacing-xs);top:var(--spacing-xs);width:var(--spacing-sm);height:var(--spacing-sm);border-radius:50%;animation-name:pv-state}
+@keyframes pv-state{0%,26%{background:color-mix(in srgb,var(--foreground) 14%,transparent)}34%,44%{background:var(--practice-zone-view)}52%,100%{background:var(--practice-zone-work)}}
+.pv-badge{background:var(--practice-accent);animation-name:pv-badge}
+@keyframes pv-badge{0%,50%{opacity:0;transform:scale(.4)}58%,100%{opacity:1;transform:none}}
+.pv-come{animation-name:pv-come}
+@keyframes pv-come{0%,56%{opacity:0;transform:translateY(-60%)}66%,100%{opacity:1;transform:none}}
 
 .pv-lane-in{animation-name:pv-lane}
 @keyframes pv-lane{0%,14%{transform:translateX(100%)}28%,86%{transform:none}96%,100%{transform:translateX(100%)}}

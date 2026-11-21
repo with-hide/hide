@@ -40,8 +40,11 @@ let dispatchFn: DispatchFn | null = null;
 const pending = new Map<string, (answer: CallAnswer<unknown>) => void>();
 let nextRequest = 1;
 
-export function configureAutomationCalls(dispatch: DispatchFn): void {
+/** Sets where calls go and returns where they went before, so a window that answers them itself (the practice window) can put the old one back. */
+export function configureAutomationCalls(dispatch: DispatchFn | null): DispatchFn | null {
+  const before = dispatchFn;
   dispatchFn = dispatch;
+  return before;
 }
 
 export function callAutomations<C extends AutomationCall>(call: C): Promise<CallAnswer<Answers[C["call"]]>> {
