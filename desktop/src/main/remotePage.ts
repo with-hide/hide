@@ -14,6 +14,18 @@ export const HIDDEN_CLOSE = 4012;
 /** The largest frame the page may send; an attachment's bytes are the largest thing it sends. */
 export const MAX_SEND_BYTES = 32 * 1024 * 1024;
 
+/**
+ * What may wait unsent on a view's socket: one largest frame and 8 MiB beside
+ * it. A host that stops reading would grow the queue without end in this
+ * app's main process, so past it the socket is closed instead.
+ */
+export const MAX_QUEUED_BYTES = MAX_SEND_BYTES + 8 * 1024 * 1024;
+
+/** Whether a frame of `size` bytes may join `queued` bytes waiting on the socket. */
+export function queueAllows(queued: number, size: number): boolean {
+  return queued + size <= MAX_QUEUED_BYTES;
+}
+
 /** A device id as hided names one: letters, digits and `-`, never an address. */
 const DEVICE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 

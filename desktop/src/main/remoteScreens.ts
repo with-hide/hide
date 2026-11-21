@@ -17,7 +17,7 @@ import { matchHost, type Command } from "../../../web/src/shortcuts";
 import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL } from "../channel";
 import { toBounds } from "./browserSync";
 import type { HostLog } from "./log";
-import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, REMOTE_SCHEME, requestAllowed, socketAddress, type ShowRequest } from "./remotePage";
+import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
 export function registerRemoteScheme(): void {
@@ -68,13 +68,16 @@ export class RemoteScreens {
       const screen = this.screenOf(event);
       const socket = screen?.socket;
       if (!screen || !socket || socket.readyState !== WebSocket.OPEN) return;
-      if (typeof data === "string") {
-        if (data.length > MAX_SEND_BYTES) return this.refused(screen, "send_too_large");
-        socket.send(data);
-      } else if (data instanceof Uint8Array) {
-        if (data.byteLength > MAX_SEND_BYTES) return this.refused(screen, "send_too_large");
-        socket.send(data, { binary: true });
+      if (typeof data !== "string" && !(data instanceof Uint8Array)) return;
+      const size = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+      if (size > MAX_SEND_BYTES) return this.refused(screen, "send_too_large");
+      // A host that stops reading closes its socket rather than grow this process's queue; the page connects again.
+      if (!queueAllows(socket.bufferedAmount, size)) {
+        this.refused(screen, "queue_full");
+        return this.closeSocket(screen, { code: 1013, reason: "queue_full" }, true);
       }
+      if (typeof data === "string") socket.send(data);
+      else socket.send(data, { binary: true });
     });
     ipcMain.on(REMOTE_SOCKET_CLOSE_CHANNEL, (event: IpcMainEvent) => {
       const screen = this.screenOf(event);
@@ -285,13 +288,14 @@ export class RemoteScreens {
     socket.on("error", () => socket.terminate());
   }
 
-  private closeSocket(screen: Screen, tell: { code: number; reason: string } | null): void {
+  /** Closes the screen's socket; `now` drops what waits unsent instead of sending it first. */
+  private closeSocket(screen: Screen, tell: { code: number; reason: string } | null, now = false): void {
     const socket = screen.socket;
     if (!socket) return;
     screen.socket = null;
     socket.removeAllListeners();
     socket.on("error", () => undefined);
-    if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+    if (now || socket.readyState === WebSocket.CONNECTING) socket.terminate();
     else socket.close(1000);
     if (tell) this.toPage(screen, { op: "close", ...tell });
   }

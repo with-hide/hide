@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchPath, parseShow, requestAllowed, socketAddress } from "./remotePage";
+import { fetchPath, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseShow, queueAllows, requestAllowed, socketAddress } from "./remotePage";
 
 // PRD device-connect-iroh B20, security spec 8.3: another machine's screen
 // loads its own page and nothing else, and the shell names the machine and
@@ -26,6 +26,14 @@ describe("another machine's screen", () => {
     expect(requestAllowed("https://example.com/", "host-a")).toBe(false);
     expect(requestAllowed("file:///etc/passwd", "host-a")).toBe(false);
     expect(requestAllowed("hide-remote://host-b/", "host-a")).toBe(false);
+  });
+
+  it("lets one largest frame wait beside a little more, and no queue past it", () => {
+    expect(queueAllows(0, MAX_SEND_BYTES)).toBe(true);
+    expect(queueAllows(MAX_QUEUED_BYTES - MAX_SEND_BYTES, MAX_SEND_BYTES)).toBe(true);
+    expect(queueAllows(MAX_QUEUED_BYTES - MAX_SEND_BYTES + 1, MAX_SEND_BYTES)).toBe(false);
+    // A host that reads nothing: small frames stop once the queue is full.
+    expect(queueAllows(MAX_QUEUED_BYTES, 1)).toBe(false);
   });
 
   it("opens its socket on this computer's daemon", () => {
