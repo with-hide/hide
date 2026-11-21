@@ -58,8 +58,9 @@ export function ofPage(url: string, device: string): boolean {
 export function fetchPath(url: string, device: string): string | null {
   if (!ofPage(url, device)) return null;
   const { pathname, search } = new URL(url);
-  if (search) return null;
+  // The page's own query (`?probe=1`) is the page's to read and never sent on; an asset takes none.
   if (pathname === "/" || pathname === "/index.html") return `/peer-screen/${device}/`;
+  if (search) return null;
   if (pathname.startsWith("/assets/") && !pathname.includes("..")) return `/peer-screen/${device}${pathname}`;
   return null;
 }

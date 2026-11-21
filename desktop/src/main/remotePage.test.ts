@@ -13,7 +13,9 @@ describe("another machine's screen", () => {
     expect(fetchPath("hide-remote://host-a/health", "host-a")).toBeNull();
     expect(fetchPath("hide-remote://host-a/ws", "host-a")).toBeNull();
     expect(fetchPath("hide-remote://host-b/", "host-a")).toBeNull();
-    expect(fetchPath("hide-remote://host-a/?token=x", "host-a")).toBeNull();
+    // The page's own query stays with the page; an asset's is refused.
+    expect(fetchPath("hide-remote://host-a/?probe=1", "host-a")).toBe("/peer-screen/host-a/");
+    expect(fetchPath("hide-remote://host-a/assets/app-1.js?x=1", "host-a")).toBeNull();
     expect(fetchPath("http://127.0.0.1:9/", "host-a")).toBeNull();
   });
 
