@@ -387,6 +387,21 @@ fn remote_setup() -> (Runtime, Fake, u64, String, String) {
     (runtime, fake, task, tab, pane_id)
 }
 
+/// Asks the device to split `pane_id`.
+fn remote_split(runtime: &mut Runtime, pane_id: &str, request: &str) {
+    runtime.request_remote_control(RemoteControlPayload {
+        target_id: DEVICE.into(),
+        request_id: request.into(),
+        report_pane_focus_outcome: false,
+        focus_device: false,
+        request: RemoteControlRequest::SplitPane {
+            pane_id: pane_id.into(),
+            direction: PaneSplitDirection::Right,
+            cwd: None,
+        },
+    });
+}
+
 /// Asks the device to close the tab's second pane.
 fn remote_close(runtime: &mut Runtime, request: &str) {
     runtime.request_remote_control(RemoteControlPayload {
@@ -428,7 +443,7 @@ fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
     assert!(runtime.observe_remote_operations(DEVICE, &session));
     let lease = ready.try_recv().unwrap().unwrap();
     assert!(runtime.checkout_start_geometry_is_current(task, &lease));
-    remote_close(&mut runtime, "while-granted");
+    remote_split(&mut runtime, &pane_id, "while-granted");
     assert!(runtime.remote_operations.is_empty());
     assert_eq!(
         runtime.snapshot.status.last_error.as_ref().unwrap().kind,
@@ -436,7 +451,7 @@ fn checkout_start_waits_for_remote_control_and_blocks_later_remote_controls() {
     );
     runtime.finish_checkout_start_geometry(task, &lease, Ok(()));
     assert!(!runtime.geometry_tab_busy(&tab));
-    remote_close(&mut runtime, "after-finish");
+    remote_split(&mut runtime, &pane_id, "after-finish");
     assert_eq!(runtime.remote_operations.len(), 1);
 }
 

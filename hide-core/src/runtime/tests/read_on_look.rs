@@ -1045,7 +1045,7 @@ fn a_pane_the_move_worker_focuses_as_the_move_ends_is_read_with_no_window() {
                 .unwrap(),
             )
         }
-        "focus_pane" | "focus_tab" | "set_zoom" => crate::engine::fake::reply(()),
+        "focus_pane" | "focus_tab" => crate::engine::fake::reply(()),
         other => panic!("unexpected engine call {other} {args}"),
     });
     let (runtime, _checkout) = tab_order_runtime(path);

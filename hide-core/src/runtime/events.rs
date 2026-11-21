@@ -1783,6 +1783,7 @@ pub(super) enum Event {
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
     PairView(super::pair_view::PairViewPayload),
+    PairViewDesk(super::pair_view::PairDeskPayload),
     RemoteControl(RemoteControlPayload),
     RemoteFileList(RemoteFileListPayload),
     FileOpen(FileOpenPayload),
@@ -2108,6 +2109,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
         "pair_view" => decode!(super::pair_view::PairViewPayload, PairView),
+        "pair_view_desk" => decode!(super::pair_view::PairDeskPayload, PairViewDesk),
         "remote_control" => decode!(RemoteControlPayload, RemoteControl),
         "remote_file_list" => decode!(RemoteFileListPayload, RemoteFileList),
         "file_open" => decode!(FileOpenPayload, FileOpen),
@@ -4530,6 +4532,7 @@ impl Runtime {
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
             Event::PairView(payload) => self.set_pair_view(payload),
+            Event::PairViewDesk(payload) => self.set_pair_desk(payload),
             Event::UiStateUpdate(payload) => {
                 let payload = *payload;
                 if let Some(visible) = payload.usage_window_visible {

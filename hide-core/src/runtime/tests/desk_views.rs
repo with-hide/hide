@@ -2766,6 +2766,55 @@ fn an_open_while_a_shell_is_drawn_alone_stands_the_desk_beside_it() {
     assert_eq!(front_owner(&runtime).0, "d.md");
 }
 
+fn pair_desk_event(runtime: &mut Runtime, shown: bool) -> bool {
+    runtime.dispatch_json(&explorer_event(
+        "pair_view_desk",
+        serde_json::json!({"shown": shown}),
+    ))
+}
+
+/// D-57: in focus mode ⌘E folds the desk, which draws the pane alone at the
+/// full width as a zoom did, and shows it again; the mode stays on, and a
+/// desk with no View has nothing to show.
+#[test]
+fn e_folds_and_shows_the_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-fold");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert!(runtime.drawn_tray_layout(&key(&directory)).is_none());
+    assert!(mode_on(&runtime));
+    assert!(!pair_desk_event(&mut runtime, false), "already folded");
+
+    assert!(pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The shell's desk holds the agent's View, which ⌘E shows beside it.
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert!(pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// D-57, D-56: ⌘E on a pane whose desk holds no View has nothing to show.
+#[test]
+fn e_shows_no_empty_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-empty");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert!(!pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
 /// D-54: the last open names the owner. A file an agent opened that a
 /// shell's link opens again is the shell's, in its `N views` and beside it
 /// in focus mode, and the agent's session still counts it among its own.
