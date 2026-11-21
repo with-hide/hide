@@ -1328,6 +1328,43 @@ pub struct KitSnapshot {
     /// The machine's agent profiles as its node lists them (PRD
     /// agent-profiles D-04); `None` until they were first read.
     pub profiles: Option<ProfilesSnapshot>,
+    /// The machine's store of skills and MCP items as its kit last reported
+    /// it (PRD skill-mcp-manager): each kind's columns with the agents each
+    /// one covers, which the screen joins with `agents` to show only the
+    /// agents installed and switched on there; each item with its source,
+    /// version, update and one cell per column; what only an agent has; the
+    /// undo list; and the previews and update diffs waiting for a choice.
+    /// Each change's outcome is in `status.store_answers`, not here. `None`
+    /// until the machine was read.
+    pub store: Option<hide_kit::store::StoreReport>,
+    /// The cells whose change waits for a new session (B17): an agent
+    /// session of the cell's column that was running when the change landed
+    /// still is.
+    pub store_new_session: Vec<StoreCellRef>,
+}
+
+/// One cell of the store's table: an item and a column of its kind.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct StoreCellRef {
+    pub item: String,
+    pub column: String,
+}
+
+/// What one store request came to (`status.store_answers`), as
+/// `status.agent_profile_answer` does for profiles: the request id it
+/// carried and the machine, then each of its changes' outcomes in order once
+/// the machine's store ran them. `refused` with no outcomes is a request that
+/// never reached the store; `refused` retains its cause and log sentence. A request from the screen
+/// and one from `hide skill` / `hide mcp` each find their own by id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreAnswer {
+    pub request_id: String,
+    pub device_id: String,
+    pub state: crate::agent_profiles::AnswerState,
+    pub outcomes: Vec<hide_kit::store::ChangeOutcome>,
+    /// A refusal before any per-change outcome, such as a copy export limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<hide_kit::store::StoreRefusal>,
 }
 
 /// A machine's agent profiles: what its node lists, never a variable's
@@ -1778,6 +1815,8 @@ impl KitSnapshot {
             check_failed: None,
             refused: report.refused.as_deref().map(Into::into),
             profiles: None,
+            store: report.store.clone(),
+            store_new_session: Vec::new(),
         }
     }
 
@@ -7740,6 +7779,15 @@ pub struct StatusSnapshot {
     /// agent-profiles B2-B13); absent until one was made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
+    /// What the latest store requests came to, oldest first, at most
+    /// `kit_store::ANSWER_LIMIT` (PRD skill-mcp-manager): a request finds its
+    /// own by id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_answers: Vec<StoreAnswer>,
+    /// The installs and updates agents asked for with `hide skill` /
+    /// `hide mcp` that wait on the operator's confirm (B32).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_asks: Vec<crate::runtime::StoreAskSnapshot>,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -8556,6 +8604,8 @@ impl Snapshot {
                 ssh_hosts: SshHostsSnapshot::default(),
                 machine_profiles: MachineProfilesSnapshot::default(),
                 agent_profile_answer: None,
+                store_answers: Vec::new(),
+                store_asks: Vec::new(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -9262,10 +9312,10 @@ mod wire_enum_tests {
         checked.insert("ask_subject_cause");
 
         use crate::coordination::human_turn::HumanKind;
-        let human_kinds = [HumanKind::Auth, HumanKind::Permission];
+        let human_kinds = [HumanKind::Auth, HumanKind::Permission, HumanKind::Install];
         for variant in human_kinds {
             match variant {
-                HumanKind::Auth | HumanKind::Permission => {}
+                HumanKind::Auth | HumanKind::Permission | HumanKind::Install => {}
             }
         }
         assert_wire(&contract, "human_kind", &human_kinds);
@@ -10789,18 +10839,10 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
             use crate::delivery::held::HeldFor;
-            let held = [
-                HeldFor::Unreachable,
-                HeldFor::Approval,
-                HeldFor::Draft,
-                HeldFor::Unanswered,
-            ];
+            let held = [HeldFor::Approval, HeldFor::Draft];
             for variant in held {
                 match variant {
-                    HeldFor::Unreachable
-                    | HeldFor::Approval
-                    | HeldFor::Draft
-                    | HeldFor::Unanswered => {}
+                    HeldFor::Approval | HeldFor::Draft => {}
                 }
             }
             assert_wire(&contract, "mission_letters_held_for", &held);
@@ -10811,6 +10853,7 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Asleep,
                 NodeWork::Stopped {
                     cause: None,
                     since_unix_ms: 0,
@@ -10823,6 +10866,7 @@ mod wire_enum_tests {
                 match variant {
                     NodeWork::Working
                     | NodeWork::Waiting { .. }
+                    | NodeWork::Asleep
                     | NodeWork::Stopped { .. }
                     | NodeWork::NoWorker { .. } => {}
                 }
@@ -11823,6 +11867,103 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "peer_update", &updates);
             checked.insert("peer_update");
+        }
+
+        {
+            use hide_kit::store::{
+                CellFailure, CellState, ItemKind, StorePassRefusal, StoreRefusalCause,
+            };
+            let kinds = [ItemKind::Skill, ItemKind::Mcp];
+            for variant in kinds {
+                match variant {
+                    ItemKind::Skill | ItemKind::Mcp => {}
+                }
+            }
+            assert_wire(&contract, "store_item_kind", &kinds);
+            checked.insert("store_item_kind");
+
+            let cells = [
+                CellState::On,
+                CellState::Off,
+                CellState::Waiting,
+                CellState::HandWritten,
+                CellState::Failed,
+                CellState::Unsupported,
+                CellState::AgentOff,
+            ];
+            for variant in cells {
+                match variant {
+                    CellState::On
+                    | CellState::Off
+                    | CellState::Waiting
+                    | CellState::HandWritten
+                    | CellState::Failed
+                    | CellState::Unsupported
+                    | CellState::AgentOff => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_state", &cells);
+            checked.insert("store_cell_state");
+
+            let causes = [
+                StoreRefusalCause::NotFound,
+                StoreRefusalCause::NoSkills,
+                StoreRefusalCause::NoAccess,
+                StoreRefusalCause::Unreachable,
+                StoreRefusalCause::NoGit,
+                StoreRefusalCause::TooLarge,
+                StoreRefusalCause::NameTaken,
+                StoreRefusalCause::Differs,
+                StoreRefusalCause::TooMany,
+                StoreRefusalCause::Unsupported,
+                StoreRefusalCause::Failed,
+            ];
+            for variant in causes {
+                match variant {
+                    StoreRefusalCause::NotFound
+                    | StoreRefusalCause::NoSkills
+                    | StoreRefusalCause::NoAccess
+                    | StoreRefusalCause::Unreachable
+                    | StoreRefusalCause::NoGit
+                    | StoreRefusalCause::TooLarge
+                    | StoreRefusalCause::NameTaken
+                    | StoreRefusalCause::Differs
+                    | StoreRefusalCause::TooMany
+                    | StoreRefusalCause::Unsupported
+                    | StoreRefusalCause::Failed => {}
+                }
+            }
+            assert_wire(&contract, "store_refusal_cause", &causes);
+            checked.insert("store_refusal_cause");
+
+            let refusals = [
+                StorePassRefusal::KeysSecretGone,
+                StorePassRefusal::Unreadable,
+            ];
+            for variant in refusals {
+                match variant {
+                    StorePassRefusal::KeysSecretGone | StorePassRefusal::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "store_pass_refusal", &refusals);
+            checked.insert("store_pass_refusal");
+
+            let failures = [
+                CellFailure::Unreadable,
+                CellFailure::Unwritable,
+                CellFailure::Keys,
+                CellFailure::Pending,
+            ];
+            for variant in failures {
+                match variant {
+                    CellFailure::Unreadable
+                    | CellFailure::Unwritable
+                    | CellFailure::Keys
+                    | CellFailure::Pending => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_failure", &failures);
+            checked.insert("store_cell_failure");
         }
 
         let unchecked = contract

@@ -365,6 +365,7 @@ fn spawner() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },
@@ -436,6 +437,8 @@ impl Spawner {
             context,
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
         };
         crate::coordination::run(
             self.client.clone(),
@@ -699,6 +702,7 @@ pub(super) fn local_spawner() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },
@@ -1027,6 +1031,7 @@ fn caller_here_with_device() -> Spawner {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             },
             check: false,
         },

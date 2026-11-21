@@ -355,7 +355,8 @@ pub struct NodeView {
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
 /// its worker works, its worker rests and the node waits on someone
-/// (`waiting_on`, said beside it), its worker stopped with no one to wait
+/// (`waiting_on`, said beside it), Hide put its worker to sleep (PRD
+/// letters-missions-simplify B23: a sleep, not a wait), its worker stopped with no one to wait
 /// on (`mission_health::stopped_worker`), since when and why, or no worker
 /// stands for it (`mission_health::worker_gone`), since when a warning
 /// judgment first saw it, absent before one did.
@@ -366,6 +367,7 @@ pub enum NodeWork {
     Waiting {
         on: WaitingOn,
     },
+    Asleep,
     Stopped {
         cause: Option<crate::missions::StopCause>,
         since_unix_ms: u64,
@@ -378,7 +380,7 @@ pub enum NodeWork {
 
 /// What `view`, a node of a running mission, is doing now: from its
 /// worker's registration (none or ended is no worker, since `gone_since`;
-/// asleep rests) and, for a running one, its agent row's activity
+/// asleep sleeps) and, for a running one, its agent row's activity
 /// (`working` works, `stopped` rests, or stands stopped when `stopped` says
 /// so); a row Hide cannot see, or whose activity it does not know, says
 /// nothing rather than a guess.
@@ -406,7 +408,7 @@ fn node_work(
     match worker? {
         // Answered above.
         WorkerLife::Ended => None,
-        WorkerLife::Asleep => waiting(),
+        WorkerLife::Asleep => Some(NodeWork::Asleep),
         WorkerLife::Running => match row_activity? {
             "working" => Some(NodeWork::Working),
             "stopped" => match stopped {
@@ -2094,6 +2096,7 @@ impl Runtime {
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         self.missions.finished = super::agent_sleep::missions::finished_nodes(&self.missions.book);
+        self.follow_successors();
     }
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
@@ -3587,48 +3590,137 @@ impl Runtime {
     /// the engine published (`payload`) rather than an engine read under
     /// the lock: none while the observation names no scope or the engine no
     /// session for it.
-    fn heir_record(
+    pub(super) fn heir_record(
         &self,
         device: &str,
         pane: &str,
         payload: &crate::sidebar::SessionSnapshotPayload,
         project: Option<String>,
     ) -> Option<crate::coordination::AgentRecord> {
-        use crate::coordination::executor::{HostIdentity, Native, native_session, registration};
         let observation = self.delivery_observations.get(pane)?;
-        observation.actor.require_native_identity().ok()?;
         let agent = payload
             .agents
             .iter()
             .find(|agent| agent.pane_id.as_deref() == Some(observation.raw_pane_id.as_str()))?;
-        let on_node = device == self.node.as_str();
-        // The engine the agent was observed on: its socket on this node, the
-        // device itself for a device's (`continue_moved_registrations`).
-        let scope = observation
-            .host_scope
-            .clone()
-            .or_else(|| (!on_node).then(|| device.to_owned()))?;
-        let native_machine = self.native_machine(device).ok()?;
-        let native = Native {
-            pane: &observation.raw_pane_id,
-            session: native_session(agent.agent_session.as_ref()).ok()?,
-            terminal_id: observation.terminal_id.clone(),
-            actor: observation.actor.clone(),
-        };
-        let host = HostIdentity {
-            machine: device,
-            on_node,
-            scope: &scope,
-            native_machine: &native_machine,
-        };
-        Some(registration(
-            native,
-            &host,
-            observation.raw_pane_id.clone(),
+        self.observed_registration(
+            device,
+            observation,
+            agent.agent_session.as_ref(),
             agent.name.clone(),
-            None,
             project,
-        ))
+        )
+    }
+
+    /// Hands each role in the open missions whose registration ended with an
+    /// agent after it in its pane (`coordination::succeed`, PRD
+    /// letters-missions-simplify B2) to the live registration that runs in
+    /// its place now (`coordination::live_successor`): a mission's
+    /// Conductor, a node's worker and a line's checker. It reads only what
+    /// the ledger and the mission book hold, so a role a stop left behind
+    /// between the ledger's save and the book's follows on the next start,
+    /// whichever of the two loads first. A closed mission keeps who ran it.
+    pub(super) fn follow_successors(&mut self) {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let ledger = std::sync::Arc::clone(ledger);
+        let mut held = std::collections::BTreeSet::new();
+        for mission in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open())
+        {
+            held.extend(self.registration_of(&mission.conductor));
+            for node in &mission.nodes {
+                held.extend(node.agent_id.clone());
+                for criterion in &node.criteria {
+                    held.extend(
+                        criterion
+                            .checkers
+                            .iter()
+                            .filter_map(|checker| checker.agent_id.clone()),
+                    );
+                }
+            }
+        }
+        for former in held {
+            let successor = match crate::coordination::live_successor(&ledger, &former) {
+                Some(Ok(record)) if record.id != former => record.id.clone(),
+                _ => continue,
+            };
+            self.follow_successor(&former, &successor);
+        }
+    }
+
+    /// Hands the roles registration `former` held in the open missions to
+    /// `successor`, the live registration in its place.
+    fn follow_successor(&mut self, former: &str, successor: &str) {
+        let Some(record) = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == successor && !record.ended)
+                .cloned()
+        }) else {
+            return;
+        };
+        let now = crate::delivery::worker::now();
+        let conducted: Vec<String> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| {
+                mission.status.open()
+                    && self.registration_of(&mission.conductor).as_deref() == Some(former)
+            })
+            .map(|mission| mission.id.clone())
+            .collect();
+        let mut moved = false;
+        for id in &conducted {
+            let conductor =
+                self.conductor_of(&record.machine, &record.actor.pane_id, record.actor.clone());
+            if let Some(mission) = self.missions.book.get_mut(id) {
+                mission.conductor = conductor;
+                mission.updated_at_unix_ms = now;
+                moved = true;
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.conductor_succeeded",
+                    "mission": id, "agent_id": former, "successor": successor,
+                }));
+            }
+        }
+        let bound = |agent: &mut Option<String>| {
+            let held = agent.as_deref() == Some(former);
+            if held {
+                *agent = Some(successor.to_owned());
+            }
+            held
+        };
+        for mission in self
+            .missions
+            .book
+            .missions
+            .iter_mut()
+            .filter(|mission| mission.status.open())
+        {
+            for node in &mut mission.nodes {
+                moved |= bound(&mut node.agent_id);
+                for criterion in &mut node.criteria {
+                    for checker in &mut criterion.checkers {
+                        moved |= bound(&mut checker.agent_id);
+                    }
+                }
+            }
+        }
+        if moved {
+            self.save_missions();
+        }
+        for id in conducted {
+            self.note_conductor_arrived(&id, now);
+        }
     }
 
     /// The registration `conductor` conducted under: the one the mission

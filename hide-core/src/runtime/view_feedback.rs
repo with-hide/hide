@@ -1340,7 +1340,8 @@ impl Runtime {
                             false
                         }
                         Some(
-                            LetterState::Undelivered
+                            LetterState::NoRecipient
+                            | LetterState::Superseded
                             | LetterState::Expired
                             | LetterState::Cancelled,
                         ) => {
@@ -2439,12 +2440,12 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(guard.feedback_of(&key()).unwrap().on(&display).count(), 0);
-        // The letter expires undelivered: the comments come back marked (B29).
+        // The letter ends with no recipient: the comments come back marked (B29).
         let mut expired = (*ledger).clone();
         let letter_id = letter.id.clone();
         for letter in &mut expired.letters {
             if letter.id == letter_id {
-                letter.state = LetterState::Undelivered;
+                letter.state = LetterState::NoRecipient;
             }
         }
         guard.publish_delivery(Arc::new(expired.clone()), true);

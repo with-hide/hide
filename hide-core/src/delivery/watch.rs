@@ -1033,6 +1033,7 @@ mod tests {
             recipient: actor("filler"),
             kind: "request".into(),
             body,
+            written: None,
             state: if open {
                 super::super::ledger::State::Delivered
             } else {
@@ -1053,7 +1054,8 @@ mod tests {
             bell_turn: None,
             handed: false,
             handed_at_unix_ms: None,
-            intake_from: None,
+            from: None,
+            to: None,
             immediate: false,
             forced: false,
             tool_handovers: 0,

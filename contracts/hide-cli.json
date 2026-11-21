@@ -1182,6 +1182,13 @@
                                 "permission"
                             ],
                             "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
                         }
                     ]
                 },
@@ -1335,8 +1342,6 @@
                                 "input_unconfirmed",
                                 "draft",
                                 "parent_blocked",
-                                "bell_exhausted",
-                                "undelivered",
                                 "observer_unconfirmed"
                             ],
                             "type": "string"
@@ -1623,6 +1628,13 @@
                             "description": "Granting access: an app connection, an OS permission.",
                             "enum": [
                                 "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
                             ],
                             "type": "string"
                         }
@@ -2252,9 +2264,17 @@
                             "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
+                        "from": {
+                            "default": null,
+                            "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "handed": {
                             "default": false,
-                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                             "type": "boolean"
                         },
                         "handed_at_unix_ms": {
@@ -2300,16 +2320,6 @@
                             "minimum": 0.0,
                             "type": "integer"
                         },
-                        "intake_from": {
-                            "default": null,
-                            "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": [
-                                "integer",
-                                "null"
-                            ]
-                        },
                         "intent": {
                             "type": "string"
                         },
@@ -2331,6 +2341,14 @@
                         "state": {
                             "$ref": "#/definitions/State"
                         },
+                        "to": {
+                            "default": null,
+                            "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "tool_handovers": {
                             "default": 0,
                             "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -2351,6 +2369,16 @@
                                 }
                             ],
                             "default": null
+                        },
+                        "written": {
+                            "default": null,
+                            "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                            "format": "uint",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
                         }
                     },
                     "required": [
@@ -2358,8 +2386,11 @@
                         "intent",
                         "sender",
                         "recipient",
+                        "from",
+                        "to",
                         "kind",
                         "body",
+                        "written",
                         "state",
                         "hook_confirmed",
                         "waiting_answer",
@@ -2376,7 +2407,6 @@
                         "bell_turn",
                         "handed",
                         "handed_at_unix_ms",
-                        "intake_from",
                         "immediate",
                         "forced",
                         "tool_handovers",
@@ -2422,15 +2452,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -2651,15 +2705,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -2801,9 +2879,17 @@
                     "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
+                "from": {
+                    "default": null,
+                    "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "handed": {
                     "default": false,
-                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                     "type": "boolean"
                 },
                 "handed_at_unix_ms": {
@@ -2849,16 +2935,6 @@
                     "minimum": 0.0,
                     "type": "integer"
                 },
-                "intake_from": {
-                    "default": null,
-                    "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                        "integer",
-                        "null"
-                    ]
-                },
                 "intent": {
                     "type": "string"
                 },
@@ -2880,6 +2956,14 @@
                 "state": {
                     "$ref": "#/definitions/State"
                 },
+                "to": {
+                    "default": null,
+                    "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "tool_handovers": {
                     "default": 0,
                     "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -2900,6 +2984,16 @@
                         }
                     ],
                     "default": null
+                },
+                "written": {
+                    "default": null,
+                    "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                    "format": "uint",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
                 }
             },
             "required": [
@@ -2907,8 +3001,11 @@
                 "intent",
                 "sender",
                 "recipient",
+                "from",
+                "to",
                 "kind",
                 "body",
+                "written",
                 "state",
                 "hook_confirmed",
                 "waiting_answer",
@@ -2925,7 +3022,6 @@
                 "bell_turn",
                 "handed",
                 "handed_at_unix_ms",
-                "intake_from",
                 "immediate",
                 "forced",
                 "tool_handovers",
@@ -3513,6 +3609,13 @@
                                 "permission"
                             ],
                             "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
                         }
                     ]
                 },
@@ -3690,8 +3793,6 @@
                                 "input_unconfirmed",
                                 "draft",
                                 "parent_blocked",
-                                "bell_exhausted",
-                                "undelivered",
                                 "observer_unconfirmed"
                             ],
                             "type": "string"
@@ -3799,6 +3900,329 @@
                 "stopped"
             ],
             "title": "Stopped",
+            "type": "object"
+        },
+        "store_changed": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "A change that ran (`add`, `update`, `on`, `off`, `remove`): the item it was about, null for an install of a source's skills, and each change's outcome, a refused one with its cause.",
+            "properties": {
+                "item": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "outcomes": {
+                    "items": {
+                        "properties": {
+                            "change": {
+                                "description": "the change as it ran, a key's value emptied",
+                                "properties": {
+                                    "op": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "op"
+                                ],
+                                "type": "object"
+                            },
+                            "refused": {
+                                "properties": {
+                                    "cause": {
+                                        "description": "one of store_refusal_cause in contracts/snapshot-wire-enums.json",
+                                        "type": "string"
+                                    },
+                                    "reason": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "cause",
+                                    "reason"
+                                ],
+                                "type": "object"
+                            }
+                        },
+                        "required": [
+                            "change"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "machine",
+                "outcomes"
+            ],
+            "title": "StoreChanged",
+            "type": "object"
+        },
+        "store_item": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide skill show` / `hide mcp show`: the item as the machine's store reports it.",
+            "properties": {
+                "item": {
+                    "description": "the item as KitSnapshot.store reports it",
+                    "properties": {
+                        "cells": {
+                            "items": {
+                                "properties": {
+                                    "changed_at_unix_ms": {
+                                        "type": "integer"
+                                    },
+                                    "column": {
+                                        "type": "string"
+                                    },
+                                    "reason": {
+                                        "type": "string"
+                                    },
+                                    "state": {
+                                        "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "column",
+                                    "state"
+                                ],
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        "description": {
+                            "type": "string"
+                        },
+                        "files": {
+                            "items": {
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        "folder_missing": {
+                            "type": "boolean"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "off_for": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "on": {
+                            "type": "boolean"
+                        },
+                        "server": {
+                            "description": "an MCP server: its name and reach, with the names of its keys and never a value",
+                            "type": "object"
+                        },
+                        "source": {
+                            "type": "object"
+                        },
+                        "update": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        },
+                        "version": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "cells",
+                        "id",
+                        "kind",
+                        "name",
+                        "on",
+                        "source",
+                        "version"
+                    ],
+                    "type": "object"
+                },
+                "machine": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "item",
+                "machine"
+            ],
+            "title": "StoreShown",
+            "type": "object"
+        },
+        "store_list": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "StoreLine": {
+                    "description": "One item as `list` answers it: no file list, the cells by column.",
+                    "properties": {
+                        "cells": {
+                            "items": {
+                                "$ref": "#/definitions/StoreLineCell"
+                            },
+                            "type": "array"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "on": {
+                            "type": "boolean"
+                        },
+                        "update": {
+                            "anyOf": [
+                                {
+                                    "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                                    "properties": {
+                                        "kind": {
+                                            "type": "string"
+                                        },
+                                        "value": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "kind"
+                                    ],
+                                    "type": "object"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "The newer version a check found, null with none."
+                        },
+                        "version": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "cells",
+                        "id",
+                        "name",
+                        "on",
+                        "update",
+                        "version"
+                    ],
+                    "type": "object"
+                },
+                "StoreLineCell": {
+                    "properties": {
+                        "column": {
+                            "type": "string"
+                        },
+                        "state": {
+                            "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "column",
+                        "state"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide skill list` / `hide mcp list`: the machine's items of one kind, each with its version and one cell per column.",
+            "properties": {
+                "columns": {
+                    "description": "The kind's columns, each with the agents its switch reaches.",
+                    "items": {
+                        "properties": {
+                            "agents": {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "also": {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "id": {
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "agents",
+                            "id"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                },
+                "items": {
+                    "items": {
+                        "$ref": "#/definitions/StoreLine"
+                    },
+                    "type": "array"
+                },
+                "kind": {
+                    "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "columns",
+                "items",
+                "kind",
+                "machine"
+            ],
+            "title": "StoreList",
             "type": "object"
         },
         "watch": {
@@ -4070,6 +4494,707 @@
         }
     },
     "commands": [
+        {
+            "answers": [
+                "store_list"
+            ],
+            "arguments": [],
+            "command": "skill list",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_item"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill show",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "source",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill add",
+            "options": [
+                {
+                    "name": "--name",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill update",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill on",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill off",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_list"
+            ],
+            "arguments": [],
+            "command": "mcp list",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_item"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp show",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp add",
+            "options": [
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--url",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--sse",
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--header",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--url",
+                        "--sse",
+                        "--header"
+                    ],
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": "a local server's command and its arguments, which --url replaces"
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp update",
+            "options": [
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--url",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--sse",
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--header",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--url",
+                        "--sse",
+                        "--header"
+                    ],
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": "a local server's command and its arguments, which --url replaces"
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp on",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp off",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
         {
             "answers": [
                 "agent_profiles"
@@ -6167,7 +7292,6 @@
                 "composer_not_empty",
                 "composer_unconfirmed",
                 "force_target_asleep",
-                "intent_conflict",
                 "no_parent",
                 "outbox_full",
                 "outbox_unavailable",
@@ -8133,7 +9257,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:83ceb1745315d4623884d0ad55c7c47b8255fa4b938ffbcf08d50f7ac4bf324f",
+    "digest": "sha256:b789620df8c066dc4d232d14377a00066c8973c8d98396a6b34e0ee26ea6fae4",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -8160,6 +9284,11 @@
             "code": "reason",
             "ok": "ok"
         },
+        "mcp": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "mission": {
             "answer": "result",
             "code": "reason",
@@ -8183,6 +9312,11 @@
         "request": {
             "answer": "result",
             "code": "reason",
+            "ok": "ok"
+        },
+        "skill": {
+            "answer": "value",
+            "code": "error.code",
             "ok": "ok"
         },
         "watch": {

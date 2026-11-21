@@ -30,6 +30,7 @@ mod hook_log;
 pub mod hook_request;
 pub mod install;
 mod lossless_json;
+pub mod mcp;
 pub mod memory;
 pub mod opencode;
 pub mod opener_guard;

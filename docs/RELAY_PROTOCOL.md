@@ -274,7 +274,6 @@ hided names the field it reads in every dial's upgrade request (`Hide-Registered
 The page sends `fcm_registration` when the app's `HidePush.enable` or `registration` answers `{found: true, service: "fcm", token, p256dh, auth}`; an answer without `service` is the iOS app's, with `environment`.
 A released hided answers `fcm_registration` `refused_request` and keeps the session, and the page then says the computer is older than the app, as for `apns_registration`.
 A notice that finds no link is held for that phone, replaced by a newer notice for the same agent tag, at most 8 per phone and at most 60 seconds, and sent once when the link comes up; past those limits, or when the phone is gone, it is dropped with a diagnostic.
-Notices about the person's own letters (`letter_undelivered`) are not held.
 
 The app registers once per computer it is connected to, and again on every connect, because Apple may change the token and a computer only holds what it was last told.
 Turning notifications off sends `push_permission {state: "denied"}` to the connected computer and deletes every computer's key on the phone; a computer that was not connected is told on its next connect.

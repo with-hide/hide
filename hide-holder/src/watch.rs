@@ -231,6 +231,7 @@ pub fn facts(
         line_editing: None,
         foreground_unread: None,
         alternate_screen: Some(observed.alternate_screen),
+        program_status: Some(observed.program_status.map(Box::new)),
     })
 }
 
@@ -272,6 +273,7 @@ pub struct FactsWriter {
     pub foreground_unread: bool,
     /// Whether this watch negotiated the alternate-screen facts extension.
     pub alternate_screen: bool,
+    pub program_status: bool,
     pub log: Log,
 }
 
@@ -359,6 +361,9 @@ impl FactsWriter {
                     alternate_screen: self
                         .alternate_screen
                         .then_some(facts.alternate_screen == Some(true)),
+                    program_status: self
+                        .program_status
+                        .then_some(facts.program_status.flatten()),
                     ..facts
                 },
                 Err(error) => {

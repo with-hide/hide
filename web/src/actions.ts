@@ -1258,6 +1258,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openSettings(tab);
     },
 
+    /** 확인하기 on an install an agent asked for: its confirm in Settings › 스킬·MCP. */
+    openStoreAsk(id: string) {
+      ui().openStoreAsk(id);
+    },
+
     setAccent(hex: string) {
       updateUiState({ accent_hex: hex });
     },
@@ -1617,6 +1622,29 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     changeAgentProfile(deviceId: string, requestId: string, change: import("./agentProfiles").ProfileChange) {
       dispatch({ schema_version: 2, kind: "agent_profile_change", payload: { device_id: deviceId, request_id: requestId, change } });
+    },
+
+    /**
+     * Changes to one machine's store of skills and MCP items, in order (PRD
+     * skill-mcp-manager): a switch, an install, a delete, an undo, a take-over,
+     * an update. The core answers in `status.store_answers` under `requestId`.
+     */
+    changeStore(deviceId: string, requestId: string, changes: import("./snapshot").StoreChange[]) {
+      dispatch({ schema_version: 2, kind: "kit_store", payload: { device_id: deviceId, request_id: requestId, changes } });
+    },
+
+    /** [이 Mac에서 복사] for a device (B28): this Mac's store goes to that device's; the answer lands under `requestId`. */
+    copyStore(deviceId: string, requestId: string) {
+      dispatch({ schema_version: 2, kind: "kit_store_copy", payload: { device_id: deviceId, request_id: requestId } });
+    },
+
+    /**
+     * The operator's answer to an install or update an agent asked for (B32):
+     * `confirm` false declines it; an MCP's key values typed on the confirm
+     * travel only in this event, to the machine's store.
+     */
+    answerStoreAsk(id: string, confirm: boolean, detail: { names?: string[]; keys?: Record<string, string> } = {}) {
+      dispatch({ schema_version: 2, kind: "store_ask_answer", payload: { id, confirm, ...detail } });
     },
 
     /** A tab showing the kit opened: this Mac's parts are read once. */

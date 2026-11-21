@@ -11,7 +11,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { connectControl } from "./hided-control.mjs";
 import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, viewPane, withControl } from "./daemon-actions";
-import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
+import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, openOtherCheckouts, screenshot, showProjectRow } from "./wire";
@@ -96,12 +96,13 @@ async function delegate(fixture: AgentFixture, daemon: Daemon, parent: string, n
 }
 
 /**
- * The fixture's second agent was spawned beside the first as its child: a
- * new session in its pane ends that relationship, so the pair are two
- * operator-owned agents, as two panes of one tab are.
+ * Closes the fixture's second agent, which the first spawned as its child,
+ * so the first starts with no children: a new conversation in its pane would
+ * not do, since the agent after it takes its parent too (PRD
+ * letters-missions-simplify D-24).
  */
-async function releaseChild(fixture: AgentFixture, daemon: Daemon): Promise<void> {
-  await takeOverSession(fixture, daemon, fixture.panes[1], "fixture-released");
+async function closeFixtureChild(fixture: AgentFixture, daemon: Daemon): Promise<void> {
+  await withControl(daemon, (control) => closePane(control, fixture.panes[1]));
 }
 
 /** Makes `dir` a Git repository on `main` with one commit, the folder a spawned child opens in. */
@@ -126,7 +127,7 @@ test("the close sheet counts and brightens what needs the operator, stays live w
     daemon = await startHided(fixture, "close-subtree-states");
     const live = daemon;
     const [target] = fixture.panes;
-    await releaseChild(fixture, live);
+    await closeFixtureChild(fixture, live);
     const working = await delegate(fixture, live, target, "working", { task: "계보 투영 구현" });
     const asking = await delegate(fixture, live, target, "asking", { task: "병합 전 검증 실행", reply: "병합 전에 검증을 다시 돌릴까요?", question: true });
     const finished = await delegate(fixture, live, target, "finished", { task: "릴리스 노트 초안" });
@@ -295,9 +296,11 @@ test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a
   try {
     daemon = await startHided(fixture, "close-stop-work-live");
     const live = daemon;
-    // The target and the keeper are two operator-owned agents in one tab.
-    const [target, keeper] = fixture.panes;
-    await releaseChild(fixture, live);
+    // The target and the keeper are two operator-owned agents.
+    const [target] = fixture.panes;
+    await closeFixtureChild(fixture, live);
+    const keeper = await spawnRoot(fixture, live, target, { name: "keeper", repo: path.join(fixture.root, "fixture") });
+    await withControl(live, (control) => focusTab(control, fixture, fixture.tab));
     await setAgentState(live, target, "working");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);

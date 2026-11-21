@@ -16,7 +16,7 @@ pub use account::{
 pub mod composer;
 mod declarations;
 pub mod definition;
-pub use definition::AccountPath;
+pub use definition::{AccountPath, McpFormat};
 mod journey;
 pub mod scene;
 mod scene_declarations;
@@ -956,6 +956,11 @@ pub struct AgentAdapter {
     /// Hide installs nothing, has none.
     pub minimum: Option<MinimumVersion>,
     pub skill_location: SkillLocation,
+    /// Other skill folders the agent reads besides its own, as measured in
+    /// an isolated HOME (docs/agent-hooks.md, What the kit puts down): Grok
+    /// and omp also read `~/.claude/skills`, so a skill there reaches them
+    /// too (PRD skill-mcp-manager, the Claude cell's note).
+    pub skill_also_reads: &'static [SkillLocation],
     pub hook: HookInstall,
     pub guidance: Capability<ContextRoute>,
     /// The agent kind the engine reports the agent's panes as.
@@ -1023,6 +1028,12 @@ impl AgentAdapter {
     /// its screen rules ([`definition::builtin_account`]).
     pub fn account_rule(&self) -> Option<&'static definition::AccountRule> {
         definition::builtin_account(self.id)
+    }
+
+    /// The shape of the agent's MCP file ([`AccountPath::Mcp`]), `None`
+    /// for an agent Hide writes no MCP server for.
+    pub fn mcp_format(&self) -> Option<McpFormat> {
+        self.account_rule()?.mcp_format
     }
 
     /// Where `path` is below the home for the default profile, as `~/…`:

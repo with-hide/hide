@@ -990,6 +990,23 @@ fn a_file_made_private_is_readable_by_its_owner_and_runs_when_asked_to() {
 }
 
 #[test]
+fn a_file_marked_executable_runs_where_the_system_reads_a_bit_and_keeps_its_bytes() {
+    let outer = folder();
+    let script = outer.path().join("run.cmd");
+    std::fs::write(&script, b"echo").unwrap();
+    permissions::mark_executable(&script).unwrap();
+    // A `.cmd` runs on Windows by its extension and now on Unix by its bit.
+    assert!(permissions::is_executable(&script).unwrap());
+    assert_eq!(read(&script), "echo");
+    assert_eq!(
+        permissions::mark_executable(&outer.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
+}
+
+#[test]
 fn a_folder_of_ones_own_takes_new_files_and_a_file_is_not_a_folder() {
     let outer = folder();
     assert!(permissions::account_can_add_to(outer.path()).unwrap());

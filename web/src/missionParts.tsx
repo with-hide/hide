@@ -87,7 +87,7 @@ export function lookWord(look: NodeLook, t: TFunction<"translation">): string {
  */
 export function markWord(node: MissionNode, look: NodeLook, t: TFunction<"translation">): string {
   const word = look === "working" && node.work ? nodeWorkWords(node.work, t) : lookWord(look, t);
-  return look === "working" && workerAsleep(node) ? `${word} · ${t("mission.worker.asleep")}` : word;
+  return look === "working" && workerAsleep(node) && node.work?.state !== "asleep" ? `${word} · ${t("mission.worker.asleep")}` : word;
 }
 
 /** How long a node took, from its events (B28); nothing moves while its device does not answer (B35). */

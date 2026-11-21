@@ -327,7 +327,7 @@ impl Runtime {
         if lines.is_empty() {
             return;
         }
-        let head = "\n\nViews this agent opened (read one with `hide view status <view-id>` or `hide browser snapshot <view-id>`; open it again from your own pane to show it to the operator):";
+        let head = crate::delivery::OPENED_VIEWS_HEAD;
         let room = crate::delivery::BODY_LIMIT.saturating_sub(body.len());
         let mut list = head.to_owned();
         let mut left = lines.len();

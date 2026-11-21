@@ -562,9 +562,11 @@ fn written_by(place: AccountPath) -> Option<PieceKind> {
         // account the start's profile runs in, and a going target takes
         // Hide's entries out (docs/agent-hooks.md, Profile accounts).
         AccountPath::FolderTrust => Some(PieceKind::FolderTrust),
-        AccountPath::Sessions | AccountPath::Login | AccountPath::State | AccountPath::Usage => {
-            None
-        }
+        AccountPath::Sessions
+        | AccountPath::Login
+        | AccountPath::State
+        | AccountPath::Usage
+        | AccountPath::Mcp => None,
     }
 }
 
@@ -1070,18 +1072,12 @@ fn pass(
     record: &mut Record,
     mode: Mode<'_>,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> (Vec<ProfileReport>, bool) {
-    let Some(source) = target.profiles.as_ref() else {
+    // Without the profiles ([`read_profiles`]) every profile account stays
+    // as it is.
+    let Some(profiles) = profiles else {
         return (Vec::new(), false);
-    };
-    // Read now, under the account's lock in a pass: a file that cannot be
-    // read leaves every profile account as it is.
-    let profiles = match source.read() {
-        Ok(profiles) => profiles,
-        Err(reason) => {
-            log("profile_target.profiles_unread", None, &reason);
-            return (Vec::new(), false);
-        }
     };
     let home = &target.home;
     let defaults = default_files(home, &target.install);
@@ -1286,6 +1282,110 @@ fn release(
     }
 }
 
+/// The machine's profile accounts that are not their agent's default, as
+/// the store's places reach them (`crate::store`): each account once, with
+/// the profiles that run in it.
+pub(crate) struct Accounts {
+    known: bool,
+    list: Vec<ProfileAccount>,
+}
+
+impl Accounts {
+    /// Whether the machine's profiles were read: without them, a place of a
+    /// profile account a pass does not list is not one that went.
+    pub(crate) fn known(&self) -> bool {
+        self.known
+    }
+
+    pub(crate) fn list(&self) -> &[ProfileAccount] {
+        &self.list
+    }
+}
+
+/// One profile account of its own.
+pub(crate) struct ProfileAccount {
+    own: Own,
+    profiles: Vec<String>,
+}
+
+impl ProfileAccount {
+    pub(crate) fn adapter(&self) -> &'static AgentAdapter {
+        self.own.adapter
+    }
+
+    /// The ids of the profiles that run in it.
+    pub(crate) fn profiles(&self) -> &[String] {
+        &self.profiles
+    }
+
+    /// The account's own place `place`, as the account spells it.
+    pub(crate) fn path(&self, place: AccountPath) -> Option<PathBuf> {
+        self.own.account.path(place).map(Path::to_path_buf)
+    }
+
+    /// The account's MCP file in its agent's shape (`hide_agent_hooks::mcp`).
+    pub(crate) fn mcp_file(&self, home: &Path) -> Option<hide_agent_hooks::mcp::McpFile> {
+        hide_agent_hooks::mcp::McpFile::of(self.own.adapter.declaration(), self.own.at(home))
+    }
+
+    /// The real place of `path` in the account, judged as every write of
+    /// the kit's in a profile account is: the account's folders its own, no
+    /// link on the way (PRD agent-profiles D-28).
+    pub(crate) fn judge(&self, path: &Path) -> Result<PathBuf, String> {
+        checked(&self.own.root, &self.own.folder).map_err(|reason| reason.text)?;
+        real_in(&self.own, path).map_err(|reason| reason.text)
+    }
+}
+
+/// The machine's profiles as one pass reads them, once: the profile
+/// accounts and the store's places follow the same read, made under the
+/// account's lock in a pass, so what a pass installs by is what the node's
+/// file holds while it writes. `None` without a source, or for a file that
+/// cannot be read, which leaves every profile account as it is.
+pub(crate) fn read_profiles(target: &KitTarget) -> Option<KitProfiles> {
+    match target.profiles.as_ref()?.read() {
+        Ok(profiles) => Some(profiles),
+        Err(reason) => {
+            log("profile_target.profiles_unread", None, &reason);
+            None
+        }
+    }
+}
+
+/// The machine's profile accounts, from the profiles a pass read.
+pub(crate) fn accounts(target: &KitTarget, profiles: Option<&KitProfiles>) -> Accounts {
+    let Some(profiles) = profiles else {
+        return Accounts {
+            known: false,
+            list: Vec::new(),
+        };
+    };
+    let mut by_key: BTreeMap<String, ProfileAccount> = BTreeMap::new();
+    for profile in &profiles.live {
+        let Some(spelled) = &profile.account else {
+            continue;
+        };
+        match locate(&target.home, &profile.kind, spelled) {
+            Ok(Located::Own(own)) => {
+                by_key
+                    .entry(own.key.clone())
+                    .or_insert_with(|| ProfileAccount {
+                        own: *own,
+                        profiles: Vec::new(),
+                    })
+                    .profiles
+                    .push(profile.id.0.clone());
+            }
+            Ok(Located::Default) => {}
+            Err(reason) => log("profile_target.unplaced", None, &reason.text),
+        }
+    }
+    Accounts {
+        known: true,
+        list: by_key.into_values().collect(),
+    }
+}
+
 /// A pass over every profile account (`crate::apply`, `crate::apply_profiles`).
 pub(crate) fn apply(
     target: &KitTarget,
@@ -1293,8 +1393,15 @@ pub(crate) fn apply(
     reinstall: &BTreeSet<ProfileId>,
     record: &mut Record,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> (Vec<ProfileReport>, bool) {
-    pass(target, record, Mode::Apply { scope, reinstall }, detection)
+    pass(
+        target,
+        record,
+        Mode::Apply { scope, reinstall },
+        detection,
+        profiles,
+    )
 }
 
 /// Every profile account judged, nothing changed (`crate::status`).
@@ -1302,9 +1409,10 @@ pub(crate) fn status(
     target: &KitTarget,
     record: &Record,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> Vec<ProfileReport> {
     let mut record = record.clone();
-    pass(target, &mut record, Mode::Read, detection).0
+    pass(target, &mut record, Mode::Read, detection, profiles).0
 }
 
 /// Takes Hide's pieces out of every profile account this installation

@@ -32,8 +32,8 @@
   "mission_answer_source": ["banner", "conversation"],
   "mission_decision_view_by": ["conductor", "worker"],
   "mission_answer_failure": ["conductor_gone", "device_disconnected", "send_failed", "session_unreadable"],
-  "mission_letters_held_for": ["unreachable", "approval", "draft", "unanswered"],
-  "mission_node_work": ["working", "waiting", "stopped", "no_worker"],
+  "mission_letters_held_for": ["approval", "draft"],
+  "mission_node_work": ["working", "waiting", "asleep", "stopped", "no_worker"],
   "plan_step_status": ["planned", "working", "done", "dropped"],
   "plan_review": ["approved", "proposed"],
   "plan_output": ["pr", "file", "none"],
@@ -89,7 +89,7 @@
   "request_verb": ["answer", "blocked", "fix", "review", "stopped", "result", "working", "waiting", "idle"],
   "user_turn_kind": ["plan_approval", "question"],
   "ask_subject_cause": ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"],
-  "human_kind": ["auth", "permission"],
+  "human_kind": ["auth", "permission", "install"],
   "review_decision": ["review_required", "changes_requested", "approved"],
   "pr_reviewer_state": ["changes_requested", "approved", "requested", "commented", "dismissed"],
   "session_group": ["needs_you", "working", "done", "idle", "resolved"],
@@ -171,5 +171,10 @@
   "peer_opened_by": ["active", "paused"],
   "peer_path": ["direct", "relay", "local"],
   "peer_reason": ["relay_unreachable", "relay_monthly_limit"],
-  "peer_update": ["here", "there"]
+  "peer_update": ["here", "there"],
+  "store_item_kind": ["skill", "mcp"],
+  "store_cell_state": ["on", "off", "waiting", "hand_written", "failed", "unsupported", "agent_off"],
+  "store_cell_failure": ["unreadable", "unwritable", "keys", "pending"],
+  "store_refusal_cause": ["not_found", "no_skills", "no_access", "unreachable", "no_git", "too_large", "name_taken", "differs", "too_many", "unsupported", "failed"],
+  "store_pass_refusal": ["keys_secret_gone", "unreadable"]
 }

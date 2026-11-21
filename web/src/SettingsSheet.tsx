@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, PlugIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, PlugIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -16,6 +16,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MobileTab } from "./MobileTab";
 import { ExternalToolsTab } from "./settings/ExternalToolsTab";
+import { SkillsTab } from "./settings/SkillsTab";
 import { awayDevice, coreMachineName, machineName, windowDeviceId } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
@@ -47,6 +48,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   devices: MonitorSmartphoneIcon,
   shortcuts: KeyboardIcon,
   agents: BotIcon,
+  skills: BlocksIcon,
   hideAi: SparklesIcon,
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
@@ -132,6 +134,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "devices" ? <DevicesTab actions={actions} /> : null}
               {tab === "shortcuts" ? <ShortcutsTab actions={actions} /> : null}
               {tab === "agents" ? <AgentsTab actions={actions} /> : null}
+              {tab === "skills" ? <SkillsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
