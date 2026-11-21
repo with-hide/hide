@@ -2528,7 +2528,10 @@ fn a_shell_enters_pair_view_alone_and_the_mode_draws_it_alone_again() {
 
     pair_event(&mut runtime, None);
     assert!(!mode_on(&runtime));
-    assert_eq!(runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair, None);
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair,
+        None
+    );
     assert_eq!(
         (
             lane_of(&runtime, &directory, TABS[0]),
@@ -2591,7 +2594,10 @@ fn pair_view_ends_when_the_pane_drawn_alone_closes() {
 
     engine_focuses(&mut runtime, &directory, TABS[0]);
     assert!(!mode_on(&runtime));
-    assert_eq!(runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair, None);
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair,
+        None
+    );
     assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
 }
 
@@ -2634,8 +2640,20 @@ fn pane_rows(runtime: &Runtime) -> Vec<(String, String, bool)> {
 fn a_link_pressed_in_a_pane_is_that_panes_view_and_not_to_look_at() {
     let (mut runtime, checkout, directory) = setup("link-owner");
     engine_splits_first_tab_with(&mut runtime, &directory, false);
-    open_link(&mut runtime, &checkout, &directory, "shell.md", "w-order:t1:q");
-    open_link(&mut runtime, &checkout, &directory, "agent.md", "w-order:t1:p");
+    open_link(
+        &mut runtime,
+        &checkout,
+        &directory,
+        "shell.md",
+        "w-order:t1:q",
+    );
+    open_link(
+        &mut runtime,
+        &checkout,
+        &directory,
+        "agent.md",
+        "w-order:t1:p",
+    );
     let rows = pane_rows(&runtime);
     assert!(
         rows.contains(&("w-order:t1:q".into(), "shell.md".into(), false)),

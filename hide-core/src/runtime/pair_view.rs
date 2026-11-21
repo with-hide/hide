@@ -562,21 +562,20 @@ impl Runtime {
         sessions: &[(String, SessionIdentity)],
     ) -> Option<String> {
         let scope = self.session_scope_of_pane(pane);
-        let own: Vec<&crate::view_layout::Display> = self
-            .view_displays(key)
-            .filter(|display| match &display.card {
-                Some(card @ DetailItem::Record { .. }) => {
-                    self.detail_owner_pane_among(card, sessions).as_deref() == Some(pane)
-                }
-                Some(_) => false,
-                None => {
-                    scope
-                        .as_ref()
-                        .is_some_and(|scope| display.openers.iter().any(|o| o.of_session(scope)))
-                        || self.link_pane_of(display).as_deref() == Some(pane)
-                }
-            })
-            .collect();
+        let own: Vec<&crate::view_layout::Display> =
+            self.view_displays(key)
+                .filter(|display| match &display.card {
+                    Some(card @ DetailItem::Record { .. }) => {
+                        self.detail_owner_pane_among(card, sessions).as_deref() == Some(pane)
+                    }
+                    Some(_) => false,
+                    None => {
+                        scope.as_ref().is_some_and(|scope| {
+                            display.openers.iter().any(|o| o.of_session(scope))
+                        }) || self.link_pane_of(display).as_deref() == Some(pane)
+                    }
+                })
+                .collect();
         own.iter()
             .filter(|display| display.unseen.is_some())
             .max_by_key(|display| display.opened_stamp)

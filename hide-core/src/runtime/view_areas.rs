@@ -2007,10 +2007,11 @@ impl Runtime {
             area_id,
             beside_display,
         } = payload;
-        let opener = opener_pane.as_deref().map_or(
-            crate::view_feedback::OpenedBy::Operator,
-            |pane| self.link_owner(pane),
-        );
+        let opener = opener_pane
+            .as_deref()
+            .map_or(crate::view_feedback::OpenedBy::Operator, |pane| {
+                self.link_owner(pane)
+            });
         let outcome = self.place_browser(
             &url,
             workspace,
@@ -2415,7 +2416,10 @@ impl Runtime {
                         (page.openers.clone(), page.operator, owners)
                     });
                 let own = |display: &mut Display| match (&opener, &parent) {
-                    (crate::view_feedback::OpenedBy::Operator, Some((openers, operator, (mark, terminal)))) => {
+                    (
+                        crate::view_feedback::OpenedBy::Operator,
+                        Some((openers, operator, (mark, terminal))),
+                    ) => {
                         // The page's own new tab is its sessions' newest View.
                         display.opened_stamp = stamp;
                         for known in openers {

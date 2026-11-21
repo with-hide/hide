@@ -1728,11 +1728,16 @@ impl Runtime {
             let stored = self.view_display(key, &display.id);
             // An agent's View is its pane's; one the operator opened from a
             // pane with no agent's link is that pane's (D-54).
-            let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()).or_else(|| {
-                stored
-                    .and_then(|stored| stored.link_terminal.as_ref())
-                    .and_then(|terminal| self.link_terminal_pane(terminal))
-            }) else {
+            let Some(pane) = display
+                .opener
+                .as_ref()
+                .and_then(|o| o.pane_id.clone())
+                .or_else(|| {
+                    stored
+                        .and_then(|stored| stored.link_terminal.as_ref())
+                        .and_then(|terminal| self.link_terminal_pane(terminal))
+                })
+            else {
                 continue;
             };
             let unseen = stored.is_some_and(|stored| stored.unseen.is_some());
