@@ -145,7 +145,7 @@ describe("a bot's tile (PRD hide-external-control D-50, B39, B41)", () => {
     expect(bot(0)).not.toContain("ring-primary");
     const all = bot(0, { mode: "all" });
     expect(all).toMatch(/data-bot-mode="all"[^>]*ring-primary|ring-primary[^>]*data-bot-mode="all"/);
-    expect(button(all)).toContain('aria-label="nightly, Bot, All"');
+    expect(button(all)).toContain('aria-label="nightly, Bot, Full"');
   });
 
   it("rings as selected while its cell is in front", () => {

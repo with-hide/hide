@@ -144,7 +144,7 @@ export const devicesEnglish = {
   "devices.rail.done": "Unread {{count}}",
   "devices.rail.tool": "Bot",
   "devices.rail.botMode.own": "Own space",
-  "devices.rail.botMode.all": "All",
+  "devices.rail.botMode.all": "Full",
   "devices.rail.toolTurn": "Bot's turn {{count}}",
   "devices.catalog.loading": "Reading projects from {{device}}…",
   "devices.catalog.error": "{{device}} is {{state}}",

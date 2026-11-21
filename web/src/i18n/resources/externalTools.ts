@@ -2,7 +2,7 @@ import type { Catalog, Catalogs } from "../schema";
 
 // Settings › 봇 (Bots; PRD hide-external-control B2-B4, B11-B13, B15): a bot
 // works in its own space or in all of Hide, named the same here and on the
-// rail: 자기 공간 / Own space and 전체 / All.
+// rail: 자기 공간 / Own space and 전체 / Full.
 export const externalToolsEnglish = {
   "externalTools.connecting": "Connecting to hide…",
   "externalTools.pending.title": "Waiting for approval",
@@ -10,11 +10,11 @@ export const externalToolsEnglish = {
   "externalTools.requested": "Asked: {{when}}",
   "externalTools.mode.label": "Where this bot works",
   "externalTools.mode.own": "Own space",
-  "externalTools.mode.all": "All",
-  "externalTools.mode.ownDescription": "Works only with the agents and missions it starts itself",
-  "externalTools.mode.allDescription": "Also works in the workspaces you use: starts agents, types to them and takes missions",
+  "externalTools.mode.all": "Full",
+  "externalTools.mode.ownDescription": "Works only with the agents and missions it starts. It cannot touch your work",
+  "externalTools.mode.allDescription": "Works with your workspaces and agents too, on every connected device",
   "externalTools.approve.own": "Approve in its own space",
-  "externalTools.approve.all": "Approve for all",
+  "externalTools.approve.all": "Approve as Full",
   "externalTools.refuse": "Refuse",
   "externalTools.connected.title": "Connected bots",
   "externalTools.connected.count": "{{connected}} / {{limit}}",
@@ -36,8 +36,8 @@ const ko = {
   "externalTools.mode.label": "이 봇이 일할 곳",
   "externalTools.mode.own": "자기 공간",
   "externalTools.mode.all": "전체",
-  "externalTools.mode.ownDescription": "자기가 띄운 에이전트와 미션만 다뤄요",
-  "externalTools.mode.allDescription": "내가 쓰는 워크스페이스까지 같이 다뤄요: 에이전트를 띄우고, 말을 넣고, 미션을 맡을 수 있어요",
+  "externalTools.mode.ownDescription": "자기가 띄운 에이전트와 미션만 다뤄요. 내 작업은 건드리지 못해요",
+  "externalTools.mode.allDescription": "내가 쓰는 workspace와 에이전트까지, 연결된 기기 전부에서 다뤄요",
   "externalTools.approve.own": "자기 공간으로 승인",
   "externalTools.approve.all": "전체로 승인",
   "externalTools.refuse": "거절",
@@ -61,8 +61,8 @@ const zhCN = {
   "externalTools.mode.label": "此机器人的工作范围",
   "externalTools.mode.own": "自己的空间",
   "externalTools.mode.all": "全部",
-  "externalTools.mode.ownDescription": "只处理它自己启动的智能体和任务",
-  "externalTools.mode.allDescription": "也能在你使用的工作区中工作：启动智能体、向其输入并承接任务",
+  "externalTools.mode.ownDescription": "只处理它自己启动的智能体和任务，不能动你的工作",
+  "externalTools.mode.allDescription": "在所有已连接的设备上，也能处理你的工作区和智能体",
   "externalTools.approve.own": "批准在自己的空间",
   "externalTools.approve.all": "批准全部",
   "externalTools.refuse": "拒绝",
@@ -86,8 +86,8 @@ const ja = {
   "externalTools.mode.label": "このボットが働く場所",
   "externalTools.mode.own": "自分の空間",
   "externalTools.mode.all": "すべて",
-  "externalTools.mode.ownDescription": "自分で起動したエージェントとミッションだけを扱います",
-  "externalTools.mode.allDescription": "あなたが使うワークスペースでも働きます：エージェントの起動、入力、ミッションの受け持ち",
+  "externalTools.mode.ownDescription": "自分で起動したエージェントとミッションだけを扱い、あなたの作業には触れません",
+  "externalTools.mode.allDescription": "接続済みのすべてのデバイスで、あなたのワークスペースとエージェントも扱います",
   "externalTools.approve.own": "自分の空間で承認",
   "externalTools.approve.all": "すべてで承認",
   "externalTools.refuse": "拒否",
