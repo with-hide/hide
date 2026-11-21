@@ -2643,6 +2643,11 @@ impl Runtime {
                 live.then(|| pane(run.agent_id.as_deref())).flatten()
             },
             |opened| pane(opened.agent_id.as_deref()),
+            |id, number| {
+                self.automations
+                    .viewing
+                    .contains_key(&(id.to_owned(), number))
+            },
         )
     }
 

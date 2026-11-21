@@ -6,6 +6,8 @@
 // does, so a finished run's conversation can be opened again.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { untilLogged, withControl } from "./daemon-actions";
 import { startCaller, type CallerFixture } from "./engine-fixture";
 import { afterCleanup } from "./worker-owned";
@@ -230,6 +232,36 @@ test("a finished run whose terminal the core closed opens its conversation again
     await run.click();
     await expect(page.locator('[data-automation-run-head="1"] [data-automation-run-tag="opened"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the core opened the finished run's conversation again
     await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 }); // wait-ok: the resumed claude stand-in printed its ready line
+  } finally {
+    stop(stack);
+  }
+});
+
+test("a run's screen draws its terminal beside the run's summary, then beside what its agent opened", async ({ page }) => {
+  const stack = await start(page, "automations-pair");
+  try {
+    const project = fs.realpathSync.native(path.join(stack.fixture.root, "fixture"));
+    const report = path.join(project, "report.md");
+    fs.writeFileSync(report, "# 오늘의 보고서\n");
+    const id = await add(page, stack.daemon, { name: "보고서", task: "보고서를 열어 줘", agent: { kind: "claude" }, folder: project, run_now: true });
+    await page.locator("[data-sidebar-automations]").click();
+    await page.locator(`[data-automation-row="${id}"] [data-automation-open]`).click();
+    await page.locator('[data-automation-record="run"][data-automation-record-number="1"]').click();
+    const terminal = page.locator('[data-automation-run-terminal="pane"]');
+    await expect(terminal).toBeVisible({ timeout: 60_000 }); // wait-ok: the run's agent started by the core and its pane attached to the screen
+    const pane = await terminal.getAttribute("data-automation-run-pane");
+    if (!pane) throw new Error("the run's terminal names no pane");
+
+    // Its agent opened nothing yet: the right side is the run's summary, its task first.
+    await expect(page.locator('[data-automation-run-side="summary"]')).toContainText("보고서를 열어 줘");
+
+    // The agent opens its report: the run's desk takes the right side with it in front, the terminal still on the left.
+    const opened = await stack.fixture.runAs(pane)(["file", "open", report]);
+    expect(opened.status, opened.out).toBe(0);
+    const desk = page.locator('[data-automation-run-side="desk"]');
+    await expect(desk).toBeVisible({ timeout: 30_000 }); // wait-ok: the core placed the agent's View on the run's desk, in front
+    await expect(desk).toContainText("오늘의 보고서", { timeout: 30_000 }); // wait-ok: the document read from the run's checkout
+    await expect(terminal).toBeVisible();
   } finally {
     stop(stack);
   }

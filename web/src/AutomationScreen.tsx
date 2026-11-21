@@ -23,6 +23,8 @@ import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale"
 import { cn } from "./lib/utils";
 import { agentProps } from "./PaneGrid";
 import { PaneView } from "./PaneView";
+import { ViewAreas } from "./ViewAreas";
+import { workspaceViewOf } from "./workspace";
 import { catalogWorkspaces, type Automation, type AutomationRecord, type AutomationRun, type AutomationSpend, type AutomationsSection, type PaneRow, type SnapshotRest } from "./snapshot";
 import { focusedPaneOf, useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -581,16 +583,33 @@ function RunTags({ run }: { run: AutomationRun }) {
 
 /** The pane a run's terminal is, wherever its tab is; none until the core has it. */
 function paneRowOf(rest: SnapshotRest | null, paneId: string | undefined): PaneRow | null {
+  return placeOf(rest, paneId)?.pane ?? null;
+}
+
+/** The pane a run's terminal is and the tab that holds it, whose desk keeps what the run's agent opened. */
+function placeOf(rest: SnapshotRest | null, paneId: string | undefined): { pane: PaneRow; tabId: string | null } | null {
   if (!paneId) return null;
   for (const workspace of catalogWorkspaces(rest)) {
     for (const checkout of workspace.checkouts) {
       for (const tab of checkout.tabs) {
         const pane = tab.panes.find((row) => row.id === paneId);
-        if (pane) return pane;
+        if (pane) return { pane, tabId: tab.id ?? null };
       }
     }
   }
   return null;
+}
+
+/**
+ * Whether the desk in front is the run's tab's and holds something: the
+ * window moved the core's focus to the run's pane (`showAutomationRunPane`),
+ * so the front Workspace's desk is the one its agent opened Views on.
+ */
+function useRunDesk(tabId: string | null): boolean {
+  return useShellStore((s) => {
+    const view = workspaceViewOf(s.rest);
+    return tabId !== null && view?.tray.tab_id === tabId && (view.layout?.display_count ?? 0) > 0;
+  });
 }
 
 /**
@@ -605,7 +624,24 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
   const live = useShellStore((s) => s.connection === "live");
   const going = run.state === "running" || run.state === "starting";
   const pane = useShellStore((s) => paneRowOf(s.rest, run.pane_id));
+  const tabId = useShellStore((s) => placeOf(s.rest, run.pane_id)?.tabId ?? null);
+  const desk = useRunDesk(tabId);
   const opening = useRunOpening(automation.id, run.number);
+  // The run's pane takes the core's focus as it arrives, so its desk is the one in front (operator decision 2026-11-21);
+  // ← gives the focus back to the pane the operator was on, so the Workspace is as they left it.
+  const paneId = pane?.id ?? null;
+  const before = useRef<string | null>(null);
+  useEffect(() => {
+    if (!live || !paneId) return;
+    const rest = useShellStore.getState().rest;
+    const focused = rest ? focusedPaneOf(rest) : null;
+    if (before.current === null && focused !== paneId) before.current = focused;
+    actions.showAutomationRunPane(paneId);
+  }, [actions, live, paneId]);
+  const back = () => {
+    if (before.current) actions.focusPane(before.current);
+    useUiStore.getState().setAutomations({ run: null });
+  };
   // Arriving at a finished run whose terminal is closed is a press on it, which opens its conversation again (B17);
   // once here, a terminal that slept waits for [다시 열기] (B18).
   const openable = !going && !pane && !run.pane_id && !run.opened && run.resumable && !run.conversation_missing;
@@ -637,7 +673,7 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
   return (
     <>
       <div className="flex shrink-0 flex-wrap items-center gap-x-sm gap-y-xs border-b border-border px-lg py-sm" data-automation-run-head={run.number} data-automation-run-state={run.state}>
-        <BackButton label={automation.name} onBack={() => useUiStore.getState().setAutomations({ run: null })} />
+        <BackButton label={automation.name} onBack={back} />
         <h1 className="shrink-0 text-subhead font-semibold">{t("automationScreen.run.title", { when })}</h1>
         <span className="flex min-w-0 flex-1 items-center gap-xs">
           <RecordWords tone={shown.tone} text={shown.text} />
@@ -651,8 +687,39 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
           </Button>
         ) : null}
       </div>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-automation-run-body={run.number}>{body}</div>
+      {/* Pair view's shape from the start: the terminal on the left, on the right what the run's agent opened, else the run's summary (operator decision 2026-11-21). */}
+      <div className="flex min-h-0 min-w-0 flex-1" data-automation-run-body={run.number}>
+        <div className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col" data-automation-run-side="terminal">{body}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 basis-0 flex-col border-l border-border bg-card" role="region" aria-label={desk ? t("panes.lane.documents") : t("automationScreen.run.summary")} data-automation-run-side={desk ? "desk" : "summary"} data-view-area={desk ? "true" : undefined}>
+          {desk ? <ViewAreas actions={actions} /> : <RunSummary automation={automation} run={run} going={going} />}
+        </div>
+      </div>
     </>
+  );
+}
+
+/** The right side while the run's agent opened nothing: the task, how the run ended, and the agent's last answer. */
+function RunSummary({ automation, run, going }: { automation: Automation; run: Extract<AutomationRecord, { kind: "run" }>; going: boolean }) {
+  const words = useWords();
+  const { t } = words;
+  const shown = recordText(run, words.now, words.zone, words.language, t);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-md overflow-y-auto px-lg py-md" data-automation-run-summary={run.number}>
+      <h2 className="text-caption font-semibold text-subtle-foreground">{t("automationScreen.run.summary")}</h2>
+      <section className="flex flex-col gap-xxs">
+        <h3 className="text-micro text-muted-foreground">{t("automationScreen.run.summaryTask")}</h3>
+        <p className="whitespace-pre-wrap break-words text-caption text-foreground">{automation.task}</p>
+      </section>
+      <RecordWords tone={shown.tone} text={shown.text} />
+      {going ? (
+        <p className="text-caption text-muted-foreground">{t("automationScreen.run.summaryGoing")}</p>
+      ) : (
+        <section className="flex flex-col gap-xxs">
+          <h3 className="text-micro text-muted-foreground">{t("automationScreen.run.summaryAnswer")}</h3>
+          {run.answer ? <p className="whitespace-pre-wrap break-words text-caption text-foreground" data-automation-run-answer="true">{run.answer}</p> : <p className="text-caption text-muted-foreground">{t("automationScreen.run.summaryNoAnswer")}</p>}
+        </section>
+      )}
+    </div>
   );
 }
 

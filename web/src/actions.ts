@@ -2132,6 +2132,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * A run's terminal shown in the automation screen (operator decision
+     * 2026-11-21): the core's focus moves to the run's tab, so the desk in
+     * front is the run's, with what its agent opened and the operator has
+     * not seen brought forward, and the screen draws it beside the
+     * terminal. No opening begins, so the screen stays where it is.
+     */
+    showAutomationRunPane(paneId: string) {
+      dispatch(openPaneEvent(paneId, { revealUnseen: true }).event);
+    },
+
+    /**
      * A mission's map as a card tab on a desk, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
