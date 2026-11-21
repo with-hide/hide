@@ -151,13 +151,17 @@ it("keeps a direct cleanup failure in the connection line while relay pairing re
   await unmount();
 });
 
-// PRD device-connect-iroh D-53, D-70: a screen another machine shows of this one removes a phone and never pairs one.
-it("offers no pairing on a screen of another machine, and keeps Revoke there", async () => {
+// PRD device-connect-iroh D-53, D-70: a screen another machine shows of this one removes a phone and never pairs one. The
+// switch and the method decide whether a phone can pair and end a code shown on that machine, so they are not offered either,
+// and the screen does not count as a watcher of the page, whose last one leaving ends that code.
+it("offers no pairing control on a screen of another machine, and keeps Revoke there", async () => {
   const phone = { id: "p1", name: "iPhone", last_seen_ms: 0, connected: true, notifications: "on", revoke_at_ms: 1 } as MobileState["phones"][number];
-  const { events, q, unmount } = await mount(frame({ method: "relay", checklist: null, phones: [phone] }), false);
+  const { events, q, container, unmount } = await mount(frame({ method: "relay", checklist: null, phones: [phone] }), false);
   expect(q("[data-mobile-pairing]")).toBeNull();
   expect(q("[data-mobile-show-code]")).toBeNull();
+  expect(container.querySelector('[role="switch"]')).toBeNull();
+  expect(q("[data-mobile-remote-line]")?.textContent).toContain("Here you can revoke a phone");
   await act(async () => { q('[data-mobile-revoke="p1"]')?.click(); });
-  expect(kinds(events)).toContain("mobile_revoke");
+  expect(kinds(events)).toEqual(["mobile_revoke"]);
   await unmount();
 });

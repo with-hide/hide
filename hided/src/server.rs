@@ -894,22 +894,24 @@ fn mobile_frame(payload: &Value, own_screen: bool) -> Value {
 }
 
 /// Whether a `mobile_*` event from a screen goes on to Mobile. A screen
-/// another machine shows of this one removes a phone and changes Mobile's
-/// settings as this machine's own window does, but it neither makes nor ends a
-/// pairing code (PRD device-connect-iroh D-53, D-70): those are refused here,
-/// at the connection, and its watching of Settings > Mobile is not counted,
-/// since the last watcher leaving ends the code a person at this machine is
-/// pairing with (`Mobile::release`).
+/// another machine shows of this one may remove a phone, retry the relay and
+/// set when phones are notified; everything else is refused here, at the
+/// connection (PRD device-connect-iroh D-53, D-70): making or ending a code,
+/// and Mobile's switch and method, which decide whether a phone can pair and
+/// end the code a person at this machine is pairing with. Its watching of
+/// Settings > Mobile is not counted either, since the last watcher leaving
+/// ends that code too (`Mobile::release`). A kind not named here is refused,
+/// so a new control is this machine's own until it is let in.
 fn mobile_event_reaches(kind: &str, own_screen: bool) -> Result<bool, String> {
     if own_screen {
         return Ok(true);
     }
     match kind {
-        "mobile_show_code" | "mobile_hide_code" => Err(format!(
+        "mobile_revoke" | "mobile_retry" | "mobile_push_mode" => Ok(true),
+        "mobile_observe" => Ok(false),
+        _ => Err(format!(
             "{kind} is for this machine's own screen: a screen of another machine removes phones but never pairs one"
         )),
-        "mobile_observe" => Ok(false),
-        _ => Ok(true),
     }
 }
 
@@ -6643,19 +6645,28 @@ mod tests {
         assert_eq!(other["payload"]["phones"], payload["phones"]);
     }
 
-    /// The same screen cannot make or end a code by asking: the connection
-    /// refuses it, removing a phone still goes through, and its watching of
+    /// The same screen cannot make or end a code by asking, nor by turning
+    /// Mobile off or changing its method, which end it too: the connection
+    /// refuses them, removing a phone still goes through, and its watching of
     /// Settings > Mobile never ends the code a person at this machine shows
     /// (PRD device-connect-iroh D-53, D-70).
     #[test]
     fn a_screen_of_another_machine_cannot_make_or_end_a_pairing_code() {
-        for kind in ["mobile_show_code", "mobile_hide_code"] {
+        for kind in [
+            "mobile_show_code",
+            "mobile_hide_code",
+            "mobile_enable",
+            "mobile_method",
+            "mobile_unknown",
+        ] {
             assert!(mobile_event_reaches(kind, false).is_err(), "{kind}");
             assert_eq!(mobile_event_reaches(kind, true), Ok(true), "{kind}");
         }
         assert_eq!(mobile_event_reaches("mobile_observe", false), Ok(false));
         assert_eq!(mobile_event_reaches("mobile_observe", true), Ok(true));
-        assert_eq!(mobile_event_reaches("mobile_revoke", false), Ok(true));
+        for kind in ["mobile_revoke", "mobile_retry", "mobile_push_mode"] {
+            assert_eq!(mobile_event_reaches(kind, false), Ok(true), "{kind}");
+        }
     }
 
     /// Add a project's folder list words a node's refusal by the code the
