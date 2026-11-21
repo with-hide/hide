@@ -53,7 +53,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::ledger::{Ledger, Letter, SaveError, State, StoreFailure};
+use super::ledger::{CoreStart, Ledger, Letter, SaveError, State, StoreFailure};
 use super::watch::Watch;
 use super::{FILE_LIMIT, LETTER_LIMIT};
 use crate::coordination::human_turn::HumanTurn;
@@ -630,6 +630,8 @@ struct Rest {
     spawn_placement_revision: u64,
     #[serde(default)]
     human_turns: BTreeMap<String, HumanTurn>,
+    #[serde(default)]
+    core_starts: Vec<CoreStart>,
 }
 
 impl Rest {
@@ -648,6 +650,7 @@ impl Rest {
             identity_waits,
             spawn_placement_revision,
             human_turns,
+            core_starts,
         } = self;
         Ledger {
             version,
@@ -659,6 +662,7 @@ impl Rest {
             identity_waits,
             spawn_placement_revision,
             human_turns,
+            core_starts,
             // The `seen` table's, read beside the row (`seen_rows`).
             status_seen: BTreeMap::new(),
         }
@@ -674,6 +678,10 @@ struct RestRef<'a> {
     identity_waits: &'a [IdentityWait],
     spawn_placement_revision: u64,
     human_turns: &'a BTreeMap<String, HumanTurn>,
+    /// Left out while there are none, so a build before the starts on other
+    /// cores reads the row as it always did.
+    #[serde(skip_serializing_if = "<[CoreStart]>::is_empty")]
+    core_starts: &'a [CoreStart],
     /// Always true: the ledger's letters name the registrations they are
     /// between. A build before this one drops the mark when it writes the
     /// row again, and `upgrade` addresses its letters at the next open.
@@ -702,6 +710,7 @@ fn split(
         identity_waits,
         spawn_placement_revision,
         human_turns,
+        core_starts,
         status_seen,
     } = ledger;
     (
@@ -712,6 +721,7 @@ fn split(
             identity_waits,
             spawn_placement_revision: *spawn_placement_revision,
             human_turns,
+            core_starts,
             addressed: true,
         },
         letters,

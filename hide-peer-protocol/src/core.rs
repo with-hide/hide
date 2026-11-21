@@ -24,11 +24,21 @@ pub enum Item {
     Pane,
 }
 
-/// One agent of a core, as that core names it: its id there, and the name
-/// it goes by.
+/// Who asks a [`CoreMessage::Call`], as its own core names it: an agent by
+/// its registration there, or one that has none by its pane, and the name it
+/// goes by.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Party {
     pub item: Item,
+    pub id: String,
+    pub name: String,
+}
+
+/// One agent of a core by its registration there, and the name it goes by:
+/// a letter is between agents, never panes (PRD letters-missions-simplify
+/// D-21).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Agent {
     pub id: String,
     pub name: String,
 }
@@ -52,8 +62,9 @@ pub enum CoreMessage {
     /// back. The same letter may come again until it is answered.
     Letter {
         id: String,
-        from: Party,
-        /// The recipient as the receiving core knows it.
+        from: Agent,
+        /// The recipient's registration on the receiving core, by its id
+        /// or the name it registered under; a pane is not a recipient.
         to: String,
         /// For a reply, the id the receiving core gave the letter it
         /// answers, which went the other way.
@@ -66,9 +77,9 @@ pub enum CoreMessage {
         now: bool,
     },
     /// The receiving core keeps letter `id` for `recipient`.
-    LetterTaken { id: String, recipient: Party },
+    LetterTaken { id: String, recipient: Agent },
     /// The receiving core keeps nothing of letter `id`, and why: the
-    /// letter ends undelivered for its sender.
+    /// letter ends with no recipient for its sender.
     LetterRefused { id: String, reason: String },
     /// A read or a start `from` asks the receiving core for. `call` names
     /// the answer.
@@ -117,8 +128,7 @@ mod tests {
         assert_eq!(CoreMessage::parse(&later).unwrap(), None);
         let taken = CoreMessage::LetterTaken {
             id: "letter-4".into(),
-            recipient: Party {
-                item: Item::Agent,
+            recipient: Agent {
                 id: "agent-2".into(),
                 name: "worker".into(),
             },

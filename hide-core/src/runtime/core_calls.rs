@@ -8,33 +8,34 @@
 //! paired machines the daemon told the core (`crate::peer_machines`). The
 //! daemon carries the messages and decides nothing.
 //!
-//! A letter one of this core's agents writes to `core:<device>:agent:<id>`
-//! is an ordinary ledger letter whose recipient is that identity. It stays
-//! `pending`, on the clock of the connection to that machine, until the
-//! other core answers: taken, it is delivered; refused, it ends undelivered
-//! and its sender gets one letter from `hide:delivery` with the reason. A
-//! reply names the letter it answers by the id its own core gave it
+//! A letter is between agents, never panes (PRD letters-missions-simplify
+//! D-21): one of this core's agents writes to `core:<device>:agent:<id>`,
+//! and a sender Hide holds no registration for is refused. The letter is an
+//! ordinary ledger letter whose recipient is that identity. It stays
+//! `pending`, with no deadline, until the other core answers: taken, it is
+//! delivered; refused, it ends `no_recipient` with the other core's reason
+//! (`Ledger::refuse_core`) and its sender's cell about it says why. A reply
+//! names the letter it answers by the id its own core gave it
 //! (`Letter::core_id`), and is run here as the recipient of that letter.
 //!
-//! What is owed a refused letter is memory, as a spent bell's is
-//! (`spent_bells`): the store ends the letter on its next pass and the note
-//! goes once. Bounded by the open letters.
+//! Nothing of a letter is kept here: the ledger holds it, and what another
+//! core answers is written there at once.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::json;
 
 use super::Runtime;
 use super::delivery::Observation;
-use super::hide_notes::{Note, NoteKind};
 use crate::access::{self, CoreAsk, MACHINE_NOT_PERMITTED};
 use crate::address::CoreAddress;
+use crate::coordination::AgentRecord;
 use crate::core_calls::{
-    Asked, Call, CoreItem, CoreLink, Forward, Letter, Outcome, Party, Settle, Taking,
+    Agent, Asked, Call, CoreItem, CoreLink, Forward, Keeping, Letter, NO_RECIPIENT, Outbox,
+    Outcome, Party, Settle, Taking,
 };
 use crate::delivery::ledger::{Ledger, State};
-use crate::delivery::worker::{Effect, Proven};
+use crate::delivery::worker::{Effect, Proven, Start};
 use crate::delivery::{Actor, Command};
 use crate::peer_machines::PeerMachine;
 use crate::workspace_control::Context;
@@ -45,6 +46,14 @@ const MACHINE_UNAVAILABLE: &str = "machine_unavailable";
 /// Two paired machines say the device id a `core:` name carries.
 const DEVICE_AMBIGUOUS: &str = "device_ambiguous";
 
+/// A letter was addressed to a pane of another machine: a letter goes to an
+/// agent (D-21).
+const RECIPIENT_NOT_AGENT: &str = "recipient_not_agent";
+
+/// The agent that writes to, or asks a start of, another machine is not one
+/// Hide knows: it has no registration, and the core cannot make it one.
+pub(crate) const SENDER_NOT_REGISTERED: &str = "sender_not_registered";
+
 #[derive(Default)]
 pub(in crate::runtime) struct CoreLetters {
     /// The connection to the other cores; none in a core no daemon gave one.
@@ -52,22 +61,21 @@ pub(in crate::runtime) struct CoreLetters {
     /// The daemon told the paired machines at least once, so a machine not
     /// among them is one this core is paired with no longer.
     told: bool,
-    /// Letters another core refused, with why, until the store ended them
-    /// and their sender was told.
-    refused: BTreeMap<String, Refused>,
-    /// A thread is telling senders; it is the only one.
-    noting: bool,
     /// The letters waiting to go to another core at the last publish.
     outbound: Vec<String>,
 }
 
-struct Refused {
-    reason: String,
-    noted: bool,
+/// The registration `record` as its core names it to another.
+fn agent_of(record: &AgentRecord) -> Agent {
+    Agent {
+        id: record.id.clone(),
+        name: record.wire_name().to_owned(),
+    }
 }
 
-/// `actor` as its own core names it to another: by its registration,
-/// ended or not, while the ledger keeps one, and by its pane otherwise.
+/// `actor` as its own core names it to another when it asks a read: by
+/// its registration, ended or not, while the ledger keeps one, and by its
+/// pane otherwise.
 fn core_party(ledger: &Ledger, actor: &Actor) -> Party {
     let record = ledger
         .agents
@@ -76,17 +84,23 @@ fn core_party(ledger: &Ledger, actor: &Actor) -> Party {
         .filter(|record| record.actor.same_identity(actor))
         .min_by_key(|record| record.ended);
     match record {
-        Some(record) => Party {
-            item: CoreItem::Agent,
-            id: record.id.clone(),
-            name: record.wire_name().to_owned(),
-        },
+        Some(record) => agent_of(record).into(),
         None => Party {
             item: CoreItem::Pane,
             id: actor.pane_id.clone(),
             name: actor.name.clone(),
         },
     }
+}
+
+/// The agent that runs now in the place of the registration `id` names, by
+/// its id or the name it registered under: itself, or the last agent that
+/// took its pane over. None when no agent runs there now, or for an
+/// identity Hide owns, which another machine writes nothing to.
+fn agent_now<'a>(ledger: &'a Ledger, id: &str) -> Option<&'a AgentRecord> {
+    crate::coordination::registered_record(ledger, id)
+        .or_else(|| crate::coordination::live_successor(ledger, id)?.ok())
+        .filter(|record| !record.actor.code_owned())
 }
 
 impl Runtime {
@@ -118,20 +132,6 @@ impl Runtime {
                 .map(|machine| machine.key.clone())
                 .collect()
         })
-    }
-
-    /// The connections to other cores, as the ledger's clocks name them,
-    /// with whether each stands now (`Actor::reach`).
-    pub(super) fn core_reach(&self) -> impl Iterator<Item = (String, bool)> + '_ {
-        self.snapshot
-            .navigator
-            .peers
-            .iter()
-            .filter(|machine| {
-                access::core_standing(machine).is_some()
-                    || access::core_standing_there(machine).is_some()
-            })
-            .map(|machine| (Actor::core_reach(&machine.device_id), machine.connected))
     }
 
     /// Tells the daemon when the letters waiting to go to another core
@@ -245,9 +245,12 @@ impl Runtime {
             Command::Send { target, kind, .. }
                 if kind == "report"
                     && self.delivery_ledger.as_ref().is_ok_and(|ledger| {
-                        ledger.core_starts.iter().any(|start| {
-                            start.key == machine.key
-                                && core_party(ledger, &start.origin).id == *target
+                        // To the agent that asked, as it runs now.
+                        agent_now(ledger, target).is_some_and(|to| {
+                            ledger
+                                .core_starts
+                                .iter()
+                                .any(|start| start.key == machine.key && start.origin == to.id)
                         })
                     }) =>
             {
@@ -355,8 +358,10 @@ impl Runtime {
     }
 
     /// Who a send that names another core's agent goes to (`core:<device>:
-    /// agent|pane:<id>`): that agent as this core knows it, with no pane to
-    /// observe. `None` for any other target.
+    /// agent:<id>`): that agent as this core knows it, with no pane to
+    /// observe. A pane of another machine is no recipient, and neither is a
+    /// sender Hide holds no registration for and cannot make one (D-21).
+    /// `None` for any other target.
     pub(super) fn core_send_target(
         &self,
         sender: &Actor,
@@ -369,6 +374,9 @@ impl Runtime {
             return Ok(None);
         };
         let address = address.map_err(|_| "target_unavailable".to_owned())?;
+        if address.item != CoreItem::Agent {
+            return Err(RECIPIENT_NOT_AGENT.into());
+        }
         let machine = self.peer_on(address.device)?;
         let recipient = Actor::core(
             address,
@@ -378,6 +386,7 @@ impl Runtime {
             self.node.as_str(),
         );
         self.core_send_admitted(sender, &recipient, command)?;
+        self.core_asker_registration(sender)?;
         if *force {
             // No composer of another core's pane is read from here.
             return Err("force_target_asleep".into());
@@ -387,87 +396,120 @@ impl Runtime {
         )))
     }
 
-    /// The letters waiting to go to machine `key`, as its core takes them.
-    pub(crate) fn core_outbox(&mut self, key: &str) -> Vec<Letter> {
+    /// The registration `actor` is made with before it writes to, or asks
+    /// a start of, another machine, when it has none; refused when Hide
+    /// holds none for it and reads none from its pane, since the other
+    /// machine answers an agent.
+    fn core_asker_registration(&self, actor: &Actor) -> Result<Option<AgentRecord>, String> {
+        let ledger = self.delivery_ledger.as_ref().map_err(String::clone)?;
+        if crate::coordination::registered_id(ledger, actor).is_some() {
+            return Ok(None);
+        }
+        self.party_registration(ledger, actor)
+            .map(Some)
+            .ok_or_else(|| SENDER_NOT_REGISTERED.to_owned())
+    }
+
+    /// The letters waiting to go to machine `key`, as its core takes them,
+    /// and the ends of those that cannot go: a reply whose original this
+    /// ledger no longer names, and a letter whose sender has no
+    /// registration.
+    pub(crate) fn core_outbox(&mut self, key: &str) -> Outbox {
+        let mut outbox = Outbox::default();
         if self.peer_keyed(key).is_err() {
-            return Vec::new();
+            return outbox;
         }
         let Ok(ledger) = self.delivery_state() else {
-            return Vec::new();
+            return outbox;
         };
-        let mut letters = Vec::new();
         for letter in &ledger.letters {
-            if letter.state != State::Pending || self.core_letters.refused.contains_key(&letter.id)
-            {
-                continue;
-            }
             // Only what was written to an agent of this connection.
             let Some(address) = letter
                 .recipient
                 .core_address()
-                .filter(|_| letter.recipient.core_of(key))
+                .filter(|_| letter.state == State::Pending && letter.recipient.core_of(key))
             else {
                 continue;
             };
-            // A reply names the letter it answers as its sender's core
-            // does; one whose original this ledger no longer keeps cannot
-            // say which letter it answers.
-            let reply_to = match &letter.reply_to {
-                None => None,
-                Some(local) => match ledger
-                    .letters
-                    .iter()
-                    .find(|original| original.id == *local)
-                    .and_then(|original| original.core_id.clone())
-                {
-                    Some(theirs) => Some(theirs),
-                    None => {
-                        self.core_letter_refused(&letter.id, "letter_unavailable");
-                        continue;
-                    }
-                },
-            };
-            letters.push(Letter {
-                id: letter.id.clone(),
-                from: core_party(&ledger, &letter.sender),
-                to: address.id.to_owned(),
-                reply_to,
-                kind: letter.kind.clone(),
-                intent: letter.intent.clone(),
-                body: letter.body.clone(),
-                now: letter.immediate,
-            });
+            let worded = (|| {
+                let from = letter
+                    .from
+                    .as_deref()
+                    .and_then(|id| ledger.agents.iter().find(|record| record.id == id))
+                    .map(agent_of)
+                    .ok_or(SENDER_NOT_REGISTERED)?;
+                // A reply names the letter it answers as its sender's core
+                // does; one whose original this ledger no longer keeps
+                // cannot say which letter it answers.
+                let reply_to = match &letter.reply_to {
+                    None => None,
+                    Some(local) => Some(
+                        ledger
+                            .letters
+                            .iter()
+                            .find(|original| original.id == *local)
+                            .and_then(|original| original.core_id.clone())
+                            .ok_or("letter_unavailable")?,
+                    ),
+                };
+                Ok::<_, &str>(Letter {
+                    id: letter.id.clone(),
+                    from,
+                    to: address.id.to_owned(),
+                    reply_to,
+                    kind: letter.kind.clone(),
+                    intent: letter.intent.clone(),
+                    body: letter.body.clone(),
+                    now: letter.immediate,
+                })
+            })();
+            match worded {
+                Ok(letter) => outbox.letters.push(letter),
+                Err(reason) => outbox
+                    .ended
+                    .extend(self.core_letter_refused(letter, key, reason)),
+            }
         }
-        letters
+        outbox
     }
 
-    fn core_letter_refused(&mut self, id: &str, reason: &str) {
+    /// Letter `letter` to an agent of the core on connection `key` does not
+    /// go, and why: its sender's cell about it says so, once, and the write
+    /// that ends it is handed back (`Ledger::refuse_core`).
+    fn core_letter_refused(
+        &mut self,
+        letter: &crate::delivery::ledger::Letter,
+        key: &str,
+        reason: &str,
+    ) -> Option<Settle> {
         crate::diagnostic!(json!({
             "component": "delivery", "kind": "core_letter.refused",
-            "letter_id": id, "reason": reason,
+            "letter_id": letter.id, "reason": reason,
         }));
-        self.core_letters.refused.insert(
-            id.to_owned(),
-            Refused {
-                reason: reason.to_owned(),
-                noted: false,
-            },
+        // News of a fact that does not change: the letter's own time is its
+        // revision, so the same refusal found again is the same cell. A
+        // cell refused for room is not owed again; the letter keeps the
+        // reason for `hide inbox`.
+        let _ = self.post_status(
+            &letter.sender,
+            super::status_cells::letter_subject(&letter.id),
+            note_body(&letter.recipient.name, &letter.kind, &letter.id, reason),
+            true,
+            letter.created_at_unix_ms,
         );
+        Some(Settle {
+            client: self.delivery_client.clone()?,
+            effect: Effect::CoreRefused {
+                id: letter.id.clone(),
+                key: key.to_owned(),
+                reason: reason.to_owned(),
+            },
+        })
     }
 
-    /// The letters another core refused, with why, for the store's pass
-    /// (`Runtime::delivery_undeliverable`).
-    pub(super) fn core_letters_refused(&self) -> impl Iterator<Item = (&String, &String)> {
-        self.core_letters
-            .refused
-            .iter()
-            .map(|(id, refused)| (id, &refused.reason))
-    }
-
-    /// What machine `key`'s core answered for this core's letter `id`:
-    /// taken, the write that delivers it; refused, nothing to write now,
-    /// since the store ends it and its sender is told
-    /// (`Runtime::drive_core_refusals`).
+    /// What machine `key`'s core answered for this core's letter `id`, as
+    /// the write that delivers or ends it; nothing for a letter no longer
+    /// on its way to that machine.
     pub(crate) fn core_letter_answered(
         &mut self,
         key: &str,
@@ -485,24 +527,21 @@ impl Runtime {
                 },
             }),
             Outcome::Refused { reason } => {
+                let ledger = self.delivery_ledger.as_ref().map(Arc::clone).ok()?;
                 // Only a letter still on its way to that machine.
-                let waits = self.delivery_ledger.as_ref().is_ok_and(|ledger| {
-                    ledger.letters.iter().any(|letter| {
-                        letter.id == id
-                            && letter.state == State::Pending
-                            && letter.recipient.core_of(&machine.key)
-                    })
-                });
-                if waits {
-                    self.core_letter_refused(id, &reason);
-                }
-                None
+                let letter = ledger.letters.iter().find(|letter| {
+                    letter.id == id
+                        && letter.state == State::Pending
+                        && letter.recipient.core_of(&machine.key)
+                })?;
+                self.core_letter_refused(letter, &machine.key, &reason)
             }
         }
     }
 
     /// A letter machine `key`'s core sent for one of its agents, as the
-    /// command that agent runs here.
+    /// command that agent runs here, or the answer this core already has
+    /// for it.
     pub(crate) fn prepare_core_letter(
         &mut self,
         key: &str,
@@ -510,15 +549,43 @@ impl Runtime {
     ) -> Result<Taking, String> {
         let machine = self.peer_keyed(key)?.clone();
         let ledger = self.delivery_state()?;
-        let (actor, command, answered) = match letter.reply_to {
+        // A letter this core already keeps is answered as it stands, so one
+        // asked again after its agent ended is not judged as a new letter.
+        if let Some(kept) = ledger.letters.iter().find(|kept| {
+            kept.core_id.as_deref() == Some(&letter.id) && kept.sender.core_of(&machine.key)
+        }) {
+            let recipient = kept
+                .to
+                .as_deref()
+                .filter(|_| kept.state != State::NoRecipient)
+                .and_then(|to| ledger.agents.iter().find(|record| record.id == to));
+            return Ok(Taking::Kept(match recipient {
+                Some(record) => Outcome::Taken {
+                    recipient: agent_of(record),
+                },
+                None => Outcome::Refused {
+                    reason: NO_RECIPIENT.into(),
+                },
+            }));
+        }
+        let (actor, command, recipient) = match letter.reply_to {
             Some(original) => {
                 // It answers a letter this core sent that machine, whose
-                // recipient is the agent that answers now.
+                // recipient is the agent that answers now. The answer goes
+                // to the agent that runs in its sender's place.
                 let stored = ledger
                     .letters
                     .iter()
                     .find(|stored| stored.id == original)
                     .filter(|stored| stored.recipient.core_of(&machine.key))
+                    .ok_or("letter_unavailable")?;
+                let sender = stored
+                    .from
+                    .as_deref()
+                    .and_then(|from| crate::coordination::live_successor(&ledger, from))
+                    .map(|line| match line {
+                        Ok(record) | Err(record) => agent_of(record),
+                    })
                     .ok_or("letter_unavailable")?;
                 let actor = Actor {
                     name: Actor::core_name(&machine.name, &letter.from.name),
@@ -530,50 +597,35 @@ impl Runtime {
                     body: letter.body,
                     now: letter.now,
                 };
-                (actor, command, Some(stored.sender.clone()))
+                (actor, command, sender)
             }
             None => {
-                let actor = self.core_actor(&machine, &letter.from);
+                // A letter names an agent: a registration, or the agent
+                // that took its pane over, never a pane.
+                let to = agent_now(&ledger, &letter.to).ok_or("target_unavailable")?;
+                let actor = self.core_actor(&machine, &letter.from.clone().into());
                 let command = Command::Send {
-                    target: letter.to,
+                    target: to.id.clone(),
                     intent: letter.intent,
                     body: letter.body,
                     kind: letter.kind,
                     now: letter.now,
                     force: false,
                 };
-                (actor, command, None)
+                (actor, command, agent_of(to))
             }
         };
         self.core_inbound_admit(&machine, &command)?;
-        let intent = match &command {
-            Command::Send { intent, .. } | Command::Reply { intent, .. } => intent.clone(),
-            _ => String::new(),
-        };
         let context = self.core_context(&actor);
         let caller = Self::core_caller(&machine, &actor);
         let node = self.node.as_str().to_owned();
-        let prepared =
-            self.prepare_as(&node, &caller, context, Proven::Now, actor.clone(), command)?;
-        // Who took it: the recipient of the same letter kept before, the
-        // sender of the letter a reply answers, or the agent the send
-        // found.
-        let recipient = crate::delivery::mailbox::existing_intent(
-            &ledger,
-            &actor,
-            &intent,
-            crate::delivery::worker::now(),
-        )
-        .map(|stored| stored.recipient.clone())
-        .or(answered)
-        .or_else(|| prepared.target_actor().cloned())
-        .ok_or("target_unavailable")?;
-        Ok(Taking {
+        let prepared = self.prepare_as(&node, &caller, context, Proven::Now, actor, command)?;
+        Ok(Taking::Keep(Box::new(Keeping {
             prepared,
             client: self.delivery_client.clone().ok_or("delivery_unavailable")?,
             core_id: letter.id,
-            recipient: core_party(&ledger, &recipient),
-        })
+            recipient,
+        })))
     }
 
     /// A read or a start machine `key`'s core asked for one of its agents.
@@ -586,6 +638,19 @@ impl Runtime {
         let machine = self.peer_keyed(key)?.clone();
         let standing = access::core_standing(&machine).ok_or(MACHINE_NOT_PERMITTED)?;
         access::core_call_admit(standing, &asked)?;
+        // What starts here reports to its asker by letter, and a letter
+        // goes to an agent.
+        if from.item != CoreItem::Agent
+            && matches!(
+                &asked,
+                Asked::Delivery(command) if matches!(
+                    **command,
+                    Command::Agents { command: crate::coordination::Command::Spawn { .. } }
+                )
+            )
+        {
+            return Err(SENDER_NOT_REGISTERED.into());
+        }
         let actor = self.core_actor(&machine, from);
         let context = self.core_context(&actor);
         let node = self.node.as_str().to_owned();
@@ -637,7 +702,7 @@ impl Runtime {
         &self,
         actor: &Actor,
         command: &Command,
-    ) -> Result<Option<(Forward, Option<String>)>, String> {
+    ) -> Result<Option<(Forward, Option<Start>)>, String> {
         use crate::coordination::Command as Agents;
         let Command::Agents { command } = command else {
             return Ok(None);
@@ -693,8 +758,15 @@ impl Runtime {
             actor,
             Asked::Delivery(Box::new(Command::Agents { command: asked })),
         )?;
-        // A start is remembered by the connection it was asked on.
-        let start = start.then(|| forward.key.clone());
+        // A start is remembered by the connection it was asked on, for the
+        // agent its asker is: what starts there reports to it by letter.
+        let start = match start {
+            true => Some(Start {
+                key: forward.key.clone(),
+                registers: self.core_asker_registration(actor)?.map(Box::new),
+            }),
+            false => None,
+        };
         Ok(Some((forward, start)))
     }
 
@@ -750,100 +822,24 @@ impl Runtime {
         self.core_forward(address.device, &actor, Asked::Pane(there))
             .map(Some)
     }
-
-    /// Tells each sender whose letter another core refused, once the store
-    /// ended the letter undelivered. Run by the coordinator's tick; memory
-    /// only.
-    pub(crate) fn drive_core_refusals(&mut self) {
-        if self.core_letters.refused.is_empty() || self.effects_held() {
-            return;
-        }
-        let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
-            return;
-        };
-        self.core_letters.refused.retain(|id, refused| {
-            ledger
-                .letters
-                .iter()
-                .find(|letter| &letter.id == id)
-                .is_some_and(|letter| {
-                    letter.state == State::Pending
-                        || (letter.state == State::Undelivered && !refused.noted)
-                })
-        });
-        if self.core_letters.noting {
-            return;
-        }
-        let due: Vec<(String, &crate::delivery::ledger::Letter)> = self
-            .core_letters
-            .refused
-            .iter_mut()
-            .filter(|(_, refused)| !refused.noted)
-            .filter_map(|(id, refused)| {
-                let letter = ledger.letters.iter().find(|letter| &letter.id == id)?;
-                (letter.state == State::Undelivered).then(|| {
-                    refused.noted = true;
-                    (refused.reason.clone(), letter)
-                })
-            })
-            .collect();
-        let mut notes = Vec::new();
-        for (reason, letter) in due {
-            let target = self
-                .delivery_observations
-                .get(&letter.sender.pane_id)
-                .filter(|observation| observation.actor.same_identity(&letter.sender))
-                .cloned()
-                .or_else(|| {
-                    self.asleep_route(&letter.sender).map(|_| {
-                        super::agent_sleep::letters::asleep_observation(letter.sender.clone())
-                    })
-                });
-            let Some(target) = target else {
-                crate::diagnostic!(json!({
-                    "component": "delivery", "kind": "core_letter.refusal_note_unsent",
-                    "letter_id": letter.id, "code": "sender_unavailable",
-                }));
-                continue;
-            };
-            notes.push(Note {
-                body: note_body(&letter.recipient.name, &letter.kind, &letter.id, &reason),
-                letter: letter.id.clone(),
-                target,
-            });
-        }
-        if notes.is_empty() {
-            return;
-        }
-        let kind = NoteKind {
-            role: super::unreadable_letters::DELIVERY_ROLE,
-            thread: "hide-core-letter-notes",
-            intent: "letter-undelivered",
-            component: "delivery",
-            unsent: "core_letter.refusal_note_unsent",
-            now: true,
-        };
-        self.core_letters.noting = self.send_hide_notes(kind, notes, |runtime| {
-            runtime.core_letters.noting = false;
-        });
-    }
 }
 
-/// What Hide tells a sender whose letter another machine's core did not
-/// take: who, why in plain words, and what to do.
+/// What Hide tells a sender whose letter did not reach another machine's
+/// agent: who, why in plain words, and what to do.
 fn note_body(recipient: &str, kind: &str, letter: &str, reason: &str) -> String {
     let why = match reason {
         "capacity" => "that machine holds as many letters as it can",
-        "intent_conflict" => "that machine already holds another letter of yours under this intent",
         MACHINE_NOT_PERMITTED => "that machine does not let this one write to its agents first",
+        NO_RECIPIENT => "its agent ended and no agent took its place",
         "target_unavailable" | "target_ambiguous" | "target_identity_changed" => {
-            "that machine found no single agent by that name"
+            "that machine found no single agent by that id or name"
         }
         "letter_unavailable" => "the letter it answers is no longer kept",
+        SENDER_NOT_REGISTERED => "its sender is not an agent Hide knows",
         "update_needed" => "that machine's Hide is too old to take it",
         _ => "that machine refused it",
     };
     format!(
-        "Your {kind} {letter} to {recipient} was not delivered: {why} ({reason}). It ended undelivered and will not be sent again. Check the agent with `hide agent show`, then send again under a new intent if it still matters."
+        "Your {kind} letter {letter} to {recipient} was not delivered: {why} ({reason}). It ended and will not be sent again.\nRead that machine's agents with `hide agent list --machine <device>`, then send again under a new --intent if it still matters."
     )
 }

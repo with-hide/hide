@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::build::{self, BuildFile, FileMessage};
-use crate::core::{Ask, CoreMessage, Item, Party};
+use crate::core::{Agent, Ask, CoreMessage, Item, Party};
 use crate::event::{self, Acked, Event};
 use crate::hello::{self, GrantState, Hello, HelloFrame, LinkRange};
 use crate::launch::{
@@ -257,7 +257,7 @@ fn core_messages() -> Vec<CoreMessage> {
     vec![
         CoreMessage::Letter {
             id: text(),
-            from: sample_party(),
+            from: sample_agent(),
             to: text(),
             reply_to: Some(text()),
             kind: text(),
@@ -267,7 +267,7 @@ fn core_messages() -> Vec<CoreMessage> {
         },
         CoreMessage::LetterTaken {
             id: text(),
-            recipient: sample_party(),
+            recipient: sample_agent(),
         },
         CoreMessage::LetterRefused {
             id: text(),
@@ -290,6 +290,13 @@ fn core_messages() -> Vec<CoreMessage> {
 fn sample_party() -> Party {
     Party {
         item: Item::Agent,
+        id: String::new(),
+        name: String::new(),
+    }
+}
+
+fn sample_agent() -> Agent {
+    Agent {
         id: String::new(),
         name: String::new(),
     }
@@ -478,6 +485,7 @@ pub fn shape() -> Value {
         "core": {
             "messages": messages(&CoreMessage::TYPES, &core_messages()),
             "party_fields": fields(&sample_party()),
+            "agent_fields": fields(&sample_agent()),
             "items": names!(Item: Agent, Pane),
             "asks": names!(Ask: Delivery, Pane),
         },

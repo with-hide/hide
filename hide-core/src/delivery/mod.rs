@@ -196,7 +196,6 @@ impl Actor {
                 == crate::engine::tokens::session_digest(&Self::core_caller(key, &self.pane_id))
     }
 
-    /// The agent on another machine's core this identity stands for.
     /// The name another machine's agent goes by here: its machine's name,
     /// then its own, cut to what a ledger key holds, since the other core
     /// chose it.
@@ -216,36 +215,6 @@ impl Actor {
             return None;
         }
         crate::address::CoreAddress::parse(self.pane_id.strip_prefix(HIDE_PREFIX)?)?.ok()
-    }
-
-    /// The machine a letter to this identity is handed over on: the other
-    /// core's for an agent of another core, which this core reaches only
-    /// while the two are connected, and the identity's own otherwise.
-    pub fn machine(&self) -> &str {
-        self.core_address()
-            .map_or(self.device_id.as_str(), |address| address.device)
-    }
-
-    /// What a letter to this identity waits on to be handed over, as the
-    /// ledger's clocks name it (`Ledger::node_clocks`): its machine, and
-    /// for an agent of another core `core:<device>`, the connection between
-    /// the two cores, which stands or falls apart from this core's own node
-    /// on that machine.
-    pub fn reach(&self) -> &str {
-        match self.core_address() {
-            // The pane slot is `hide:` then the address, which begins with
-            // `core:<device>`.
-            Some(address) => {
-                let from = HIDE_PREFIX.len();
-                &self.pane_id[from..from + crate::address::CORE_PREFIX.len() + address.device.len()]
-            }
-            None => &self.device_id,
-        }
-    }
-
-    /// The name [`Self::reach`] gives an agent of the core on `device`.
-    pub fn core_reach(device: &str) -> String {
-        format!("{}{device}", crate::address::CORE_PREFIX)
     }
 
     /// The operator's own code-owned identity on `node`, the core's own:

@@ -483,7 +483,7 @@ impl CoreHandle {
 
     /// The letters that wait to go to the core of machine `key`
     /// (`Core::core_outbox`); none when the core cannot be asked.
-    pub fn core_outbox(&self, key: &str) -> Vec<hide_core::core_calls::Letter> {
+    pub fn core_outbox(&self, key: &str) -> hide_core::core_calls::Outbox {
         let key = key.to_owned();
         self.on_owner(move |core| core.core_outbox(&key))
             .unwrap_or_default()

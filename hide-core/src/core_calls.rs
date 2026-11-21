@@ -17,13 +17,33 @@ use serde_json::Value;
 pub use crate::address::CoreItem;
 use crate::delivery::worker::{Client, Effect, Prepared};
 
-/// One agent of a core, as that core names it to another: its registration
-/// while it has one, its pane otherwise, and the name it goes by there.
+/// Who asks a read or a start of another core, as its own core names it:
+/// an agent by its registration while it has one, its pane otherwise, and
+/// the name it goes by there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Party {
     pub item: CoreItem,
     pub id: String,
     pub name: String,
+}
+
+/// One agent of a core by its registration there, and the name it goes by.
+/// A letter is between agents, never panes (PRD letters-missions-simplify
+/// D-21).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<Agent> for Party {
+    fn from(agent: Agent) -> Self {
+        Self {
+            item: CoreItem::Agent,
+            id: agent.id,
+            name: agent.name,
+        }
+    }
 }
 
 /// A letter on its way from one core to another. `id` is the sending
@@ -32,9 +52,9 @@ pub struct Party {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Letter {
     pub id: String,
-    pub from: Party,
-    /// The recipient as the receiving core knows it: an agent's id or name,
-    /// or a pane. Unread for a reply.
+    pub from: Agent,
+    /// The recipient's registration on the receiving core, by its id or
+    /// the name it registered under. Unread for a reply.
     pub to: String,
     /// For a reply, the id the receiving core gave the letter it answers:
     /// that letter went the other way, so the id is the receiver's own.
@@ -50,9 +70,10 @@ pub struct Letter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// It keeps the letter for `recipient`, the agent as it names it.
-    Taken { recipient: Party },
+    Taken { recipient: Agent },
     /// It keeps nothing of it, and why: the code a local send is refused
-    /// with.
+    /// with, or `no_recipient` when the agent it was for ended with no
+    /// agent after it.
     Refused { reason: String },
 }
 
@@ -88,12 +109,15 @@ pub trait CoreLink: Send + Sync {
 
 /// A failure of this core's own letter store, which says nothing about the
 /// letter: the sending core keeps it and sends it again.
-fn passes(code: &str) -> bool {
+pub(crate) fn passes(code: &str) -> bool {
     matches!(
         code,
         "delivery_unavailable" | "ledger_unavailable" | "delivery_timeout"
     )
 }
+
+/// The end a letter takes when no agent is there to take it.
+pub(crate) const NO_RECIPIENT: &str = "no_recipient";
 
 /// What the receiving core answers a letter with: `prepared` is what
 /// `Core::prepare_core_letter` made of it. An error is this core's own
@@ -108,13 +132,20 @@ pub fn take(prepared: Result<Taking, String>, within: Duration) -> Result<Outcom
     }
 }
 
-/// A letter of another core, admitted and ready to be kept.
-pub struct Taking {
+/// A letter of another core, admitted: either this core already keeps it,
+/// and answers as it stands, or it is ready to be kept.
+pub enum Taking {
+    Kept(Outcome),
+    Keep(Box<Keeping>),
+}
+
+/// A letter of another core ready to be kept.
+pub struct Keeping {
     pub(crate) prepared: Prepared,
     pub(crate) client: Client,
     /// The sending core's id for the letter.
     pub(crate) core_id: String,
-    pub(crate) recipient: Party,
+    pub(crate) recipient: Agent,
 }
 
 impl Taking {
@@ -122,33 +153,41 @@ impl Taking {
     /// store failing, after which the letter is asked again; every other
     /// refusal is the letter's outcome.
     pub fn run(self, within: Duration) -> Result<Outcome, String> {
-        let kept = self.prepared.run(within).and_then(|letter| {
+        let keeping = match self {
+            Self::Kept(outcome) => return Ok(outcome),
+            Self::Keep(keeping) => *keeping,
+        };
+        let Keeping {
+            prepared,
+            client,
+            core_id,
+            recipient,
+        } = keeping;
+        let kept = prepared.run(within).and_then(|letter| {
             let id = letter["id"]
                 .as_str()
                 .ok_or("letter_unavailable")?
                 .to_owned();
             // The same letter asked again names the same id, so a name
             // lost between the two is written by the next ask.
-            self.client.submit(
-                Effect::CoreName {
-                    id,
-                    core_id: self.core_id,
-                },
-                within,
-            )
+            client.submit(Effect::CoreName { id, core_id }, within)?;
+            Ok(letter["state"] == NO_RECIPIENT)
         });
         match kept {
-            Ok(_) => Ok(Outcome::Taken {
-                recipient: self.recipient,
+            // Its agent ended with no agent after it, or is closed: the
+            // store kept the letter only to end it.
+            Ok(true) => Ok(Outcome::Refused {
+                reason: NO_RECIPIENT.into(),
             }),
+            Ok(false) => Ok(Outcome::Taken { recipient }),
             Err(code) if passes(&code) => Err(code),
             Err(reason) => Ok(Outcome::Refused { reason }),
         }
     }
 }
 
-/// What another core answered for a letter of this one, ready to be
-/// written.
+/// What another core answered for a letter of this one, or what this core
+/// found of a letter it cannot send, ready to be written.
 pub struct Settle {
     pub(crate) client: Client,
     pub(crate) effect: Effect,
@@ -158,6 +197,25 @@ impl Settle {
     /// Writes it, off the core's lock.
     pub fn run(self, within: Duration) -> Result<(), String> {
         self.client.submit(self.effect, within).map(drop)
+    }
+}
+
+/// The letters that wait to go to one machine's core, and the ends of
+/// those this core cannot send (`Runtime::core_outbox`).
+#[derive(Default)]
+pub struct Outbox {
+    pub letters: Vec<Letter>,
+    pub(crate) ended: Vec<Settle>,
+}
+
+impl Outbox {
+    /// Writes the ends, off the core's lock, and gives the letters to send.
+    /// An end the store did not take is found again at the next ask.
+    pub fn settled(self, within: Duration) -> Vec<Letter> {
+        for end in self.ended {
+            let _ = end.run(within);
+        }
+        self.letters
     }
 }
 
@@ -188,6 +246,12 @@ pub(crate) struct Forward {
 }
 
 impl Forward {
+    /// The same ask, by `from`.
+    pub(crate) fn asked_by(mut self, from: Party) -> Self {
+        self.from = from;
+        self
+    }
+
     pub(crate) fn run(&self, within: Duration) -> Result<Value, String> {
         self.link.call(&self.key, &self.from, &self.asked, within)
     }

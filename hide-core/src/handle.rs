@@ -778,9 +778,9 @@ impl Core {
 
     /// The letters this core's agents wrote that wait to go to the core of
     /// machine `key` (`Runtime::core_outbox`).
-    pub fn core_outbox(&self, key: &str) -> Vec<crate::core_calls::Letter> {
+    pub fn core_outbox(&self, key: &str) -> crate::core_calls::Outbox {
         if !check_owner_thread(self, "core_calls.outbox") {
-            return Vec::new();
+            return crate::core_calls::Outbox::default();
         }
         lock_recover(&self.runtime).core_outbox(key)
     }

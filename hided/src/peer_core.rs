@@ -44,8 +44,9 @@ const READ_WITHIN: Duration = Duration::from_secs(15);
 const START_WITHIN: Duration = Duration::from_secs(180);
 /// The messages one stream holds to be written.
 const OUTBOUND: usize = 64;
-/// The calls of one peer this daemon runs at once, and the calls of this
-/// machine's agents that wait for an answer at once.
+/// The calls of one peer this daemon runs at once, over every stream that
+/// peer opens and closes, and the calls of this machine's agents that wait
+/// for an answer at once. A call past either is refused `capacity`.
 const CALLS_AT_ONCE: usize = 4;
 const CALLS_WAITING: usize = 64;
 
@@ -90,9 +91,23 @@ fn party_in(party: hide_peer::protocol::core::Party) -> Party {
 fn letter_out(letter: Letter) -> CoreMessage {
     CoreMessage::Letter {
         id: letter.id,
-        from: party_out(&letter.from),
+        from: agent_out(letter.from),
         to: letter.to,
         reply_to: letter.reply_to,
+fn agent_out(agent: Agent) -> hide_peer::protocol::core::Agent {
+    hide_peer::protocol::core::Agent {
+        id: agent.id,
+        name: agent.name,
+    }
+}
+
+fn agent_in(agent: hide_peer::protocol::core::Agent) -> Agent {
+    Agent {
+        id: agent.id,
+        name: agent.name,
+    }
+}
+
         kind: letter.kind,
         intent: letter.intent,
         body: letter.body,
@@ -103,7 +118,8 @@ fn letter_out(letter: Letter) -> CoreMessage {
 /// What this daemon asks of the core for the other machines' cores. Each
 /// call blocks on the core, so it runs on a blocking thread.
 pub trait Cores: Send + Sync + 'static {
-    /// The letters that wait to go to machine `key`.
+    /// The letters that wait to go to machine `key`, after the core wrote
+    /// the end of those it cannot send.
     fn outbox(&self, key: &str) -> Vec<Letter>;
     /// Keeps a letter machine `key` sent: its outcome, or an error when
     /// this core's own store failed and the letter is to come again.
@@ -116,7 +132,7 @@ pub trait Cores: Send + Sync + 'static {
 
 impl Cores for CoreHandle {
     fn outbox(&self, key: &str) -> Vec<Letter> {
-        self.core_outbox(key)
+        self.core_outbox(key).settled(LETTER_WITHIN)
     }
 
     fn take(&self, key: &str, letter: Letter) -> Result<Outcome, String> {
@@ -391,7 +407,7 @@ impl PeerCore {
             } => {
                 let letter = Letter {
                     id: id.clone(),
-                    from: party_in(from),
+                    from: agent_in(from),
                     to,
                     reply_to,
                     kind,
@@ -407,7 +423,7 @@ impl PeerCore {
                 match outcome {
                     Ok(Outcome::Taken { recipient }) => Some(CoreMessage::LetterTaken {
                         id,
-                        recipient: party_out(&recipient),
+                        recipient: agent_out(recipient),
                     }),
                     Ok(Outcome::Refused { reason }) => {
                         record(
@@ -434,7 +450,7 @@ impl PeerCore {
                     key,
                     id,
                     Outcome::Taken {
-                        recipient: party_in(recipient),
+                        recipient: agent_in(recipient),
                     },
                 )
                 .await;
@@ -717,7 +733,7 @@ mod tests {
         fn take(&self, _key: &str, letter: Letter) -> Result<Outcome, String> {
             let answer = lock(&self.takes).pop_front().unwrap_or_else(|| {
                 Ok(Outcome::Taken {
-                    recipient: party("agent-9", "reviewer"),
+                    recipient: agent("agent-9", "reviewer"),
                 })
             });
             lock(&self.taken).push(letter);
@@ -760,7 +776,7 @@ mod tests {
     fn letter(id: &str) -> Letter {
         Letter {
             id: id.to_owned(),
-            from: party("agent-1", "worker"),
+            from: agent("agent-1", "worker"),
             to: "reviewer".to_owned(),
             reply_to: None,
             kind: "request".to_owned(),
@@ -820,6 +836,13 @@ mod tests {
         pair.mac_service.outbox_moved();
         pair.mac_core
             .until("the answer to the Mac's letter", |core| {
+    fn agent(id: &str, name: &str) -> Agent {
+        Agent {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        }
+    }
+
                 !lock(&core.answers).is_empty()
             })
             .await;
@@ -829,7 +852,7 @@ mod tests {
             [(
                 "letter-1".to_owned(),
                 Outcome::Taken {
-                    recipient: party("agent-9", "reviewer"),
+                    recipient: agent("agent-9", "reviewer"),
                 }
             )]
         );
@@ -856,10 +879,10 @@ mod tests {
         lock(&pair.pc_core.takes).extend([
             Err("ledger_unavailable".to_owned()),
             Ok(Outcome::Taken {
-                recipient: party("agent-9", "reviewer"),
+                recipient: agent("agent-9", "reviewer"),
             }),
             Ok(Outcome::Refused {
-                reason: "intent_conflict".to_owned(),
+                reason: "target_unavailable".to_owned(),
             }),
         ]);
         lock(&pair.mac_core.waiting).push((pair.pc_key.clone(), letter("letter-1")));
@@ -885,7 +908,7 @@ mod tests {
             (
                 "letter-2".to_owned(),
                 Outcome::Refused {
-                    reason: "intent_conflict".to_owned(),
+                    reason: "target_unavailable".to_owned(),
                 }
             )
         );
