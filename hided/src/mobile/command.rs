@@ -369,6 +369,70 @@ mod tests {
         assert_eq!(owed.last().unwrap(), "one-more");
     }
 
+    /// The loop that sends owed new-phone notices is owned to the end: with
+    /// the batch it took still waiting for a blocking thread, `shutdown` does
+    /// not return, and it returns once that batch and the loop have finished
+    /// (PRD device-connect-iroh D-70).
+    #[test]
+    fn shutdown_waits_for_the_batch_of_new_phone_notices_in_flight() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+            let (_open, opened) = tokio::sync::watch::channel(true);
+            let mobile = super::super::test_mobile_opened(directory.path(), &gate, opened);
+            let (code, _) = exposed_code(&mobile);
+            let (phone, _) = mobile.pair(&code, "Pixel").unwrap();
+            mobile.owe_paired_notice(phone);
+            let observing = mobile
+                .resident_task
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("Mobile runs its resident loops")
+                .abort_handle();
+            // The one blocking thread is held, so the batch the loop takes waits behind it.
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let (started, holding) = tokio::sync::oneshot::channel();
+            let holder = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                let _ = held.recv_timeout(Duration::from_secs(30));
+            });
+            holding.await.unwrap();
+            tokio::time::advance(super::super::OBSERVE_INTERVAL).await;
+            for _ in 0..100 {
+                if mobile.lock().paired_notices.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                mobile.lock().paired_notices.is_empty(),
+                "the loop took the owed notice"
+            );
+            let stopping = tokio::spawn({
+                let mobile = Arc::clone(&mobile);
+                async move { mobile.shutdown().await }
+            });
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                !stopping.is_finished(),
+                "shutdown waits for the batch in flight"
+            );
+            release.send(()).unwrap();
+            holder.await.unwrap();
+            stopping.await.unwrap();
+            assert!(observing.is_finished());
+        });
+    }
+
     #[tokio::test]
     async fn a_full_computer_refuses_before_it_turns_anything_on() {
         let directory = tempfile::tempdir().unwrap();

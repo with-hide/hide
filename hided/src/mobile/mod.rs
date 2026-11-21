@@ -411,6 +411,11 @@ pub struct Mobile {
     stopping: watch::Sender<bool>,
     relay_change: watch::Sender<u64>,
     relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The task that runs Mobile's resident loops: the seven-day sweep, and
+    /// once the core opens, `observe_loop`, `follow` and the first reconcile.
+    /// `shutdown` joins it, and with it the notice batch and delivery pass
+    /// the observe loop has in flight.
+    resident_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 fn record_transport_failure(failure: &CommandFailure, step: &str) {
@@ -518,6 +523,7 @@ impl Mobile {
             stopping: watch::channel(false).0,
             relay_change: watch::channel(0).0,
             relay_task: Mutex::new(None),
+            resident_task: Mutex::new(None),
         });
         // A notice for an app phone carries the relay room, which comes from these keys. The
         // supervisor's first pass makes them too, but a notice can be delivered before that pass
@@ -532,7 +538,7 @@ impl Mobile {
         mobile.sweep();
         mobile.publish();
         let startup = Arc::clone(&mobile);
-        tokio::spawn(async move {
+        let opened = async move {
             let mut open = startup.config.open.clone();
             let mut stopping = startup.stopping.subscribe();
             tokio::select! {
@@ -541,11 +547,22 @@ impl Mobile {
                 },
                 _ = stopping.wait_for(|stopping| *stopping) => return,
             }
-            tokio::spawn(Arc::clone(&startup).observe_loop());
-            tokio::spawn(Arc::clone(&startup).follow());
-            startup.reconcile_if_owed().await;
+            tokio::join!(
+                Arc::clone(&startup).observe_loop(),
+                Arc::clone(&startup).follow(),
+                startup.reconcile_if_owed(),
+            );
+        };
+        let resident = tokio::spawn({
+            let sweeping = Arc::clone(&mobile);
+            async move {
+                tokio::join!(sweeping.sweep_loop(), opened);
+            }
         });
-        tokio::spawn(Arc::clone(&mobile).sweep_loop());
+        *mobile
+            .resident_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(resident);
         mobile
     }
 
@@ -1268,6 +1285,14 @@ impl Mobile {
     pub async fn shutdown(&self) {
         self.stopping.send_replace(true);
         self.close_phones("mobile_off");
+        let resident = self
+            .resident_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = resident {
+            let _ = task.await;
+        }
         let relay_task = self
             .relay_task
             .lock()
@@ -1316,9 +1341,12 @@ impl Mobile {
         let mut pending_delivery: Option<tokio::task::JoinHandle<()>> = None;
         let mut pending_paired: Option<tokio::task::JoinHandle<()>> = None;
         loop {
+            // `wait_for` reads the flag as it is now, so a stop that came
+            // before this loop first ran ends it too, and `shutdown` never
+            // waits on a loop that missed it.
             tokio::select! {
                 _ = tokio::time::sleep(OBSERVE_INTERVAL) => {}
-                _ = stopping.changed() => break,
+                _ = stopping.wait_for(|stopping| *stopping) => break,
             }
             if pending_paired
                 .as_ref()
@@ -1622,7 +1650,7 @@ impl Mobile {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(SWEEP_INTERVAL) => {}
-                _ = stopping.changed() => return,
+                _ = stopping.wait_for(|stopping| *stopping) => return,
             }
             self.sweep();
         }
@@ -3066,6 +3094,17 @@ pub(super) fn test_mobile(
     directory: &std::path::Path,
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
 ) -> Arc<Mobile> {
+    // These tests drive the phone boundary directly, never a network supervisor.
+    test_mobile_opened(directory, gate, tokio::sync::watch::channel(false).1)
+}
+
+/// `test_mobile` over a core whose opening the test decides (`open`).
+#[cfg(test)]
+pub(super) fn test_mobile_opened(
+    directory: &std::path::Path,
+    gate: &Arc<hide_core::input_gate::PaneInputGate>,
+    open: tokio::sync::watch::Receiver<bool>,
+) -> Arc<Mobile> {
     let core = Arc::new(crate::core::CoreHandle::bare(directory));
     let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
     Mobile::start(Config {
@@ -3081,8 +3120,7 @@ pub(super) fn test_mobile(
         core: Arc::clone(&core),
         input_gate: Arc::clone(gate),
         start_demand: Arc::default(),
-        // These tests drive the phone boundary directly, never a network supervisor.
-        open: tokio::sync::watch::channel(false).1,
+        open,
         desktop: Arc::default(),
         boundary: Arc::clone(&boundary),
         roots: Arc::new(crate::RootFollower::new(
