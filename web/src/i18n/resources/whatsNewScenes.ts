@@ -44,8 +44,12 @@ export const whatsNewScenesEnglish = {
   "whatsNewScene.skills.name": "pr-review",
   "whatsNewScene.skills.desc": "Reviews a pull request like a teammate",
   "whatsNewScene.skills.here": "This Mac",
-  "whatsNewScene.skills.there": "Mac mini",
-  "whatsNewScene.skills.every": "On every agent",
+  "whatsNewScene.skills.mcpAdd": "npx -y @acme/linear-mcp",
+  "whatsNewScene.skills.mcpName": "linear",
+  "whatsNewScene.skills.mcpDesc": "Reads and writes Linear issues",
+  "whatsNewScene.skills.mcpVersion": "npm latest",
+  "whatsNewScene.skills.versionOld": "v1.2.0",
+  "whatsNewScene.skills.versionNew": "v1.3.0",
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
@@ -88,8 +92,12 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
   "whatsNewScene.skills.name": "pr-review",
   "whatsNewScene.skills.desc": "동료처럼 PR을 리뷰해요",
   "whatsNewScene.skills.here": "이 Mac",
-  "whatsNewScene.skills.there": "Mac mini",
-  "whatsNewScene.skills.every": "모든 에이전트에",
+  "whatsNewScene.skills.mcpAdd": "npx -y @acme/linear-mcp",
+  "whatsNewScene.skills.mcpName": "linear",
+  "whatsNewScene.skills.mcpDesc": "Linear 이슈를 읽고 써요",
+  "whatsNewScene.skills.mcpVersion": "npm latest",
+  "whatsNewScene.skills.versionOld": "v1.2.0",
+  "whatsNewScene.skills.versionNew": "v1.3.0",
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
@@ -132,8 +140,12 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
   "whatsNewScene.skills.name": "pr-review",
   "whatsNewScene.skills.desc": "像同事一样评审 PR",
   "whatsNewScene.skills.here": "这台 Mac",
-  "whatsNewScene.skills.there": "Mac mini",
-  "whatsNewScene.skills.every": "所有智能体可用",
+  "whatsNewScene.skills.mcpAdd": "npx -y @acme/linear-mcp",
+  "whatsNewScene.skills.mcpName": "linear",
+  "whatsNewScene.skills.mcpDesc": "读写 Linear 问题",
+  "whatsNewScene.skills.mcpVersion": "npm latest",
+  "whatsNewScene.skills.versionOld": "v1.2.0",
+  "whatsNewScene.skills.versionNew": "v1.3.0",
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
@@ -176,8 +188,12 @@ const ja: Catalog<typeof whatsNewScenesEnglish> = {
   "whatsNewScene.skills.name": "pr-review",
   "whatsNewScene.skills.desc": "同僚のように PR をレビューします",
   "whatsNewScene.skills.here": "この Mac",
-  "whatsNewScene.skills.there": "Mac mini",
-  "whatsNewScene.skills.every": "すべてのエージェントで",
+  "whatsNewScene.skills.mcpAdd": "npx -y @acme/linear-mcp",
+  "whatsNewScene.skills.mcpName": "linear",
+  "whatsNewScene.skills.mcpDesc": "Linear の Issue を読み書きします",
+  "whatsNewScene.skills.mcpVersion": "npm latest",
+  "whatsNewScene.skills.versionOld": "v1.2.0",
+  "whatsNewScene.skills.versionNew": "v1.3.0",
 };
 
 export const whatsNewScenesCatalogs = { en: whatsNewScenesEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof whatsNewScenesEnglish>;
