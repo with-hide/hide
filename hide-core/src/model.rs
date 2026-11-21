@@ -401,6 +401,11 @@ pub struct TraySnapshot {
     /// The Views on it: the rail's number (D-29). An agent's View on no
     /// tray is not counted.
     pub count: usize,
+    /// Whether the desk floats with the tool beside it over the agents
+    /// (D-50): a View came onto it while a tool floated, and that tool is
+    /// still drawn. A shown desk that does not float takes its place on the
+    /// right and the agents narrow beside it.
+    pub floats: bool,
     /// The pair view drawn now (D-08, D-45): while the mode is on and the
     /// pane the operator is on in this tab has something to show; the strip,
     /// the tab row and the sidebar mark only it (D-17).

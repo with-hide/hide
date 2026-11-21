@@ -35,9 +35,18 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(frame({ view: "none", tool: null, body: 1200 })).toMatchObject({ mode: "closed", agents: 1200 });
   });
 
-  it("draws the lane over Agent Views with both columns at their widths, Agent Views keeping its own (B20)", () => {
-    expect(frame({ view: "documents", body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520, view: column("document_width", 520, 360), tool: null });
-    expect(frame({ view: "documents", tool: "explorer", body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520 + 8 + 240, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180) });
+  it("stands a shown desk at the body's right, Agent Views narrowing beside it, and lifts it beside a tool opened meanwhile, Agent Views keeping that width (PRD lane-desk-pair-view D-50)", () => {
+    expect(frame({ view: "documents", body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 520 - 8, width: 520, view: column("document_width", 520, 360), tool: null });
+    expect(frame({ view: "documents", tool: "explorer", body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 520 - 8, width: 520 + 8 + 240, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180), stacked: false });
+    // The desk gives way down to its minimum so Agent Views keeps 480px.
+    expect(frame({ view: "documents", documentWidth: 900, body: 1000 })).toMatchObject({ mode: "docked", agents: 480, width: 1000 - 8 - 480 });
+    expect(frame({ view: "documents", body: 480 + 8 + 360 })).toMatchObject({ mode: "docked", agents: 480, width: 360 });
+    // Narrower than that, the desk floats as before (D-50, the 1024px window).
+    expect(frame({ view: "documents", body: 480 + 8 + 359 })).toMatchObject({ mode: "overlay", agents: 480 + 8 + 359, width: 520 });
+  });
+
+  it("draws a tool, and a desk floating with it, over Agent Views with both columns at their widths, Agent Views keeping its own (B20, D-50)", () => {
+    expect(frame({ view: "documents", tool: "explorer", floats: true, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520 + 8 + 240, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180) });
     expect(frame({ tool: "project", panelWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700, view: null, tool: column("panel_width", 700, 360) });
   });
 
@@ -67,8 +76,9 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   });
 
   it("expands over the whole body, the tool column keeping its width and the viewing column taking the rest, while Agent Views keeps the width it had (B15)", () => {
-    expect(frame({ view: "documents", tool: "explorer", expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400, width: 1400, view: column("document_width", 1400 - 8 - 240, 360), tool: column("explorer_width", 240, 180) });
-    expect(frame({ view: "documents", expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400, width: 1400, view: column("document_width", 1400, 360) });
+    expect(frame({ view: "documents", tool: "explorer", floats: true, expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400, width: 1400, view: column("document_width", 1400 - 8 - 240, 360), tool: column("explorer_width", 240, 180) });
+    // Over a standing desk Agent Views keeps the narrower width it had beside it.
+    expect(frame({ view: "documents", expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400 - 520 - 8, width: 1400, view: column("document_width", 1400, 360) });
     expect(frame({ tool: "project", expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", width: 1400, view: null, tool: column("panel_width", 1400, 360) });
   });
 
@@ -77,26 +87,34 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   });
 
   it("lands the lane's left divider as the edge column's width, within the minimums, reaching the body's edge over the agents (B17)", () => {
-    const over = frame({ view: "documents", body: 1600 });
+    const over = frame({ view: "documents", body: 700 });
     expect(over.mode).toBe("overlay");
     // The divider dragged 100px left widens the lane by 100px.
-    expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: over, sizes })).toEqual({ document_width: 620 });
-    expect(laneLanding({ x: 0, body: 1600, frame: over, sizes })).toEqual({ document_width: 1600 - 8 });
-    expect(laneLanding({ x: 1590, body: 1600, frame: over, sizes })).toEqual({ document_width: 360 });
+    expect(laneLanding({ x: 700 - 520 - 8 - 100, body: 700, frame: over, sizes })).toEqual({ document_width: 620 });
+    expect(laneLanding({ x: 0, body: 700, frame: over, sizes })).toEqual({ document_width: 700 - 8 });
+    expect(laneLanding({ x: 690, body: 700, frame: over, sizes })).toEqual({ document_width: 360 });
     // With the tool column beside the documents, the tool column keeps its width.
-    const both = frame({ view: "documents", tool: "explorer", body: 1600 });
+    const both = frame({ view: "documents", tool: "explorer", floats: true, body: 1600 });
     expect(laneLanding({ x: 1600 - 768 - 8 - 32, body: 1600, frame: both, sizes })).toEqual({ document_width: 552 });
     // A tool alone lands its own width.
     expect(laneLanding({ x: 1600 - 400 - 8 - 100, body: 1600, frame: frame({ tool: "project", documentWidth: 900, body: 1600 }), sizes })).toEqual({ panel_width: 500 });
   });
 
+  it("lands a standing desk's divider as its width, Agent Views keeping its minimum, a tool beside it keeping its own (D-50)", () => {
+    const docked = frame({ view: "documents", tool: "explorer", body: 1600 });
+    expect(docked.mode).toBe("docked");
+    expect(laneLanding({ x: 1600 - 768 - 8 - 100, body: 1600, frame: docked, sizes })).toEqual({ document_width: 620 });
+    expect(laneLanding({ x: 0, body: 1600, frame: docked, sizes })).toEqual({ document_width: 1600 - 8 - 480 });
+    expect(laneLanding({ x: 1590, body: 1600, frame: docked, sizes })).toEqual({ document_width: 360 });
+  });
+
   it("trades width between the two columns, so the lane and Agent Views keep theirs (B17)", () => {
-    const both = frame({ view: "documents", tool: "explorer", body: 1600 });
+    const both = frame({ view: "documents", tool: "explorer", floats: true, body: 1600 });
     expect(columnLanding({ x: 460, frame: both })).toEqual({ document_width: 460, explorer_width: 300 });
     expect(columnLanding({ x: 10, frame: both })).toEqual({ document_width: 360, explorer_width: 400 });
     expect(columnLanding({ x: 700, frame: both })).toEqual({ document_width: 580, explorer_width: 180 });
     // Expanded, only the tool column's width is kept, so the stored document width is not the body's.
-    const expanded = frame({ view: "documents", tool: "explorer", expanded: true, body: 1600 });
+    const expanded = frame({ view: "documents", tool: "explorer", floats: true, expanded: true, body: 1600 });
     expect(columnLanding({ x: 1000, frame: expanded })).toEqual({ explorer_width: 1600 - 8 - 1000 });
     expect(columnLanding({ x: 100, frame: frame({ view: "documents", body: 1600 }) })).toEqual({});
   });

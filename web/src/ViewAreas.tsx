@@ -28,7 +28,7 @@ import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
 import { displayIdentity, displayMenu, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
 import { findArea, locateDisplay } from "./areaLayout";
-import { DeskPin, PairOthers } from "./DeskPairControls";
+import { DeskPairButton, PairOthers } from "./DeskPairControls";
 import { drawnPair } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
@@ -134,7 +134,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
 
 
   // Pair view (PRD lane-desk-pair-view D-41, D-42): the strip folds the tabs
-  // of another agent of the paired tab into one menu at its end; the pin
+  // of another agent of the paired tab into one menu at its end; the ◧
   // beside ✕ only enters it and is not drawn while it is on.
   const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
   const front = findArea(layout.root, layout.active_area)?.active ?? null;
@@ -169,8 +169,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    // Pair view draws neither the desk's ✕ nor its pin: only its own ways out end it (D-42, D-46).
-    close: pair === null ? { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <DeskPin displayId={front} actions={actions} /> } : undefined,
+    // Pair view draws neither the desk's ✕ nor its ◧: only its own ways out end it (D-42, D-46).
+    close: pair === null ? { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <DeskPairButton displayId={front} actions={actions} /> } : undefined,
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };

@@ -147,7 +147,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(canvas).not.toHaveAttribute("data-canvas", betaTab);
     const fixturePane = (await page.locator('[data-pane-view][data-focused="true"]').getAttribute("data-pane-view"))!;
-    // The fixture's View panel stays open over the agents' right side.
+    // The fixture's desk stays open beside the agents (D-50).
     await page.locator(`[data-pane-view="${fixturePane}"]`).click({ position: { x: 30, y: 60 } });
     const paneFocuses = sent.get("focus_pane") ?? 0;
     await page.keyboard.down("Alt");

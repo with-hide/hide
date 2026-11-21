@@ -176,7 +176,8 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await expect.poll(() => last.get("focus_pane")).toMatchObject({ pane_id: parent, origin: "operator" });
     await page.keyboard.type("typed beside the lane");
     await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    // The press on the pane closed the floating Explorer, and the desk stands beside the panes (D-50).
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     const mouseReports = await trackMouse(daemon!, parent, fixture.inputLogs[0]);
     const reportsBefore = mouseReports();
     await liveHost.click({ position: { x: 40, y: 60 } });
@@ -195,8 +196,7 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
 
     // ⌘E closes the lane without closing a view; the documents button counts
     // the views it keeps, and the keyboard that was in the lane goes back to
-    // the focused pane (B2, B7, B17). ⌘E brings the same tabs back beside
-    // the Explorer (B15; the documents button would open them alone).
+    // the focused pane (B2, B7, B17). ⌘E brings the same tabs back (B15).
     await settled();
     await lane.locator("[data-editor-body] .cm-content").click();
     await page.keyboard.press(chord("toggle_lane"));
@@ -209,16 +209,17 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
       .poll(() => page.evaluate(() => document.activeElement?.closest("[data-pane-view]")?.getAttribute("data-pane-view") ?? null))
       .not.toBeNull();
     await screenshot(page, "s6-lane-closed");
+    // ⌘E brings the desk back standing; the press on the pane earlier closed the floating Explorer (D-50).
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "none");
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);
     await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
 
     // An agent chosen from the sidebar changes no lane (B22, D-17).
     await page.locator(`[data-agent-open="${child}"]`).first().click();
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === child || undefined, `${child} focused`, 15_000));
 
 
@@ -233,9 +234,9 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     // Reopening the app is a fresh page, not a reconnect of this one.
     await page.goto("about:blank");
     await open(page, daemon);
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay", { timeout: 20_000 });
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "explorer");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "none");
     await expect.poll(async () => (await lane.boundingBox())!.width).toBeCloseTo(laneWidth, 0);
     await expect(page.locator('[data-view-area] [data-tab-kind="file"]')).toHaveCount(2, { timeout: 15_000 });
     await expect(page.locator('[data-view-area] [data-unavailable="true"]')).toHaveCount(1);

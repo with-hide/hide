@@ -57,7 +57,8 @@ test.afterEach(async () => {
 async function start(): Promise<{ page: Page; paneId: string; sent: string[] }> {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await fitWindow(app, { width: 1024, height: 681 });
+  // Wide enough that a pane beside the standing desk still holds the longest temporary path on one row (D-50).
+  await fitWindow(app, { width: 1400, height: 681 });
   const page = launched.page;
   const sent: string[] = [];
   page.on("websocket", (socket) => socket.on("framesent", (frame) => sent.push(String(frame.payload))));
@@ -158,9 +159,11 @@ test("a reload keeps outside tabs readable, and closing one ends its grant", asy
   const gone = path.join(scratch!, "gone.txt");
   fs.writeFileSync(gone, "closed and let go");
   const { page, paneId } = await start();
-  await printInPane(fixture, stack.daemon, page, paneId, [`keep ${notes}`, `close ${gone}`, "END-RELOAD"], "END-RELOAD");
+  await printInPane(fixture, stack.daemon, page, paneId, [`keep ${notes}`, "END-KEEP"], "END-KEEP");
   await click(page, paneId, notes);
   await expect(outsideTab(page, "kept.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  // The desk stood up beside the pane, which reflowed; the next link is printed at the pane's new width (D-50).
+  await printInPane(fixture, stack.daemon, page, paneId, [`close ${gone}`, "END-RELOAD"], "END-RELOAD");
   await click(page, paneId, gone);
   await expect(outsideTab(page, "gone.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
 

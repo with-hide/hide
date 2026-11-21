@@ -155,12 +155,21 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
-    /// The desks the published snapshot drew pair view on since the mode
-    /// last moved or ended, which fold when it leaves them (D-44); a desk
-    /// the mode passed drawing its tab's usual screen is never here (D-45).
-    /// Runtime only, and at most the desk drawn now and the one it came
-    /// from: every move folds and drops the others.
-    pub(super) pair_drawn: Vec<(WorkspaceKey, String)>,
+    /// The desks pair view drew since the mode last moved or ended, each
+    /// with how it was before the mode first drew it, which it gets back
+    /// when the mode leaves it (D-51); a desk the mode passed drawing its
+    /// tab's usual screen is never here (D-45). Runtime only, and at most
+    /// the desk drawn now and the one it came from: every move restores and
+    /// drops the others.
+    pub(super) pair_drawn: Vec<super::pair_view::PairDrawn>,
+    /// The desk that floats with the tool now (PRD lane-desk-pair-view
+    /// D-50): a View came onto that tab's desk while the lane showed a tool
+    /// and not the desk, so the desk is drawn beside the tool over the
+    /// agents until the tool closes, and then takes its place on the right.
+    /// Every other shown desk stands. Runtime only, at most one, and gone
+    /// in the view pass (`settle_workspace_view`) once the lane no longer
+    /// draws both on the front tab.
+    pub(super) tray_floats: Option<(WorkspaceKey, String)>,
 }
 
 /// What an event asks of a Workspace's lane once it has moved the screen
@@ -247,6 +256,20 @@ where
 }
 
 impl WorkspaceViewStore {
+    /// Whether `tab`'s desk of `key` floats with the tool now (D-50): a
+    /// View came onto it while the lane drew a tool and not the desk, and
+    /// the open lane still shows both. The one reading of the floating
+    /// desk. Shown, not drawn: a file still loading leaves the desk with no
+    /// View yet while the shell already draws it, and it floats then too.
+    pub(super) fn tray_floats(&self, key: &WorkspaceKey, tab: &str) -> bool {
+        self.tray_floats
+            .as_ref()
+            .is_some_and(|(at, at_tab)| at == key && at_tab == tab)
+            && self.views.get(&key.0, &key.1).is_some_and(|view| {
+                view.open && view.tool.is_some() && view.tray(tab).is_some_and(|tray| tray.shown)
+            })
+    }
+
     /// Numbers a call that opened `key`'s lane and records which column it
     /// brought forward. The call history has the store's bound; it is
     /// pruned only when crossing it, never on a repeat.
@@ -377,6 +400,7 @@ impl WorkspaceViewStore {
                 pair_left: None,
                 pair_before: None,
                 pair_drawn: Vec::new(),
+                tray_floats: None,
             },
             diagnostics,
         )
@@ -486,6 +510,16 @@ impl Runtime {
         let Place::Tray(tab) = place else {
             return;
         };
+        // Whether the operator saw this desk drawn: the view the core last
+        // published, since the View that calls this is already on the desk.
+        let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
+            view.device_id == key.0
+                && view.path == key.1
+                && view.open
+                && view.tray.tab_id == *tab
+                && view.tray.shown
+                && view.tray.count > 0
+        });
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -497,6 +531,12 @@ impl Runtime {
         );
         entry.show_tray(tab);
         let changed = before != (entry.open, entry.tool, true);
+        // A View that comes onto a desk the operator did not see drawn while
+        // a tool stays drawn floats with that tool (D-50); a desk already
+        // drawn keeps standing, or floating, as it was.
+        if entry.tool.is_some() && !drawn {
+            store.tray_floats = Some((key.clone(), tab.clone()));
+        }
         store.call_lane(key, LaneCallSide::View);
         if changed {
             self.persist_workspace_views();
@@ -1041,6 +1081,21 @@ impl Runtime {
         let Some(store) = self.workspace_views.as_ref() else {
             return;
         };
+        // The floating desk takes its place once its lane no longer draws it
+        // beside a tool on the front tab: the tool closed (its ✕, Escape, a
+        // press outside) or changed, the lane closed, the desk folded or
+        // emptied, or another tab came to the front (D-50).
+        if let Some((key, tab)) = store.tray_floats.clone()
+            && (self.front_tab(&key) != tab || !store.tray_floats(&key, &tab))
+        {
+            self.workspace_views
+                .as_mut()
+                .expect("read above")
+                .tray_floats = None;
+        }
+        let Some(store) = self.workspace_views.as_ref() else {
+            return;
+        };
         // The device's front moved to a checkout other than the one it had
         // and the one asked for: someone chose that one, so the request's
         // landing, should it still come, is no longer the operator's click.
@@ -1430,6 +1485,7 @@ impl Runtime {
                     },
                     shown: tray.is_some_and(|tray| tray.shown),
                     count: tray_layout.display_count(),
+                    floats: store.tray_floats(key, tab),
                     pair,
                 },
                 pair_mode: crate::model::PairModeSnapshot {
@@ -1465,6 +1521,8 @@ impl Runtime {
             self.snapshot.ui_state.right_panel_section = section;
         }
         self.snapshot.workspace_view = published;
+        // A pair drawn without the mode moving onto it (after a restart)
+        // is recorded as it is now.
         let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
             let pair = view.tray.pair.as_ref()?;
             Some((
@@ -1472,11 +1530,8 @@ impl Runtime {
                 pair.tab_id.clone(),
             ))
         });
-        if let Some(desk) = drawn
-            && let Some(store) = self.workspace_views.as_mut()
-            && !store.pair_drawn.contains(&desk)
-        {
-            store.pair_drawn.push(desk);
+        if let Some((key, tab)) = drawn {
+            self.note_pair_desk(&key, &tab);
         }
     }
 
