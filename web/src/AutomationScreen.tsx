@@ -117,34 +117,35 @@ function UnreadableLine({ file }: { file: string }) {
   return <p className="shrink-0 px-lg pt-sm text-caption text-warning" title={file} data-automation-unreadable="true">{t("automationScreen.unreadable", { file: lastName(file) })}</p>;
 }
 
-/** Quiet rows before the core's automations first arrive: no count, no words. */
+/** Quiet cards before the core's automations first arrive: no count, no words. */
 function Skeleton() {
   return (
-    <div className="flex flex-col gap-sm px-lg py-md" aria-hidden="true" data-automation-screen-state="loading">
-      {[0, 1, 2].map((row) => (
-        <div key={row} className="flex items-center gap-md">
-          <span className="h-(--size-badge-height) flex-1 rounded-xs bg-secondary" />
+    <div className={cn(LIST_GRID, "px-lg py-md")} aria-hidden="true" data-automation-screen-state="loading">
+      {[0, 1, 2].map((card) => (
+        <div key={card} className="flex flex-col gap-sm rounded-lg border border-border p-md">
           <span className="h-(--size-badge-height) w-(--size-mission-table-project) rounded-xs bg-secondary" />
-          <span className="h-(--size-badge-height) w-(--size-mission-table-project) rounded-xs bg-secondary" />
+          <span className="h-(--size-badge-height) w-(--size-mission-table-steps) rounded-xs bg-secondary" />
+          <span className="h-(--size-badge-height) rounded-xs bg-secondary" />
+          <span className="h-(--size-badge-height) rounded-xs bg-secondary" />
         </div>
       ))}
     </div>
   );
 }
 
-/** The list's columns: the agent, the name over its schedule and folder, the next run, the last result and ▶; a screen too narrow for all leaves out the last result, which the detail lists (B3). */
-const LIST_COLUMNS = "grid grid-cols-[var(--size-icon-lg)_minmax(0,1fr)_var(--size-mission-table-steps)_var(--size-control-sm)] missions-split:grid-cols-[var(--size-icon-lg)_minmax(0,1fr)_var(--size-mission-table-steps)_var(--size-mission-table-steps)_var(--size-control-sm)] items-center gap-x-lg";
+/** The list's cards, as many to a line as the screen holds at their least width. */
+const LIST_GRID = "grid grid-cols-[repeat(auto-fill,minmax(var(--size-automation-card),1fr))] gap-md";
 
 /** Each starting point's mark on the empty screen. */
 const EXAMPLE_ICONS = { issues: InboxIcon, deps: PackageIcon, ci: CircleAlertIcon } as const satisfies Record<AutomationExample, LucideIcon>;
 
 /**
- * The list (B2, B3, B38): each automation in the core's order as a row of
- * the agent's logo, its name with the unseen dot over its schedule and
- * folder, the next run, the last result and ▶ to run it now; a paused one
- * dimmed. With none, Hide AI's owl says what an automation does, with
- * [+ 새 자동화] and three starting points. ↑ and ↓ move between the rows,
- * Enter opens one.
+ * The list (B2, B3, B38): each automation in the core's order as a card of
+ * the agent's logo, its name with the unseen dot and ▶ to run it now, its
+ * next run over its schedule, its task in two lines, and its last results
+ * beside its folder; a paused one dimmed. With none, Hide AI's owl says what
+ * an automation does, with [+ 새 자동화] and three starting points. The
+ * arrows move between the cards in order, Enter opens one.
  */
 function Table({ section, actions }: { section: AutomationsSection; actions: Actions }) {
   const box = useRef<HTMLDivElement>(null);
@@ -162,18 +163,19 @@ function Table({ section, actions }: { section: AutomationsSection; actions: Act
     );
   }
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const rows = Array.from(box.current?.querySelectorAll<HTMLElement>("[data-automation-open]") ?? []);
-    const index = rows.findIndex((row) => row === document.activeElement);
-    const next = rows[index < 0 ? 0 : index + (event.key === "ArrowDown" ? 1 : -1)];
+    const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
+    if (!forward && event.key !== "ArrowUp" && event.key !== "ArrowLeft") return;
+    const cards = Array.from(box.current?.querySelectorAll<HTMLElement>("[data-automation-open]") ?? []);
+    const index = cards.findIndex((card) => card === document.activeElement);
+    const next = cards[index < 0 ? 0 : index + (forward ? 1 : -1)];
     if (!next) return;
     event.preventDefault();
     next.focus();
   };
   return (
     <div ref={box} className="min-h-0 flex-1 overflow-y-auto px-lg pb-lg" onKeyDown={step} data-automation-screen-state="table">
-      <div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
-        {section.items.map((automation) => <TableRow key={automation.id} automation={automation} actions={actions} />)}
+      <div className={LIST_GRID}>
+        {section.items.map((automation) => <AutomationCard key={automation.id} automation={automation} actions={actions} />)}
       </div>
     </div>
   );
@@ -211,34 +213,33 @@ function Empty() {
   );
 }
 
-function TableRow({ automation, actions }: { automation: Automation; actions: Actions }) {
+function AutomationCard({ automation, actions }: { automation: Automation; actions: Actions }) {
   const words = useWords();
   const { t } = words;
   const agent = agentProductName(automation.agent.kind);
   return (
-    <div className={cn("relative min-w-0 px-md py-sm", LIST_COLUMNS, automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
-      <RowOverlayButton className="rounded-none" aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
-      <span className="pointer-events-none relative flex"><AgentLogo agent={automation.agent.kind} label={agent} /></span>
+    <div className={cn("relative flex min-w-0 flex-col gap-sm rounded-lg border border-border bg-card p-md", automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
+      <RowOverlayButton className="rounded-lg" aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs">
+        <AgentLogo agent={automation.agent.kind} label={agent} />
+        <span className="min-w-0 truncate text-body font-semibold text-foreground" title={automation.name}>{automation.name}</span>
+        {automation.unseen > 0 ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-automation-unseen={automation.unseen} /> : null}
+        <StateBadge automation={automation} />
+        <span className="pointer-events-auto ml-auto flex shrink-0"><RunNowButton automation={automation} actions={actions} icon /></span>
+      </span>
       <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
-        <span className="flex min-w-0 items-center gap-xs">
-          <span className="min-w-0 truncate text-body font-semibold text-foreground" title={automation.name}>{automation.name}</span>
-          {automation.unseen > 0 ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-automation-unseen={automation.unseen} /> : null}
-          <StateBadge automation={automation} />
-        </span>
+        <span className="sr-only">{t("automationScreen.col.next")}</span>
+        <NextTime automation={automation} words={words} large />
         <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
           <RepeatIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-          <span className="shrink-0">{scheduleText(automation.reads_as, words.language, t)}</span>
-          <span aria-hidden="true" className="text-muted-foreground">·</span>
-          <Where automation={automation} />
-          <span className="sr-only">, {agent}</span>
-          <span aria-hidden="true" className="text-muted-foreground">·</span>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={automation.task}>{automation.task}</span>
+          <span className="min-w-0 truncate">{scheduleText(automation.reads_as, words.language, t)}</span>
         </span>
       </span>
-      <Cell label={t("automationScreen.col.next")}><NextTime automation={automation} words={words} /></Cell>
-      <Cell label={t("automationScreen.recent")} className="hidden missions-split:flex"><RecentRuns automation={automation} words={words} /></Cell>
-      <span className="relative flex justify-end">
-        <RunNowButton automation={automation} actions={actions} icon />
+      <span className="pointer-events-none relative line-clamp-2 break-words text-caption text-muted-foreground" title={automation.task}>{automation.task}</span>
+      <span className="pointer-events-none relative mt-auto flex min-w-0 items-center gap-sm border-t border-border pt-sm text-caption text-subtle-foreground">
+        <span className="sr-only">{t("automationScreen.recent")}</span>
+        <span className="flex min-w-0 flex-1"><RecentRuns automation={automation} words={words} /></span>
+        <span className="flex min-w-0 shrink items-center gap-xs text-muted-foreground"><Where automation={automation} /><span className="sr-only">, {agent}</span></span>
       </span>
     </div>
   );
@@ -260,13 +261,13 @@ function StateBadge({ automation }: { automation: Automation }) {
   return <Badge variant="outline" className="text-destructive" data-automation-state="stopped">{pauseReasonText(automation.paused.reason, t)}</Badge>;
 }
 
-/** `내일 09:00 · 15시간 뒤`; a paused automation or a schedule that never runs again has no next time (B3, B25). */
-function NextTime({ automation, words }: { automation: Automation; words: Words }) {
+/** `내일 09:00 · 15시간 뒤`, the time `large` on a card; a paused automation or a schedule that never runs again has no next time (B3, B25). */
+function NextTime({ automation, words, large = false }: { automation: Automation; words: Words; large?: boolean }) {
   const at = automation.paused ? null : automation.next_run_at_unix_ms;
-  if (at == null) return <span className="text-caption text-muted-foreground" data-automation-next="none">{automation.paused ? "—" : words.t("automation.next.none")}</span>;
+  if (at == null) return <span className={cn("text-muted-foreground", large ? "text-subhead" : "text-caption")} data-automation-next="none">{automation.paused ? "—" : words.t("automation.next.none")}</span>;
   return (
     <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="at">
-      <span className="shrink-0 tabular-nums text-foreground">{whenText(at, words.now, words.zone, words.language, words.t)}</span>
+      <span className={cn("shrink-0 tabular-nums text-foreground", large && "text-subhead font-semibold")}>{whenText(at, words.now, words.zone, words.language, words.t)}</span>
       {/* The clock moves by the minute, so the last minute, and a time the core is about to take, read as soon rather than a count that stands still. */}
       <span className="min-w-0 truncate text-muted-foreground">{at - words.now < 60_000 ? words.t("automationScreen.soon") : words.t("automationScreen.inTime", { time: formatElapsed(words.language, at - words.now) })}</span>
     </span>
@@ -288,16 +289,6 @@ function RecentRuns({ automation, words }: { automation: Automation; words: Word
         {[...recent].reverse().map((record, index) => <ToneMark key={index} tone={recordText(record, words.now, words.zone, words.language, words.t).tone} />)}
       </span>
       {lastWords ? <span className={cn("min-w-0 truncate text-caption", lastWords.tone === "failed" ? "text-destructive" : "text-subtle-foreground")} title={lastWords.text}>{lastWords.text}</span> : null}
-    </span>
-  );
-}
-
-/** A value of a row with its quiet name over it, so the list needs no header line. */
-function Cell({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
-  return (
-    <span className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs", className)}>
-      <span className="truncate text-micro text-muted-foreground">{label}</span>
-      {children}
     </span>
   );
 }
