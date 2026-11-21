@@ -3244,6 +3244,54 @@ impl Runtime {
                 .any(|pane| viewed.contains(&pane.id))
     }
 
+    /// A run the automation screen shows draws its tab's desk beside its
+    /// terminal (`viewed_run_tab`). While that desk holds nothing, what the
+    /// run's agent opened while nobody watched its pane, which waits on no
+    /// desk (B1), comes onto it, the last opened in front, as it would have
+    /// had the operator watched (operator decision 2026-11-21). A desk that
+    /// already holds a View is left as the operator arranged it. Whether a
+    /// View moved.
+    pub(super) fn gather_run_views(&mut self, pane: &str) -> bool {
+        let Some(key) = self.pane_workspace_key(pane) else {
+            return false;
+        };
+        let Some(tab) = self.pane_tab(&key, pane) else {
+            return false;
+        };
+        let place = Place::Tray(tab);
+        if self
+            .view_layout_at(&key, &place)
+            .is_some_and(|layout| layout.display_count() > 0)
+        {
+            return false;
+        }
+        let ids: Vec<String> = self
+            .view_layout_at(&key, &Place::Shelf)
+            .into_iter()
+            .flat_map(|layout| layout.displays())
+            .filter(|display| {
+                display
+                    .openers
+                    .iter()
+                    .any(|opener| self.opener_pane(opener).as_deref() == Some(pane))
+            })
+            .map(|display| display.id.clone())
+            .collect();
+        let mut last = None;
+        for id in ids {
+            if self.bring_view_to(&key, &id, &place) {
+                last = Some(id);
+            }
+        }
+        let Some(id) = last else {
+            return false;
+        };
+        let _ = self.change_view_layout(&key, &place, |layout, stamp| {
+            layout.focus(&id, stamp).map(|changed| ((), changed))
+        });
+        true
+    }
+
     /// The card in front of the area in use of the tray the front Workspace
     /// draws: the one card whose data is read (PRD lane-desk-pair-view,
     /// conductor decision 3).
