@@ -82,7 +82,13 @@ pub struct AppState {
     /// view-opener-feedback B9).
     pub browser_comments: Arc<crate::browser_page::comment::CommentSessions>,
     pub allowed_origins: Arc<HashSet<String>>,
+    /// Every connection now, another machine's views among them: while any
+    /// is, the daemon stays and its readers run.
     pub clients: Arc<AtomicUsize>,
+    /// This machine's own connections (windows, tools, phones), the ones
+    /// `MAX_CLIENTS` counts ([`LocalSeat`]); another machine's views have
+    /// seats of their own (`remote_screen`).
+    pub local_seats: Arc<AtomicUsize>,
     /// Authenticated shell windows, distinct from CLI and non-rendering clients.
     pub renderers: Arc<AtomicUsize>,
     pub desktop_renderers: Arc<AtomicUsize>,
@@ -842,12 +848,14 @@ async fn client_loop(
     };
     let first_value = serde_json::from_str::<Value>(&first).unwrap_or(Value::Null);
     if crate::mobile::phone::is_phone(&first_value) {
-        let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-        if previous >= MAX_CLIENTS {
-            state.clients.fetch_sub(1, Ordering::SeqCst);
-            refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-            return;
-        }
+        let _seat = match LocalSeat::take(&state) {
+            Ok(seat) => seat,
+            Err(count) => {
+                refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+                return;
+            }
+        };
+        state.clients.fetch_add(1, Ordering::SeqCst);
         crate::mobile::phone::serve(
             socket,
             first_value,
@@ -955,14 +963,20 @@ async fn screen_loop(
     seat: Option<crate::remote_screen::Seat>,
 ) {
     let remote = seat.is_some();
-    let previous = state.clients.fetch_add(1, Ordering::SeqCst);
     // Another machine's views have their own seats (`remote_screen`) and
     // never take a place of this machine's windows.
-    if !remote && previous.saturating_sub(state.remote_screens.seated()) >= MAX_CLIENTS {
-        state.clients.fetch_sub(1, Ordering::SeqCst);
-        refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-        return;
-    }
+    let _local = if remote {
+        None
+    } else {
+        match LocalSeat::take(&state) {
+            Ok(local) => Some(local),
+            Err(count) => {
+                refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+                return;
+            }
+        }
+    };
+    let previous = state.clients.fetch_add(1, Ordering::SeqCst);
     if previous == 0 {
         state.roots.resume();
     }
@@ -1981,12 +1995,14 @@ async fn scoped_client_loop(
     source: Option<(String, hide_node::ssh::RemoteHost)>,
     attested: Option<Arc<crate::pane_auth::StreamAttestation>>,
 ) {
-    let previous = state.clients.fetch_add(1, Ordering::SeqCst);
-    if previous >= MAX_CLIENTS {
-        state.clients.fetch_sub(1, Ordering::SeqCst);
-        refuse(&mut socket, CloseReason::ClientLimit, Some(previous + 1)).await;
-        return;
-    }
+    let _local = match LocalSeat::take(&state) {
+        Ok(local) => local,
+        Err(count) => {
+            refuse(&mut socket, CloseReason::ClientLimit, Some(count)).await;
+            return;
+        }
+    };
+    state.clients.fetch_add(1, Ordering::SeqCst);
     let incoming = tokio::time::timeout(Duration::from_secs(10), socket.recv()).await;
     // Set only for an admitted `browser_relay`: its slot, its display and the
     // gateway socket it pumps once the answer and the claim are through.
@@ -5392,6 +5408,28 @@ fn dispatch_ui_attached(core: &CoreHandle, attached: bool) {
 
 /// A window of this machine, counted while it is open; the first to open
 /// and the last to close tell every node whether one draws its panes.
+/// One of this machine's `MAX_CLIENTS` places, held for a connection's life
+/// and let go when it drops, on every path out of its loop.
+pub(crate) struct LocalSeat(Arc<AtomicUsize>);
+
+impl LocalSeat {
+    /// A place, or the count it would have made when all are taken.
+    pub(crate) fn take(state: &AppState) -> Result<Self, usize> {
+        let previous = state.local_seats.fetch_add(1, Ordering::SeqCst);
+        if previous >= MAX_CLIENTS {
+            state.local_seats.fetch_sub(1, Ordering::SeqCst);
+            return Err(previous + 1);
+        }
+        Ok(Self(Arc::clone(&state.local_seats)))
+    }
+}
+
+impl Drop for LocalSeat {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct OwnScreen {
     count: Arc<Mutex<usize>>,
     terminals: Arc<hide_node::terminal::router::Router>,

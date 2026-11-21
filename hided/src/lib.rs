@@ -704,6 +704,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         browser_comments: Arc::default(),
         allowed_origins: Arc::new(server::allowed_origins(port, env.vite_origin.as_deref())),
         clients: Arc::new(AtomicUsize::new(0)),
+        local_seats: Arc::new(AtomicUsize::new(0)),
         renderers,
         desktop_renderers,
         connections: Arc::new(AtomicU64::new(0)),
