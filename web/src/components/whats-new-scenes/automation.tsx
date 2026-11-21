@@ -168,27 +168,68 @@ export function AutomationScene({ at }: SceneProps) {
   );
 }
 
-/** What the run wrote, opened beside the list as the View it opened: the counts, then the first items. */
+/** What the run wrote, opened beside the list as the View it opened: a briefing laid out as a document, the one thing to look at first, the news, the day's calendar and the to-dos. */
 function Report() {
   const { t } = useInterfaceTranslation();
-  const counts = [["read", 30], ["important", 5], ["todo", 2]] as const;
+  const rise = (order: number) => ({ animationDelay: `${120 + order * 110}ms` });
+  const news = [["news1", "source1"], ["news2", "source2"], ["news3", "source3"]] as const;
+  const day = [["10:00", "s1", false], ["15:00", "s2", true], ["19:00", "s3", false]] as const;
   return (
-    <div className="wns-rise absolute inset-y-md right-md left-xl flex flex-col overflow-hidden rounded-md border border-border bg-popover shadow-overlay">
-      <div className="flex items-center gap-xs border-b border-border px-md py-xs text-caption text-subtle-foreground">
+    <div className="wns-rise absolute inset-y-sm right-sm left-md flex flex-col overflow-hidden rounded-md border border-border bg-popover shadow-overlay">
+      <div className="flex items-center gap-xs border-b border-border px-md py-xxs text-micro text-subtle-foreground">
         <FileTextIcon className="size-(--size-icon-sm) shrink-0" />
         <span className="truncate font-mono">{t("whatsNewScene.automation.reportFile")}</span>
       </div>
-      <div className="flex flex-col gap-sm p-md">
-        <span className="text-body font-semibold">{t("whatsNewScene.automation.reportTitle")}</span>
-        <div className="flex gap-sm">
-          {counts.map(([kind, count], index) => (
-            <span key={kind} className="wns-pop flex flex-col items-start rounded-md border border-border px-sm py-xs" style={{ animationDelay: `${150 + index * 120}ms` }}>
-              <span className="text-subhead font-semibold tabular-nums">{count}</span>
-              <span className="text-micro text-muted-foreground">{t(`whatsNewScene.automation.${kind}`)}</span>
-            </span>
-          ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-xs px-md py-sm">
+        <div className="wns-rise flex items-baseline gap-sm" style={rise(0)}>
+          <span className="text-body font-semibold">{t("whatsNewScene.automation.reportTitle")}</span>
+          <span className="text-micro text-muted-foreground">{t("whatsNewScene.automation.report.date")}</span>
         </div>
-        <span className="wns-fade truncate text-caption text-subtle-foreground" style={{ animationDelay: "500ms" }}>{t("whatsNewScene.automation.reportItem")}</span>
+        <div className="wns-rise flex items-center gap-sm rounded-md border-l-2 border-warning bg-warning/10 px-sm py-xs" style={rise(1)}>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-micro font-medium text-warning">{t("whatsNewScene.automation.report.mustTitle")}</span>
+            <span className="truncate text-caption font-medium">{t("whatsNewScene.automation.report.must")}</span>
+          </span>
+          <span className="shrink-0 text-micro text-primary">{t("whatsNewScene.automation.report.mustAction")}</span>
+        </div>
+        <div className="flex min-h-0 flex-1 gap-md">
+          <div className="flex min-w-0 flex-1 flex-col gap-xxs">
+            <span className="wns-rise text-micro font-semibold text-muted-foreground" style={rise(2)}>{t("whatsNewScene.automation.report.newsTitle")}</span>
+            {news.map(([line, source], index) => (
+              <span key={line} className="wns-rise flex min-w-0 items-center gap-xs text-micro" style={rise(3 + index)}>
+                <span className="shrink-0 rounded-sm bg-muted px-xs text-muted-foreground">{t(`whatsNewScene.automation.report.${source}`)}</span>
+                <span className="truncate text-foreground">{t(`whatsNewScene.automation.report.${line}`)}</span>
+              </span>
+            ))}
+            <span className="wns-rise mt-xs text-micro font-semibold text-muted-foreground" style={rise(6)}>{t("whatsNewScene.automation.report.priceTitle")}</span>
+            {([["us", 100, false], ["rival", 90, true]] as const).map(([who, width, cut], index) => (
+              <span key={who} className="wns-rise flex items-center gap-xs text-micro" style={rise(7 + index)}>
+                <span className="w-1/5 shrink-0 truncate text-subtle-foreground">{t(`whatsNewScene.automation.report.${who}`)}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-xs">
+                  <span className={cn("h-(--spacing-sm) rounded-sm", cut ? "bg-warning" : "bg-primary")} style={{ width: `${width * 0.8}%` }} />
+                  {cut ? <span className="shrink-0 font-medium text-warning">-10%</span> : null}
+                </span>
+              </span>
+            ))}
+          </div>
+          <div className="flex w-2/5 shrink-0 flex-col gap-xxs">
+            <span className="wns-rise text-micro font-semibold text-muted-foreground" style={rise(2)}>{t("whatsNewScene.automation.report.dayTitle")}</span>
+            {day.map(([time, line, key], index) => (
+              <span key={line} className={cn("wns-rise flex min-w-0 items-center gap-xs text-micro", key ? "font-medium text-foreground" : "text-subtle-foreground")} style={rise(3 + index)}>
+                <span className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full", key ? "bg-warning" : "bg-border")} />
+                <span className="shrink-0 font-mono tabular-nums">{time}</span>
+                <span className="truncate">{t(`whatsNewScene.automation.report.${line}`)}</span>
+              </span>
+            ))}
+            <span className="wns-rise mt-xxs text-micro font-semibold text-muted-foreground" style={rise(6)}>{t("whatsNewScene.automation.report.todoTitle")}</span>
+            {(["todo1", "todo2"] as const).map((line, index) => (
+              <span key={line} className="wns-rise flex min-w-0 items-center gap-xs text-micro text-foreground" style={rise(7 + index)}>
+                <span className="size-(--size-icon-sm) shrink-0 rounded-sm border border-border" />
+                <span className="truncate">{t(`whatsNewScene.automation.report.${line}`)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
