@@ -30,25 +30,26 @@ export const RUN_PANE = "run1";
 export const AUTOMATION_ID = "a1";
 const OWN_ROOT = "/Users/me/hide/automations";
 const LEAD_TITLE = "Fix the checkout timeout";
-const RUN_TITLE = "Triage new issues";
-const BRIEFING_FILE = "issue-briefing.md";
+const RUN_TITLE = "Morning briefing";
+const BRIEFING_FILE = "morning-briefing.md";
 
 const BRIEFING = [
-  "# Issue briefing",
+  "# Morning briefing",
   "",
-  "7 new issues since yesterday.",
+  "Yesterday: 7 new issues, 4 pull requests, 9 notifications.",
   "",
-  "## Needs a person",
+  "## Look at first today",
   "",
   "- Issue 412: Checkout times out on slow cards (3 reports)",
+  "- Pull request 87: Raise the payment timeout, waiting for your review",
   "- Issue 418: Refund email is sent twice",
   "",
   "## Can wait",
   "",
-  "- 5 smaller issues, labeled and grouped by area",
+  "- 5 smaller issues and 8 notifications, grouped by area",
   "",
 ].join("\n");
-const ANSWER = "Read 7 new issues. Two need a person: issues 412 and 418. The briefing is open for you.";
+const ANSWER = "Read yesterday's 7 issues, 4 pull requests and 9 notifications. Look first at issue 412 and pull request 87. The briefing is open for you.";
 
 /**
  * Where the script stands: 0 before an automation exists, 1 made, 2 the
@@ -310,7 +311,7 @@ function runRow(model: AutomationModel): AgentRow {
 function headerOf(model: AutomationModel, pane: string): PaneHeader {
   if (pane === LEAD) return { working: true, notice: null, band: null, request: { text: LEAD_TITLE, images: 0 }, progress: "Editing src/payment/timeout.ts" };
   if (model.stage >= 4) return { working: false, notice: null, band: null, request: { text: RUN_TITLE, images: 0 }, finished: true, progress: "The briefing is ready" };
-  return { working: true, notice: null, band: null, request: { text: RUN_TITLE, images: 0 }, progress: "Reading the new issues" };
+  return { working: true, notice: null, band: null, request: { text: RUN_TITLE, images: 0 }, progress: "Reading yesterday's issues, pull requests and notifications" };
 }
 
 /** The 태스크 list: the lead at work, and the run once it waits in 내 차례. */
@@ -406,14 +407,16 @@ function runScreen(model: AutomationModel): string {
   const rows = [
     "", `${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`, `  ${DIM}${made.folder.replace(/^\/Users\/me/, "~")}${RESET}`,
     "", `${DIM}>${RESET} ${made.task}`, "",
-    `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(gh issue list --state open --limit 20)`,
+    `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(gh issue list --search "created:>=yesterday")`,
     `  ${DIM}⎿${RESET}  7 issues opened since yesterday`,
-    `${CLAUDE}●${RESET} ${BOLD}Read${RESET}(issue 412: Checkout times out on slow cards)`,
-    `  ${DIM}⎿${RESET}  3 reports, no owner yet`,
+    `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(gh pr list --search "updated:>=yesterday")`,
+    `  ${DIM}⎿${RESET}  4 pull requests, 1 waiting for your review`,
+    `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(gh api notifications)`,
+    `  ${DIM}⎿${RESET}  9 notifications`,
   ];
-  if (model.stage < 4) return [...rows, "", `${CLAUDE}✻ ${DIM}Reading the issues… (esc to interrupt)${RESET}`].join("\r\n");
+  if (model.stage < 4) return [...rows, "", `${CLAUDE}✻ ${DIM}Reading yesterday… (esc to interrupt)${RESET}`].join("\r\n");
   rows.push(
-    `${CLAUDE}●${RESET} ${BOLD}Write${RESET}(${BRIEFING_FILE})`, `  ${DIM}⎿${RESET}  Wrote 14 lines`,
+    `${CLAUDE}●${RESET} ${BOLD}Write${RESET}(${BRIEFING_FILE})`, `  ${DIM}⎿${RESET}  Wrote 13 lines`,
     `${CLAUDE}●${RESET} ${BOLD}Bash${RESET}(hide file open ${BRIEFING_FILE})`, `  ${DIM}⎿${RESET}  Opened for you to look at`,
     "", `${CLAUDE}●${RESET} ${GREEN}Done.${RESET} ${ANSWER}`,
   );

@@ -20,7 +20,7 @@ export default chapter<AutomationModel>({
     // The row under 미션 opens the automation screen in the middle; with none made, it welcomes with three starting points.
     { id: "open", quest: true, target: "[data-sidebar-automations]", side: "right", gesture: { click: true }, shown: "[data-automation-screen]" },
     // A starting point opens the form filled in; it is read, changed and made like any other.
-    { id: "pick", quest: true, target: '[data-automation-example="issues"]', side: "left", gesture: { click: true }, shown: "[data-automation-form]" },
+    { id: "pick", quest: true, target: '[data-automation-example="briefing"]', side: "left", gesture: { click: true }, shown: "[data-automation-form]" },
     // The make is a call the window waits on; the answer opens the new automation's detail, with its next run.
     { id: "make", quest: true, target: "[data-automation-create]", side: "right", gesture: { click: true }, done: isMade },
     // The night passes: the run starts at its time, then its agent opens a briefing and the run ends. The world begins it when the learner comes here.

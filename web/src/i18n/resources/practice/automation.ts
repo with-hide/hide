@@ -8,9 +8,9 @@ const en = {
   "practice.automation.open.kick": "Jobs that repeat",
   "practice.automation.open.title": "Press Automations in the sidebar",
   "practice.automation.open.text": "An agent does a job for you at the times you set.",
-  "practice.automation.pick.quest": "Pick Morning issue triage",
+  "practice.automation.pick.quest": "Pick Morning briefing",
   "practice.automation.pick.kick": "Start from an example",
-  "practice.automation.pick.title": "Pick Morning issue triage",
+  "practice.automation.pick.title": "Pick Morning briefing",
   "practice.automation.pick.text": "The form opens with everything filled in.",
   "practice.automation.make.quest": "Create the automation",
   "practice.automation.make.kick": "Make it",
@@ -18,11 +18,11 @@ const en = {
   "practice.automation.make.text": "Its page opens, with the next run on it.",
   "practice.automation.morning.kick": "The next morning",
   "practice.automation.morning.title": "At the time, the run starts",
-  "practice.automation.morning.text": "The agent reads the issues and opens a briefing. A moment.",
+  "practice.automation.morning.text": "The agent reads yesterday's issues, PRs and notifications, and opens a briefing. A moment.",
   "practice.automation.result.quest": "Open the result in Needs You",
   "practice.automation.result.kick": "The result",
   "practice.automation.result.title": "The result waits in Needs You",
-  "practice.automation.result.text": "Press the row to open the run. In any terminal you can also ask an agent in words, such as \"tidy new issues every morning at 9\", and it makes one.",
+  "practice.automation.result.text": "Press the row to open the run. Needs You only gets a run with something to look at or answer; a run that just finishes stays quietly in Automations as an unseen count. You can also ask an agent in words to make one.",
 };
 
 const ko = {
@@ -34,7 +34,7 @@ const ko = {
   "practice.automation.open.text": "정해 둔 시간에 에이전트가 대신 일해요.",
   "practice.automation.pick.quest": "시작점 고르기",
   "practice.automation.pick.kick": "예시로 시작",
-  "practice.automation.pick.title": "아침 이슈 정리를 눌러요",
+  "practice.automation.pick.title": "아침 브리핑을 눌러요",
   "practice.automation.pick.text": "내용이 다 채워진 폼이 열려요.",
   "practice.automation.make.quest": "만들기",
   "practice.automation.make.kick": "만들기",
@@ -42,11 +42,11 @@ const ko = {
   "practice.automation.make.text": "상세가 열리고 다음 실행이 보여요.",
   "practice.automation.morning.kick": "다음 날 아침",
   "practice.automation.morning.title": "시간이 되면 회차가 돌아요",
-  "practice.automation.morning.text": "에이전트가 이슈를 읽고 브리핑을 열어요. 잠깐이에요.",
+  "practice.automation.morning.text": "에이전트가 어제 들어온 이슈, PR, 알림을 읽고 브리핑을 열어요. 잠깐이에요.",
   "practice.automation.result.quest": "내 차례에서 결과 보기",
   "practice.automation.result.kick": "결과",
   "practice.automation.result.title": "결과가 내 차례에 와 있어요",
-  "practice.automation.result.text": "줄을 누르면 그 회차가 열려요. 어느 터미널에서든 \"매일 아침 9시에 새 이슈 정리해줘\"처럼 말해서도 만들 수 있어요.",
+  "practice.automation.result.text": "줄을 누르면 그 회차가 열려요. 내 차례에는 볼 것이나 답할 것이 있는 회차만 와요. 그냥 끝난 회차는 자동화에 안 본 회차 숫자로 조용히 남아요. 말로 에이전트에게 시켜서도 만들 수 있어요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
@@ -58,7 +58,7 @@ const zhCN = {
   "practice.automation.open.text": "智能体会在你定的时间替你做事。",
   "practice.automation.pick.quest": "选一个起点",
   "practice.automation.pick.kick": "从示例开始",
-  "practice.automation.pick.title": "按“早间 issue 整理”",
+  "practice.automation.pick.title": "按“早间简报”",
   "practice.automation.pick.text": "表单打开时内容已经填好。",
   "practice.automation.make.quest": "创建",
   "practice.automation.make.kick": "创建",
@@ -66,11 +66,11 @@ const zhCN = {
   "practice.automation.make.text": "详情会打开，并显示下次运行。",
   "practice.automation.morning.kick": "第二天早上",
   "practice.automation.morning.title": "到点就开始运行",
-  "practice.automation.morning.text": "智能体读完 issue，打开一份简报。稍等一下。",
+  "practice.automation.morning.text": "智能体读完昨天的 issue、PR 和通知，打开一份简报。稍等一下。",
   "practice.automation.result.quest": "在“轮到你”里查看结果",
   "practice.automation.result.kick": "结果",
   "practice.automation.result.title": "结果在“轮到你”里等着",
-  "practice.automation.result.text": "按这一行，打开这次运行。在任意终端里说“每天早上 9 点整理新 issue”，智能体也会创建。",
+  "practice.automation.result.text": "按这一行，打开这次运行。轮到我只会收到有东西要看或要回答的运行；只是跑完的运行会安静地留在自动化里，显示为未查看的数量。也可以直接用话让智能体来创建。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
@@ -82,7 +82,7 @@ const ja = {
   "practice.automation.open.text": "決めた時間にエージェントが代わりにやります。",
   "practice.automation.pick.quest": "始める例を選ぶ",
   "practice.automation.pick.kick": "例から始める",
-  "practice.automation.pick.title": "「朝の issue 整理」を押します",
+  "practice.automation.pick.title": "「朝のブリーフィング」を押します",
   "practice.automation.pick.text": "内容が入った状態でフォームが開きます。",
   "practice.automation.make.quest": "作成",
   "practice.automation.make.kick": "作る",
@@ -90,11 +90,11 @@ const ja = {
   "practice.automation.make.text": "詳細が開き、次の実行が見えます。",
   "practice.automation.morning.kick": "翌朝",
   "practice.automation.morning.title": "時間になると実行が始まります",
-  "practice.automation.morning.text": "エージェントが issue を読み、ブリーフィングを開きます。少しお待ちください。",
+  "practice.automation.morning.text": "エージェントが昨日の issue、PR、通知を読み、ブリーフィングを開きます。少しお待ちください。",
   "practice.automation.result.quest": "「自分の番」で結果を見る",
   "practice.automation.result.kick": "結果",
   "practice.automation.result.title": "結果は「自分の番」で待っています",
-  "practice.automation.result.text": "行を押すとその実行が開きます。どのターミナルでも「毎朝 9 時に新しい issue を整理して」と頼んで作ることもできます。",
+  "practice.automation.result.text": "行を押すとその実行が開きます。「自分の番」に届くのは、見るものや答えるものがある実行だけで、ただ終わった実行は自動化に未確認の数として静かに残ります。言葉でエージェントに頼んで作ることもできます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

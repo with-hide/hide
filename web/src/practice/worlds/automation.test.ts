@@ -96,7 +96,7 @@ describe("the automation flow's script (UI_BEHAVIOR, Practice window)", () => {
     expect(startedAt.getTime()).toBeLessThanOrEqual(Date.now());
     expect(new Date(item!.next_run_at_unix_ms!)).toEqual(new Date(2026, 10, 18, 9, 0));
     expect(AUTOMATION_WORLD.panes(model)).toEqual([LEAD, RUN_PANE]);
-    expect(AUTOMATION_WORLD.screen(model, RUN_PANE, 80)).toContain("Reading the issues");
+    expect(AUTOMATION_WORLD.screen(model, RUN_PANE, 80)).toContain("Reading yesterday");
     expect(cards(model).map((card) => card.root)).toEqual([LEAD]);
   });
 
@@ -109,11 +109,11 @@ describe("the automation flow's script (UI_BEHAVIOR, Practice window)", () => {
     expect(item!.records[0]).toMatchObject({ state: "succeeded", seen: false });
     const row = rows(model).find((one) => one.pane_id === RUN_PANE)!;
     expect(row.mark).toBe("look");
-    expect(row.look?.label).toBe("issue-briefing.md");
+    expect(row.look?.label).toBe("morning-briefing.md");
     // The row says whose it is, and the screen that owns it.
     expect(row.hide_ai).toEqual({ task: { kind: "automation", target: AUTOMATION_ID }, home: "automations" });
     expect(cards(model).map((card) => [card.root, card.state])).toEqual([[RUN_PANE, "needs_you"], [LEAD, "working"]]);
-    expect(AUTOMATION_WORLD.screen(model, RUN_PANE, 80)).toContain("hide file open issue-briefing.md");
+    expect(AUTOMATION_WORLD.screen(model, RUN_PANE, 80)).toContain("hide file open morning-briefing.md");
   });
 
   it("puts the run's folder in a workspace of its own that no list draws, its tab marked as an automation's", () => {
@@ -143,7 +143,7 @@ describe("the automation flow's script (UI_BEHAVIOR, Practice window)", () => {
     expect(after.rest.navigator!.focused_workspace_id).toBe("automation-a1");
     expect(after.rest.workspace_view!.tray.tab_id).toBe("t1");
     expect(after.rest.workspace_view!.layout!.display_count).toBe(1);
-    expect(after.frames!.documents!.file1!.contents_utf8).toContain("# Issue briefing");
+    expect(after.frames!.documents!.file1!.contents_utf8).toContain("# Morning briefing");
     expect(cards(shown).map((card) => card.root)).toEqual([LEAD]);
     expect(rows(shown).find((one) => one.pane_id === RUN_PANE)!.mark).toBe("quiet");
   });
