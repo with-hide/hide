@@ -35,8 +35,8 @@ type Screen = {
   view: WebContentsView;
   socket: WebSocket | null;
   visible: boolean;
-  /** Whether the page's last load failed, so showing it again loads it again. */
-  failed: boolean;
+  /** Where its page stands as last told to the shell: a failed one loads again when shown again. */
+  state: RemoteScreenState["state"];
   /** When it last showed, to close the one hidden longest past `KEPT`. */
   shownAt: number;
 };
@@ -108,9 +108,11 @@ export class RemoteScreens {
     screen.visible = true;
     // A page that could not load loads again each time the shell asks, which
     // it does when its machine's state moves and on its own retry (B21).
-    if (screen.failed) this.load(screen);
+    if (screen.state === "failed") this.load(screen);
     else if (!shown) {
-      screen.view.setVisible(true);
+      // The stage asking again was drawn anew, so it is told where the page stands (B63).
+      this.report(screen.device, screen.state);
+      if (screen.state === "shown") screen.view.setVisible(true);
       screen.view.webContents.send(REMOTE_VISIBLE_CHANNEL, true);
       // The screen takes the keyboard from the shell that asked for it.
       if (window.isFocused()) screen.view.webContents.focus();
@@ -151,7 +153,7 @@ export class RemoteScreens {
     // The window's own color until the page paints, so a screen never flashes white.
     view.setBackgroundColor(this.deps.background);
     view.setVisible(false);
-    const screen: Screen = { device, view, socket: null, visible: true, failed: false, shownAt: 0 };
+    const screen: Screen = { device, view, socket: null, visible: true, state: "opening", shownAt: 0 };
     this.guard(screen);
     window.contentView.addChildView(view);
     this.screens.set(device, screen);
@@ -162,11 +164,10 @@ export class RemoteScreens {
 
   /** Loads the page, shown once it loaded while the shell still wants it; a failure stands aside for the stage's words. */
   private load(screen: Screen): void {
-    screen.failed = false;
     this.report(screen.device, "opening");
     screen.view.webContents.loadURL(pageAddress(screen.device)).then(
       () => {
-        if (screen.failed || !this.screens.has(screen.device)) return;
+        if (screen.state === "failed" || !this.screens.has(screen.device)) return;
         this.report(screen.device, "shown");
         if (!screen.visible) return;
         screen.view.setVisible(true);
@@ -219,7 +220,6 @@ export class RemoteScreens {
   private failed(device: string, reason: string): void {
     const screen = this.screens.get(device);
     if (!screen) return;
-    screen.failed = true;
     screen.view.setVisible(false);
     this.closeSocket(screen, null);
     this.report(device, "failed", reason);
@@ -243,7 +243,7 @@ export class RemoteScreens {
     });
     contents.on("did-fail-load", (_event, code, _description, _url, mainFrame) => {
       if (!mainFrame || code === -3) return; // -3: a load another load replaced
-      if (!screen.failed) this.failed(device, "not_connected");
+      if (screen.state !== "failed") this.failed(device, "not_connected");
     });
     contents.on("render-process-gone", () => this.failed(device, "page_gone"));
     // ⌥⌘n chooses a computer tile, which is this window's rail, not the screen's (B47).
@@ -322,6 +322,8 @@ export class RemoteScreens {
   }
 
   private report(device: string, state: RemoteScreenState["state"], reason?: string): void {
+    const screen = this.screens.get(device);
+    if (screen) screen.state = state;
     const window = this.deps.window();
     if (!window || window.isDestroyed()) return;
     window.webContents.send(REMOTE_STATE_CHANNEL, { device, state, ...(reason ? { reason } : {}) } satisfies RemoteScreenState);
