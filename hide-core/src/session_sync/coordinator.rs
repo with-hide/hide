@@ -2304,11 +2304,14 @@ mod window_reads_tests {
     }
 
     /// A node that notes which thread asks it for a repository's
-    /// directories and how many Git watches it was asked for.
+    /// directories and how many Git watches it was asked for, and holds
+    /// every other answer until `held` is taken.
     #[derive(Default)]
     struct NotingNode {
         repository_askers: Mutex<Vec<std::thread::ThreadId>>,
         watches: std::sync::atomic::AtomicUsize,
+        /// The gate a read waits at, and where it says it arrived.
+        held: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     }
 
     impl crate::node_access::NodeLink for NotingNode {
@@ -2344,9 +2347,16 @@ mod window_reads_tests {
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     Ok(Value::Null.into())
                 }
-                _ => Err(crate::node_access::LinkError::Unknown(
-                    "not part of this fixture".to_owned(),
-                )),
+                _ => {
+                    let held = self.held.lock().unwrap().take();
+                    if let Some((arrived, released)) = held {
+                        let _ = arrived.send(());
+                        let _ = released.recv();
+                    }
+                    Err(crate::node_access::LinkError::Unknown(
+                        "not part of this fixture".to_owned(),
+                    ))
+                }
             }
         }
     }
@@ -2355,11 +2365,17 @@ mod window_reads_tests {
     /// mission is made in, and the thread that polls the reader, which is
     /// session-sync's, asks the node for nothing while it does: a node slow
     /// to name a repository's directories holds no engine event back
-    /// (docs/PERFORMANCE_TESTING.md). The read with a window is the one
-    /// that follows the projects from that thread.
+    /// (docs/PERFORMANCE_TESTING.md). While the node holds the worker's
+    /// read, the poll still answers, with nothing yet. The read with a
+    /// window is the one that follows the projects from that thread.
     #[test]
     fn a_read_with_no_window_lands_and_asks_the_node_nothing_from_the_thread_that_polls() {
-        let node = Arc::new(NotingNode::default());
+        let (arrived, at_the_node) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let node = Arc::new(NotingNode {
+            held: Mutex::new(Some((arrived, released))),
+            ..Default::default()
+        });
         let mut reader = crate::worktrees::WorktreeReader::new(node.clone());
         let request = crate::worktrees::WorktreeRequest {
             projects: vec![crate::worktrees::WorktreeProjectRequest {
@@ -2374,6 +2390,15 @@ mod window_reads_tests {
         };
         let here = std::thread::current().id();
         let asked_here = || node.repository_askers.lock().unwrap().contains(&here);
+        assert!(reader.read_unwatched_if_due(request.clone()).is_none());
+        at_the_node
+            .recv_timeout(Duration::from_secs(15))
+            .expect("the reader's worker asked the node");
+        assert!(
+            reader.read_unwatched_if_due(request.clone()).is_none(),
+            "a poll waits for no answer the node still holds"
+        );
+        drop(release);
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while reader.read_unwatched_if_due(request.clone()).is_none() {
             assert!(
