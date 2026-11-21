@@ -2,8 +2,9 @@
 //! their things live: the home folder, the folder an application keeps its
 //! state in, the Herdr config folder the import reads, the programs
 //! on the search path, the `PATH` and the environment the login shell sets
-//! up, the account's environment on Windows, the default shell, the Trash, the Tailscale CLI, the account's primary language, and
-//! the machine's name and identity.
+//! up, the account's environment on Windows, the default shell, the Trash, the Tailscale CLI, the account's primary language, the
+//! character set a terminal gives a program with no locale, and the
+//! machine's name and identity.
 //!
 //! Every function answers for the machine this process runs on, from the
 //! variables and tables that system defines, and refuses (`NotFound`, or
@@ -28,6 +29,7 @@
 //! | `ProgramFiles` | Windows | no Tailscale location |
 //! | `HIDE_MACHINE_ID` | all | the machine id the system reports |
 //! | `LC_ALL`, `LC_MESSAGES`, `LANG` | Linux, read in that order | no primary language |
+//! | `LC_ALL`, `LC_CTYPE`, `LANG` | macOS, Linux, of a terminal's program | the terminal gives it UTF-8 ([`terminal_locale_from`]) |
 //! | `WSL_DISTRO_NAME` | Linux | a WSL distribution is told by its kernel release alone |
 
 use std::ffi::{OsStr, OsString};
@@ -53,6 +55,7 @@ pub const VARIABLES: &[&str] = &[
     MACHINE_ID_VARIABLE,
     "LC_ALL",
     "LC_MESSAGES",
+    "LC_CTYPE",
     "LANG",
     "WSL_DISTRO_NAME",
 ];
@@ -473,6 +476,39 @@ pub fn primary_language_from(variables: Variables) -> io::Result<String> {
         ));
     }
     Ok(name.replace('_', "-"))
+}
+
+/// The locale variable, and its value, that a terminal gives a program whose
+/// environment (`variables`) sets none of `LC_ALL`, `LC_CTYPE` and `LANG`,
+/// the variables a program reads its character set from, so the program
+/// reads text as UTF-8 rather than one byte a character: in the `C` locale
+/// bash 3.2's line editor reads each byte of a Korean character as a key of
+/// its own (with-hide/hide#2706). `None` when one of them is set, whatever
+/// its value, since that is the account's choice, and where nothing is needed:
+///
+/// | System | Given |
+/// | --- | --- |
+/// | macOS | `LC_CTYPE=UTF-8`, as Terminal.app and iTerm2 give |
+/// | Linux | `LC_CTYPE=C.UTF-8` where that locale is installed (`/usr/lib/locale/C.utf8`, which glibc installs only on request), none elsewhere, since bash warns at every start about a locale the system lacks |
+/// | Windows | none: a console hands its program characters, not bytes |
+pub fn terminal_locale_from(variables: Variables) -> Option<(&'static str, &'static str)> {
+    if ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .any(|name| nonempty_variable(variables, name).is_some())
+    {
+        return None;
+    }
+    if cfg!(target_os = "macos") {
+        Some(("LC_CTYPE", "UTF-8"))
+    } else if cfg!(target_os = "linux")
+        && ["C.utf8", "C.UTF-8"]
+            .into_iter()
+            .any(|name| Path::new("/usr/lib/locale").join(name).is_dir())
+    {
+        Some(("LC_CTYPE", "C.UTF-8"))
+    } else {
+        None
+    }
 }
 
 /// Where this machine shows the drives of the Windows PC it runs on, when it
