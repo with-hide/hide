@@ -3,7 +3,7 @@
 Hide is the operator's workspace for coding agents, and this guide is for an agent running in one of its panes.
 Outside Hide, or in a pane Hide does not know, the commands below are refused with a `reason` and a `next_action`; if you cannot get past that, this guide does not apply to the session.
 Hide runs the terminals: each pane, its split, its working folder, the agent in it and its terminal.
-Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the right lane with its View slot (보기 in Korean), the browser displays, and a Conductor's missions.
+Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the Views each Agent tab keeps in the right lane, the browser displays, and a Conductor's missions.
 You change Hide only through the `hide` commands below; what you print in your own pane is read by the operator, not by Hide.
 Every pane, agent and letter command here is a `hide` command; there is no other program to call.
 
@@ -118,6 +118,20 @@ hide workspace remove <path> [--delete-branch] [--force]
 - `--delete-branch` takes the local branch with it. Without `--force` it refuses uncommitted or untracked files (`worktree_remove_needs_force`) and a branch with commits its base lacks (`worktree_remove_branch_unmerged`); add `--force` only when that work may go.
 - It refuses the main checkout, your own checkout and a worktree whose agent is still working or waiting there, and it waits until the removal ends; running it again waits for the same removal or answers how it ended.
 
+## Automations
+
+```
+hide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]
+hide automation list | show <id|name> | run <id|name> | pause <id|name> | resume <id|name> | remove <id|name>
+hide automation edit <id|name> …        hide automation preview --schedule <when>        hide automation help
+```
+
+- When the operator asks for a task to run again at set times with no one present ("매일 아침 9시에 이슈 정리해줘"), make an automation: each time comes, Hide starts one agent on the task, in the automation's own folder unless a project is named, and the operator sees its runs under 자동화 in the sidebar.
+  A wait or a check inside this conversation is not one; keep doing it yourself.
+- Run `hide automation help` first: it names the schedule forms (`daily 09:00`, `weekdays 09:00`, `weekly mon,thu 09:00`, `every 15m`, `every 3h 09:00`, `cron 0 9 * * 1-5`), how to write the task and which folder and agent to choose.
+- The answer gives `reads_as_text` and `next_run_at` on the wall clock of the machine that runs Hide; tell the operator both in one line. A refusal's `message` says what to change, such as a period under five minutes.
+- Remove an automation only when the operator asked for it.
+
 ## Devices
 
 ```
@@ -145,7 +159,7 @@ hide access list [--json]
 
 - These are for a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
 - `request` asks the operator, who approves it in Settings › External tools as View only or Act, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
-- View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does. No agent writes to a tool first.
+- View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`, `hide automation list`, `show` and `preview`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does, and makes, changes and runs automations with `hide automation`. No agent writes to a tool first.
 - What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.
 - A key file that cannot be read refuses each command with `access_key_unreadable`; run `request` again, which replaces it and asks anew, and while the old connection of that name stands the operator disconnects it first (`access_name_taken`).
@@ -164,13 +178,13 @@ hide view move <view-id> --area <area-id> --index <n>
 ```
 
 - These need the Hide window open and your pane in a checkout Hide knows; a refusal says which is missing.
-- `file open` and `diff open` show a file or its changes in a View beside the agents, and `browser open` a page, always as a tab of the active View area; a page of the same address already open there comes forward instead of opening again. Only the operator splits the View areas, and open takes no `--beside`.
+- `file open` and `diff open` show a file or its changes in a View, and `browser open` a page; the same file, diff or address already open is that View again rather than a second one. Only the operator splits the View areas, and open takes no `--beside`.
+- Where an open lands depends on whether the operator watches your pane, the pane they are in on the Workspace on their screen. From that pane it goes onto your Agent tab's Views as a tab of the active View area, in front when the right lane is open; a closed lane stays closed. From any other pane, or while the operator is on another Workspace, nothing on their screen moves: the View waits in your pane's Views list (`뷰 N개` on your pane's header) until they open it. `view select` follows the same rule.
 - Open is how you show the operator a result: until they look at it, your row waits in their Needs You as To look at (`볼 것`), even while you keep working. Open only what the operator should look at, and say what you opened.
 - `browser snapshot`, `click`, `fill` and the rest read and drive a page already open in a View, by its id from `view list`, from a pane on a connected device exactly as from one on the machine that runs Hide; `workspace info` lists each as `browser.<command>`, and `hide browser help` explains them.
 - Check a page for yourself with your own browser tool, such as `aside`, not `browser open`: a page you open in Hide waits for the operator like any result.
-- What you open belongs to your session: the operator sees it in the Files list while your pane has the keyboard, and it closes when your pane closes or your session is archived.
-- While the operator looks at this checkout from another pane, what you open waits in your session's Files list instead of taking the screen.
-- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours.
+- What you open belongs to your session: it stays in your pane's Views list, and it closes when your pane closes or your session is archived.
+- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours. `view split` and `view move` arrange only a View the operator has on their tab's Views; one still waiting in your pane's list is refused with `view_not_in_lane`, and its layout is the operator's to choose when they open it.
 - What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view status <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
 - `hide <path>` (or `hide .`) is the operator's own command: it adds a folder of your machine as a project when it is not one yet, then brings Hide's window to it, moving the operator's screen. Run it only when the operator asks you to open a folder in Hide, and say what came forward.
 

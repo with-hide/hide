@@ -5,10 +5,10 @@
 
 import { clientI18n, translate } from "../i18n/translator";
 import {
-  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, agentsFrame, terminalText, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog,
+  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, agentsFrame, terminalText, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog, automationsFrame, SIGNED_OUT,
   type DemoState, type Said,
 } from "./demoData";
-import type { PhoneMessage, ServerFrame } from "./protocol";
+import type { AutomationAction, PhoneMessage, ServerFrame } from "./protocol";
 import type { PhoneSocket } from "./relaySocket";
 import { hostedPhone } from "./relayRuntime";
 
@@ -89,6 +89,7 @@ export class DemoSocket implements PhoneSocket {
     this.emit(agentsFrame(translate, this.state));
     this.emit(missionsFrame(translate, this.state));
     this.emit(prsFrame(translate, this.state));
+    this.emit(automationsFrame(translate, this.state));
   }
 
   /** The phone's language changed: the sample content is worded again, as a Mac that changed its language would. */
@@ -185,6 +186,9 @@ export class DemoSocket implements PhoneSocket {
           this.emit(prsFrame(translate, this.state));
         });
         return;
+      case "automation":
+        this.automation(message.request_id, message.action, message.id);
+        return;
       case "human_turn_done":
         this.later(ANSWER_MS, () => this.emit({ type: "human_turn_result", request_id: message.request_id, ok: true, reason: null }));
         return;
@@ -192,6 +196,25 @@ export class DemoSocket implements PhoneSocket {
       default:
         return;
     }
+  }
+
+  /** A press on a sample automation: a manual run that finishes a moment later, or a pause or a resume, as the core would answer. */
+  private automation(requestId: string, action: AutomationAction, id: string): void {
+    this.later(ANSWER_MS, () => {
+      const paused = this.state.pausedAutomations.filter((entry) => entry !== id);
+      if (action === "run") {
+        const at = Date.now();
+        this.state = { ...this.state, manualRuns: [...this.state.manualRuns, { automation: id, at, done: false }] };
+        this.later(REPLY_MS, () => {
+          this.state = { ...this.state, manualRuns: this.state.manualRuns.map((entry) => (entry.automation === id && entry.at === at ? { ...entry, done: true } : entry)) };
+          this.emit(automationsFrame(translate, this.state));
+        });
+      } else {
+        this.state = { ...this.state, pausedAutomations: action === "pause" ? [...paused, id] : paused, docsSignedIn: this.state.docsSignedIn || (action === "resume" && id === SIGNED_OUT) };
+      }
+      this.emit({ type: "automation_result", request_id: requestId, action, id, ok: true, reason: null });
+      this.emit(automationsFrame(translate, this.state));
+    });
   }
 
   private terminal(pane: string): void {

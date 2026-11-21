@@ -11,7 +11,8 @@
 //! answers with what the core's task slot or last error said about that
 //! request id.
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -28,6 +29,12 @@ const REMEMBERED_STARTS: usize = 64;
 /// How many answers the follower keeps for waiting requests.
 const KEPT_ANSWERS: usize = 32;
 /// The most targets one sheet lists.
+///
+/// It counts the checkouts the navigator lists, which the operator adds by
+/// opening a project or a worktree. Past it the sheet keeps the most
+/// recently used, by their project's last activity, in the order the sheet
+/// lists them (this machine's, then each device's), and the frame's
+/// `omitted` counts the rest; the start it offers is never refused.
 const MAX_TARGETS: usize = 256;
 const MAX_PROMPT_CHARS: usize = 4000;
 const MAX_MODEL_CHARS: usize = 128;
@@ -68,8 +75,8 @@ pub struct Catalog {
     kinds: Vec<Value>,
     remembered: Value,
     routes: HashMap<String, Route>,
-    /// Whether places past `MAX_TARGETS` were left out.
-    capped: bool,
+    /// How many places past `MAX_TARGETS` were left out.
+    omitted: usize,
 }
 
 fn str_of<'a>(value: &'a Value, field: &str) -> &'a str {
@@ -88,9 +95,10 @@ impl Catalog {
     /// did not: the catalog is built again on every snapshot change, and a
     /// steady over-cap list logs one line, not one per build.
     pub fn report_cap(&self, before: &Self) {
-        if self.capped && !before.capped {
+        if self.omitted > 0 && before.omitted == 0 {
             hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
+                "omitted": self.omitted,
             }));
         }
     }
@@ -118,7 +126,9 @@ impl Catalog {
             .iter()
             .filter(|workspace| workspace.get("remote_target_id").is_none_or(Value::is_null))
             .collect();
-        catalog.add_device(node, None, true, true, &local_workspaces);
+        // When each target's project was last used, in target order.
+        let mut used = Vec::new();
+        catalog.add_device(node, None, true, true, &local_workspaces, &mut used);
         for device in devices {
             let id = str_of(device, "id");
             if id == node || id.is_empty() || str_of(device, "kind") != "remote" {
@@ -141,8 +151,9 @@ impl Catalog {
             let label = Some(str_of(device, "label"))
                 .filter(|label| !label.is_empty())
                 .unwrap_or(id);
-            catalog.add_device(id, Some(label), false, connected, &workspaces);
+            catalog.add_device(id, Some(label), false, connected, &workspaces, &mut used);
         }
+        catalog.keep_recent(&used);
         for kind in KINDS {
             let provider = array_of(rest.pointer("/status/background_ai/providers"))
                 .iter()
@@ -159,6 +170,30 @@ impl Catalog {
         catalog
     }
 
+    /// Keeps the `MAX_TARGETS` targets whose project was used last, ties in
+    /// target order, without moving them, and counts the rest in `omitted`.
+    fn keep_recent(&mut self, used: &[u64]) {
+        if self.targets.len() <= MAX_TARGETS {
+            return;
+        }
+        let mut ranked = (0..self.targets.len()).collect::<Vec<_>>();
+        ranked.sort_by_key(|&index| (Reverse(used[index]), index));
+        let kept = ranked[..MAX_TARGETS]
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        self.omitted = self.targets.len() - MAX_TARGETS;
+        let mut index = 0;
+        self.targets.retain(|target| {
+            let keep = kept.contains(&index);
+            index += 1;
+            if !keep {
+                self.routes.remove(&target.id);
+            }
+            keep
+        });
+    }
+
     fn add_device(
         &mut self,
         device_id: &str,
@@ -166,13 +201,10 @@ impl Catalog {
         local: bool,
         connected: bool,
         workspaces: &[&Value],
+        used: &mut Vec<u64>,
     ) {
         let route_device = (!local).then(|| device_id.to_owned());
-        let push = |catalog: &mut Self, id: String, place: String, path: String| {
-            if catalog.targets.len() >= MAX_TARGETS {
-                catalog.capped = true;
-                return;
-            }
+        let mut push = |catalog: &mut Self, id: String, place: String, path: String, at: u64| {
             if catalog.routes.contains_key(&id) {
                 return;
             }
@@ -190,9 +222,17 @@ impl Catalog {
                 device_label: device_label.map(str::to_owned),
                 connected,
             });
+            used.push(at);
         };
-        for workspace in workspaces {
+        for workspace in workspaces
+            .iter()
+            .filter(|workspace| hide_core::agent_state::phone::listed_project(workspace))
+        {
             let checkouts = array_of(workspace.get("checkouts"));
+            let at = workspace
+                .get("last_activity_unix_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             let folder = workspace.get("is_git").and_then(Value::as_bool) != Some(true)
                 && checkouts.len() == 1;
             for checkout in checkouts {
@@ -215,7 +255,7 @@ impl Catalog {
                         .unwrap_or_else(|| str_of(checkout, "label"));
                     format!("{} · {branch}", str_of(workspace, "label"))
                 };
-                push(self, id.to_owned(), label, path.to_owned());
+                push(self, id.to_owned(), label, path.to_owned(), at);
             }
         }
     }
@@ -228,6 +268,7 @@ impl Catalog {
             "core_platform": self.core_platform,
             "kinds": self.kinds,
             "remembered": self.remembered,
+            "omitted": self.omitted,
         })
     }
 }
@@ -708,6 +749,26 @@ mod tests {
         })
     }
 
+    /// An automation's own folder is a project the core keeps off every
+    /// list (PRD automations B30): the phone's start sheet offers no place
+    /// in it.
+    #[test]
+    fn an_unlisted_project_is_no_start_target() {
+        let mut rest = rest();
+        rest["navigator"]["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "w3", "label": "automations", "is_git": false, "unlisted": true,
+                "path": "/Users/example/hide/automations/a",
+                "checkouts": [{"id": "c5", "path": "/Users/example/hide/automations/a", "label": "a"}]}));
+        let ids: Vec<_> = Catalog::of(&rest, "local")
+            .targets
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(ids, ["c1", "c2", "c4", "rc1"]);
+    }
+
     #[test]
     fn targets_are_this_mac_first_then_devices_and_no_device_has_a_home_target() {
         let catalog = Catalog::of(&rest(), "local");
@@ -723,6 +784,40 @@ mod tests {
         assert_eq!(catalog.frame()["core_platform"], "windows x86_64");
         assert_eq!(catalog.targets[3].device_label.as_deref(), Some("mini"));
         assert!(catalog.targets.iter().all(|target| target.connected));
+    }
+
+    /// Past the cap the sheet keeps the places used last, in the order it
+    /// lists them, and the frame counts the rest; a device's place used
+    /// recently stays though the walk reaches it last.
+    #[test]
+    fn a_sheet_past_its_cap_keeps_the_places_used_last_and_counts_the_rest() {
+        let mut value = rest();
+        let projects = (0..MAX_TARGETS + 1)
+            .map(|index| {
+                let path = format!("/Users/example/p{index}");
+                json!({"id": format!("w{index}"), "label": format!("p{index}"), "is_git": false,
+                    "path": path, "last_activity_unix_ms": 1_000 + index,
+                    "checkouts": [{"id": format!("p{index}"), "path": path, "label": "p"}]})
+            })
+            .collect::<Vec<_>>();
+        value["navigator"]["workspaces"] = json!(projects);
+        value["status"]["remote"][0]["session"]["workspaces"][0]["last_activity_unix_ms"] =
+            json!(9_000);
+
+        let catalog = Catalog::of(&value, "local");
+
+        let ids: Vec<_> = catalog.targets.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), MAX_TARGETS);
+        assert_eq!(ids[0], "p2", "the two used least are left out");
+        assert_eq!(
+            ids[MAX_TARGETS - 1],
+            "rc1",
+            "a device's places still follow"
+        );
+        assert_eq!(catalog.frame()["omitted"], 2);
+        assert!(!catalog.routes.contains_key("p0"));
+        assert!(catalog.routes.contains_key("rc1"));
+        assert_eq!(Catalog::of(&rest(), "local").frame()["omitted"], 0);
     }
 
     #[test]

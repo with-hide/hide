@@ -42,7 +42,7 @@ use hide_core::delivery::worker::{HumanNotice, HumanNoticeKind};
 use hide_core::engine::EngineHandle;
 use hide_relay_protocol::admission::PushOutcome;
 use phones::{PairRefusal, Phones};
-use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
+use projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use store::{
     ApnsRegistration, FcmRegistration, Method, MobileSettings, Notifications, PhoneOrigin,
     PhoneRecord, PushMode, PushSubscription, ServeRecord,
@@ -54,6 +54,21 @@ fn projection_failed(stage: &str, message: &str) {
         "{}",
         json!({"component": "hided", "kind": "mobile.projection_failed", "stage": stage, "message": message})
     );
+}
+
+/// The automations the core counts as the operator's turn, oldest pause
+/// first (`navigator.agent_scope.automation_asks`, PRD automations D-12); the
+/// core leaves the field out while there are none.
+fn automation_asks(rest: &Value) -> Vec<String> {
+    rest.pointer("/navigator/agent_scope/automation_asks")
+        .and_then(Value::as_array)
+        .map(|asks| {
+            asks.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// How often the checklist is read again while Settings > Mobile is open.
@@ -364,6 +379,8 @@ pub struct Mobile {
     missions: watch::Sender<Arc<PhoneMissions>>,
     /// The pull requests a phone lists, built from the same inputs as `projection`.
     prs: watch::Sender<Arc<PhonePrs>>,
+    /// The automations a phone lists, built from the core's own section.
+    automations: watch::Sender<Arc<PhoneAutomations>>,
     /// What the start sheet lists, republished when it changes.
     catalog: watch::Sender<Arc<start::Catalog>>,
     /// The core's answers to start requests, for the requests waiting on them.
@@ -469,6 +486,7 @@ impl Mobile {
             projection: watch::channel(Arc::new(Projection::default())).0,
             missions: watch::channel(Arc::new(PhoneMissions::default())).0,
             prs: watch::channel(Arc::new(PhonePrs::default())).0,
+            automations: watch::channel(Arc::new(PhoneAutomations::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
             starts,
@@ -634,6 +652,27 @@ impl Mobile {
         self.keep_alive() || self.config.desktop.wanted()
     }
 
+    /// Republishes the phone's automations when they changed, and records
+    /// when the list first goes over its caps, not on every change while it
+    /// stays over (the count is in the frame).
+    fn publish_automations(&self, automations: PhoneAutomations) {
+        self.automations.send_if_modified(|current| {
+            if **current == automations {
+                return false;
+            }
+            if automations.omitted > 0 && current.omitted == 0 {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_phone", "kind": "automations.capped",
+                    "omitted": automations.omitted,
+                    "cap": hide_core::agent_state::phone::MAX_AUTOMATIONS,
+                    "budget": hide_core::agent_state::phone::LIST_BUDGET,
+                }));
+            }
+            *current = Arc::new(automations);
+            true
+        });
+    }
+
     /// A desktop window turned its notifications on: the follower starts if
     /// it was resting, or seeds the windows' transitions on its next pass.
     pub fn wake_follower(&self) {
@@ -664,6 +703,15 @@ impl Mobile {
     /// The pull requests a phone may name in a request now.
     pub fn prs(&self) -> Arc<PhonePrs> {
         Arc::clone(&self.prs.borrow())
+    }
+
+    pub fn subscribe_automations(&self) -> watch::Receiver<Arc<PhoneAutomations>> {
+        self.automations.subscribe()
+    }
+
+    /// The automations a phone may name in a request now.
+    pub fn automations(&self) -> Arc<PhoneAutomations> {
+        Arc::clone(&self.automations.borrow())
     }
 
     pub fn subscribe_catalog(&self) -> watch::Receiver<Arc<start::Catalog>> {
@@ -1393,12 +1441,10 @@ impl Mobile {
                 subject: None,
                 state: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => push::NoticeState::ObserverUnconfirmed,
-                    HumanNoticeKind::LetterUndelivered => push::NoticeState::LetterUndelivered,
                     HumanNoticeKind::MissionAttention => push::NoticeState::NeedsYou,
                 },
                 place: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => notice.about.clone(),
-                    HumanNoticeKind::LetterUndelivered => notice.id.clone(),
                     HumanNoticeKind::MissionAttention => String::new(),
                 },
             },
@@ -2469,6 +2515,10 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
+        // The core's automations section as last sent and its asks as last
+        // read from `rest`: the list is projected again only when either moves.
+        let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
+        let mut asks: Vec<String> = Vec::new();
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2478,6 +2528,8 @@ impl Mobile {
             if !self.follower_active() {
                 cursor = 0;
                 rest = Value::Null;
+                automations = None;
+                asks.clear();
                 self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
@@ -2506,6 +2558,14 @@ impl Mobile {
                         true
                     }
                 });
+                self.automations.send_if_modified(|current| {
+                    if **current == PhoneAutomations::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhoneAutomations::default());
+                        true
+                    }
+                });
                 tokio::select! {
                     _ = self.wake.notified() => continue,
                     _ = stopping.changed() => return,
@@ -2524,8 +2584,24 @@ impl Mobile {
                 }
             };
             cursor = payload.revision;
-            match projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision)
-            {
+            // The core's own section comes only when it moved past the cursor;
+            // its asks are in `rest`, read again only when `rest` moved.
+            let section_moved = payload.automations.is_some();
+            if let Some(section) = &payload.automations {
+                automations = Some(Arc::clone(section));
+            }
+            let rest_moved =
+                projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision);
+            let asks_moved = matches!(rest_moved, Ok(true)) && {
+                let now = automation_asks(&rest);
+                let moved = now != asks;
+                asks = now;
+                moved
+            };
+            if section_moved || asks_moved {
+                self.publish_automations(PhoneAutomations::project(automations.as_deref(), &asks));
+            }
+            match rest_moved {
                 Err(error) => {
                     projection_failed("inputs", &error.to_string());
                     return;

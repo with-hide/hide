@@ -80,6 +80,8 @@ export type PracticeChapter<M = unknown> = {
   quest: boolean;
   /** The move its card plays on the list. */
   preview: PracticePreviewKind;
+  /** The app version the chapter came with, when a release named it among its main features; its card says `새로 · <since>` until it is played. */
+  since?: string;
 };
 
 /** Types a chapter against its own world, then lets the list hold chapters of every world. */

@@ -234,6 +234,7 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
                 }
             }
         }
+        map_trays(view, map);
         super::each_opener(view, &mut |device| match device
             .as_str()
             .map(|id| map(Moves::Device, id))
@@ -244,6 +245,49 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
             }
             _ => false,
         });
+    }
+}
+
+/// Each card's project, checkout and session machine, on a tray or not
+/// (PRD lane-desk-pair-view D-06, D-13); a tray's tab is a `KEYS` row.
+fn map_trays(view: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+    fn set(value: Option<&mut Value>, kind: Moves, map: &dyn Fn(Moves, &str) -> Mapped) {
+        if let Some(value) = value
+            && let Some(Mapped::To(id)) = value.as_str().map(|text| map(kind, text))
+        {
+            *value = Value::String(id);
+        }
+    }
+    fn cards(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(card) = fields.get_mut("card") {
+                    set(card.get_mut("workspace_id"), Moves::Registration, map);
+                    set(card.get_mut("checkout_id"), Moves::Checkout, map);
+                    set(
+                        card.get_mut("session")
+                            .and_then(|session| session.get_mut("device_id")),
+                        Moves::Device,
+                        map,
+                    );
+                }
+                for (key, entry) in fields.iter_mut() {
+                    if key != "card" {
+                        cards(entry, map);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| cards(item, map)),
+            _ => {}
+        }
+    }
+    for tray in each(view, "trays") {
+        if let Some(layout) = tray.get_mut("layout") {
+            cards(layout, map);
+        }
+    }
+    if let Some(shelf) = view.get_mut("shelf") {
+        cards(shelf, map);
     }
 }
 

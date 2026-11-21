@@ -1510,6 +1510,36 @@ fn release_attempt(
     project_id: &str,
     number: Option<u64>,
 ) -> Retired {
+    let released = release_branch_worktree(engine, node, repo, branch);
+    crate::diagnostic!(json!({
+        "component": "memory",
+        "kind": "promotion.worktree_released",
+        "project_id": project_id,
+        "card": number.map(hide_memory::card_name),
+        "branch": branch,
+        "outcome": released.as_ref().ok(),
+        "reason": released.as_ref().err(),
+    }));
+    match released {
+        Ok("gone" | "removed") => Retired::Done,
+        Ok("kept") => Retired::Kept,
+        _ => Retired::Failed,
+    }
+}
+
+/// Releases the worktree a Hide-started agent made on `branch` of `repo`
+/// (engineering principle 14): its workspace and panes and the branch go
+/// when the branch holds no commit of its own and the worktree nothing
+/// uncommitted; one that holds work stays (`kept`), as does one an agent
+/// still runs in (`active`). The project's own folder is never released.
+/// Shared by Memory's attempts and automations' runs (PRD automations
+/// D-18, B29).
+pub(super) fn release_branch_worktree(
+    engine: &dyn crate::engine::Engine,
+    node: &dyn crate::node_access::NodeLink,
+    repo: &str,
+    branch: &str,
+) -> Result<&'static str, String> {
     use hide_node_link::git::GitCommand;
     use hide_node_link::protocol::Call;
     const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1536,7 +1566,7 @@ fn release_attempt(
         )?;
         Ok(own.trim() == "0" && git(path, GitCommand::Status)?.trim().is_empty())
     };
-    let released = (|| -> Result<&'static str, String> {
+    (|| -> Result<&'static str, String> {
         let Some(path) = worktree_path(engine, repo, branch)? else {
             return Ok("gone");
         };
@@ -1577,21 +1607,7 @@ fn release_attempt(
         )
         .map_err(|error| error.to_string())?;
         Ok("removed")
-    })();
-    crate::diagnostic!(json!({
-        "component": "memory",
-        "kind": "promotion.worktree_released",
-        "project_id": project_id,
-        "card": number.map(hide_memory::card_name),
-        "branch": branch,
-        "outcome": released.as_ref().ok(),
-        "reason": released.as_ref().err(),
-    }));
-    match released {
-        Ok("gone" | "removed") => Retired::Done,
-        Ok("kept") => Retired::Kept,
-        _ => Retired::Failed,
-    }
+    })()
 }
 
 /// The settled attempts to retire: those carried from earlier checks, those
@@ -2245,6 +2261,8 @@ pub(super) fn spawn_hide_agent(
             context: start.authority.context.clone(),
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
         },
         start.actor.clone(),
         crate::coordination::Command::Spawn {

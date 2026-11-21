@@ -780,9 +780,9 @@ impl Serialize for HookDocument {
 // Configuration reads and all source/tree allocations have a finite input
 // bound, in addition to serde_json's nesting limit. Oversized files are left
 // untouched and reported through the existing installation failure surface.
-const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
-fn read_source(path: &Path) -> std::io::Result<Option<String>> {
+pub(crate) fn read_source(path: &Path) -> std::io::Result<Option<String>> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),

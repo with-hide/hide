@@ -85,6 +85,17 @@ fn json(state: &Path, name: &str) -> Value {
     serde_json::from_slice(&std::fs::read(state.join(name)).unwrap()).unwrap()
 }
 
+/// The ledger as a start reads it: from its store once one exists, from the
+/// old file the release left before.
+fn ledger(state: &Path) -> Value {
+    let store = hide_kit::layout::delivery_store(state);
+    if store.exists() {
+        crate::delivery::store::read_value(&store).unwrap().unwrap()
+    } else {
+        json(state, DELIVERY_LEDGER)
+    }
+}
+
 fn length(value: &Value, pointer: &str) -> usize {
     value
         .pointer(pointer)
@@ -117,7 +128,7 @@ struct Counts {
 fn counts(state: &Path) -> Counts {
     Counts {
         projects: length(&json(state, CORE_STATE), "/workspace_registrations"),
-        letters: length(&json(state, DELIVERY_LEDGER), "/letters"),
+        letters: length(&ledger(state), "/letters"),
         cards: cards(state),
     }
 }
@@ -161,8 +172,9 @@ fn load_every_store(state: &Path, node: &NodeId) -> Vec<String> {
         if !matches!(outcome, crate::workspace_views::LoadOutcome::Loaded { .. }) {
             refused.push(format!("{WORKSPACE_VIEWS}: {outcome:?}"));
         }
-        if let Err(reason) = crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER)) {
-            refused.push(format!("{DELIVERY_LEDGER}: {reason}"));
+        if let Err(reason) = crate::delivery::store::load(&hide_kit::layout::delivery_store(state))
+        {
+            refused.push(format!("{}: {reason}", hide_kit::layout::DELIVERY_STORE));
         }
         if let crate::mission_store::Restored::Unreadable(reason) =
             crate::mission_store::MissionStore::new(state).restore()
@@ -276,11 +288,22 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         // would point at a device that is no longer registered.
         let scoped = format!("remote:{old}:");
         if old != machine {
-            for path in json_stores(state) {
+            // The old ledger file is only read: its store holds the ledger.
+            let old_ledger = state.join(DELIVERY_LEDGER);
+            for path in json_stores(state)
+                .into_iter()
+                .filter(|path| *path != old_ledger)
+            {
                 if std::fs::read_to_string(&path).unwrap().contains(&scoped) {
                     let store = path.strip_prefix(state).unwrap().display().to_string();
                     failures.push(format!("{store} still names {scoped}"));
                 }
+            }
+            if ledger(state).to_string().contains(&scoped) {
+                failures.push(format!(
+                    "{} still names {scoped}",
+                    hide_kit::layout::DELIVERY_STORE
+                ));
             }
         }
     }
@@ -586,7 +609,7 @@ fn records_kept(fixture: &Path, state: &Path) -> Vec<String> {
     );
     loaded.insert(
         "ledger agents",
-        crate::delivery::ledger::load(&state.join(DELIVERY_LEDGER))
+        crate::delivery::store::load(&hide_kit::layout::delivery_store(state))
             .map(|ledger| ledger.agents)
             .unwrap_or_default()
             .iter()

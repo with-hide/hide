@@ -1639,6 +1639,8 @@ dependencies = [
 name = "hide-kit"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "getrandom 0.2.16",
  "hide-agent-adapter",
  "hide-agent-hooks",
  "hide-holder-protocol",
@@ -1648,6 +1650,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "ureq",
  "workspace-hack",
 ]
 

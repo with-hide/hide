@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BoundedChildError, runBounded, type Bounds } from "./bounded-child";
 import { fixtureProgram } from "./platform-fixture";
-import { buildFixtureShims, fixtureShimPath } from "./shims/build";
+import { buildFixtureShims, fixtureBuildTimeout, fixtureShimPath } from "./shims/build";
 
 /** Each run's bounds: the 10 s the synchronous calls had, and far more output than the program writes. */
 const RUN: Bounds = { timeoutMs: 10_000, outputBytes: 64 * 1024 };
@@ -18,7 +18,7 @@ beforeAll(async () => {
   if (process.platform !== "win32") return;
   await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["launcher", "hide-processes"]);
   RUN.processTool = fixtureShimPath("hide-processes");
-}, 120_000);
+}, fixtureBuildTimeout(["launcher", "hide-processes"]));
 
 // Each run keeps its 10 s; the limit adds the 10 s an ended tree's teardown may take.
 test("fixture programs preserve Unicode paths, arguments, quoting and the child exit status", { timeout: 30_000 }, async ({ signal }) => {

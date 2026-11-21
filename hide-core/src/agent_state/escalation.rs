@@ -14,8 +14,6 @@ use crate::model::SidebarAgentSnapshot;
 pub enum Cause {
     ParentBlocked,
     Draft,
-    BellExhausted,
-    Undelivered,
     ChildBlocked,
     ObserverUnconfirmed,
     /// Hide typed the child's brief, or a letter's bell, and the child never
@@ -33,29 +31,8 @@ pub struct Escalation {
     pub cause: Cause,
     pub letter_id: Option<String>,
     pub since_unix_ms: Option<u64>,
-    /// The existing delivery human notice already announces these two causes.
+    /// The existing delivery human notice already announces this cause.
     pub human_notice: bool,
-}
-
-/// A later waiting reason is not a receipt or successful bell. The worker
-/// removes a hold after ringing (or retiring) the letter; until then retain
-/// the cause that already raised it. This table remains bounded by the
-/// worker's current pending letters and is never used for doorbell verdicts.
-pub(crate) fn retain_raised_holds(
-    previous: &BTreeMap<String, Hold>,
-    mut current: BTreeMap<String, Hold>,
-) -> BTreeMap<String, Hold> {
-    for (id, old) in previous {
-        // The holds the operator has to lift (`held::held_for`), named in
-        // that one place, so a hold the doorbell adds is kept or dropped
-        // here as it is shown.
-        if held_for(*old).is_some()
-            && let Some(next) = current.get_mut(id)
-        {
-            *next = *old;
-        }
-    }
-    current
 }
 
 /// How long a delegated child stays blocked before its lineage root is raised:
@@ -118,6 +95,25 @@ pub(crate) fn of(
         });
     }
     let ledger = ledger?;
+    // Its observer did not look at its warning within the hour, and the
+    // operator was told (`delivery::human::claim`) for this quiet episode.
+    if let Some(watch) = ledger.watches.iter().find(|watch| {
+        watch.operator_notified
+            && watch.target.pane_id == child.pane_id
+            && watch.target.session == child.lineage_session
+            && watch.parent.pane_id == parent
+            && child
+                .declared_parent_session
+                .as_ref()
+                .is_none_or(|session| watch.parent.session.as_ref() == Some(session))
+    }) {
+        return Some(Escalation {
+            cause: Cause::ObserverUnconfirmed,
+            letter_id: None,
+            since_unix_ms: watch.first_warning_at_unix_ms,
+            human_notice: true,
+        });
+    }
     for letter in &ledger.letters {
         if matches!(
             letter.state,
@@ -133,22 +129,7 @@ pub(crate) fn of(
         {
             continue;
         }
-        let cause = if let Some(warning) = &letter.watch_warning {
-            if warning.ordinal != 1
-                || !warning.parent_notified
-                || warning.target.pane_id != child.pane_id
-                || warning.target.session != child.lineage_session
-                || letter.recipient.pane_id != parent
-                || !ledger.watches.iter().any(|watch| {
-                    watch.target.same_identity(&warning.target)
-                        && watch.parent.same_identity(&letter.recipient)
-                        && watch.last_activity_at_unix_ms == warning.activity_at_unix_ms
-                })
-            {
-                continue;
-            }
-            Cause::ObserverUnconfirmed
-        } else {
+        let cause = {
             if letter.sender.pane_id != child.pane_id
                 || letter.sender.session != child.lineage_session
                 || letter.recipient.pane_id != parent
@@ -157,26 +138,20 @@ pub(crate) fn of(
             {
                 continue;
             }
-            if letter.state == State::Undelivered {
-                Cause::Undelivered
-            } else if letter.state == State::Pending {
-                match holds.get(&letter.id).copied().and_then(held_for) {
-                    Some(HeldFor::Approval) => Cause::ParentBlocked,
-                    Some(HeldFor::Draft) => Cause::Draft,
-                    Some(HeldFor::Unanswered) => Cause::BellExhausted,
-                    // A parent pane Hide cannot reach is the parent's
-                    // device or session, not the child's to raise.
-                    Some(HeldFor::Unreachable) | None => continue,
-                }
-            } else {
+            if letter.state != State::Pending {
                 continue;
+            }
+            match holds.get(&letter.id).copied().and_then(held_for) {
+                Some(HeldFor::Approval) => Cause::ParentBlocked,
+                Some(HeldFor::Draft) => Cause::Draft,
+                None => continue,
             }
         };
         return Some(Escalation {
             cause,
             letter_id: Some(letter.id.clone()),
             since_unix_ms: Some(letter.created_at_unix_ms),
-            human_notice: matches!(cause, Cause::Undelivered | Cause::ObserverUnconfirmed),
+            human_notice: cause == Cause::ObserverUnconfirmed,
         });
     }
     None
@@ -224,7 +199,6 @@ impl Cause {
         match self {
             Cause::ChildBlocked => Some(Verb::Approval),
             Cause::InputUnconfirmed | Cause::HumanTurn => Some(Verb::Answer),
-            Cause::Undelivered | Cause::BellExhausted => Some(Verb::Answer),
             Cause::ObserverUnconfirmed => Some(Verb::Confirm),
             Cause::Draft => Some(Verb::Draft),
             Cause::ParentBlocked => None,
@@ -572,9 +546,9 @@ mod tests {
     }
 
     /// During a blocked child's grace the other causes keep their own clocks:
-    /// a request the child sent its parent that never reached it rises as
-    /// undelivered at once, and a person's turn the child declared rises
-    /// before every other cause.
+    /// a request the child sent its parent held on the parent's approval
+    /// rises at once, and a person's turn the child declared rises before
+    /// every other cause.
     #[test]
     fn within_its_grace_a_blocked_child_still_rises_for_another_cause() {
         let mut row = child();
@@ -593,11 +567,11 @@ mod tests {
             1_000,
         )
         .unwrap();
-        ledger.letters[0].state = State::Undelivered;
-        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("undelivered");
-        assert_eq!(raised.cause, Cause::Undelivered);
+        let holds = BTreeMap::from([(ledger.letters[0].id.clone(), Hold::Blocked)]);
+        let raised = of(&row, Some(&ledger), &holds, 1_001).expect("parent blocked");
+        assert_eq!(raised.cause, Cause::ParentBlocked);
         declare(&mut row, human_turn("agent-3.1"), 1_000);
-        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("person's turn");
+        let raised = of(&row, Some(&ledger), &holds, 1_001).expect("person's turn");
         assert_eq!(raised.cause, Cause::HumanTurn);
     }
 
@@ -955,53 +929,10 @@ mod tests {
         }
     }
 
-    /// The holds the operator lifts are named once (`held::held_for`): a
-    /// parent pane Hide cannot reach is kept like the others, so its held
-    /// letter does not come and go between passes, and raises nothing on the
-    /// child, while a hold that ends on its own is never kept.
-    #[test]
-    fn an_unreachable_parent_is_kept_and_raises_nothing_and_a_passing_hold_is_not_kept() {
-        let child = child();
-        let mut ledger = Ledger::default();
-        mailbox::send(
-            &mut ledger,
-            &actor("child"),
-            &actor("parent"),
-            "request",
-            "question",
-            "request",
-            None,
-            100,
-        )
-        .unwrap();
-        let id = ledger.letters[0].id.clone();
-        for hold in [Hold::Absent, Hold::Session] {
-            let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert_eq!(
-                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Working)])),
-                holds,
-                "{hold:?} is the operator's to lift and stays until the letter rings"
-            );
-            assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
-        }
-        for hold in [Hold::Working, Hold::Quiet, Hold::NotReady] {
-            let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert_eq!(
-                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Draft)])),
-                BTreeMap::from([(id.clone(), Hold::Draft)])
-            );
-        }
-    }
-
     #[test]
     fn session_escalation_clears_on_ack_reply_cancel_or_successful_bell() {
         let child = child();
-        for hold in [
-            Hold::Blocked,
-            Hold::AwaitingOperator,
-            Hold::Draft,
-            Hold::Exhausted,
-        ] {
+        for hold in [Hold::Blocked, Hold::AwaitingOperator, Hold::Draft] {
             let mut ledger = Ledger::default();
             mailbox::send(
                 &mut ledger,
@@ -1017,14 +948,6 @@ mod tests {
             let id = ledger.letters[0].id.clone();
             let holds = BTreeMap::from([(id.clone(), hold)]);
             assert!(of(&child, Some(&ledger), &holds, LATER).is_some());
-            for waiting in [Hold::Working, Hold::Quiet, Hold::NotReady] {
-                let retained = retain_raised_holds(&holds, BTreeMap::from([(id.clone(), waiting)]));
-                assert_eq!(
-                    of(&child, Some(&ledger), &retained, LATER),
-                    of(&child, Some(&ledger), &holds, LATER)
-                );
-            }
-            assert!(retain_raised_holds(&holds, BTreeMap::new()).is_empty());
             assert!(
                 of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
                 "a successful bell clears the hold"
@@ -1071,10 +994,8 @@ mod tests {
             first: false,
         };
         let cases = [
-            (State::Undelivered, None, Cause::Undelivered),
             (State::Pending, Some(Hold::Blocked), Cause::ParentBlocked),
             (State::Pending, Some(Hold::Draft), Cause::Draft),
-            (State::Pending, Some(Hold::Exhausted), Cause::BellExhausted),
         ];
         for (state, hold, cause) in cases {
             for requester in [Requester::Agent, Requester::Operator] {
@@ -1133,45 +1054,27 @@ mod tests {
     }
 
     #[test]
-    fn session_watch_escalates_only_the_unanswered_human_notified_current_episode() {
+    fn session_watch_escalates_only_the_unseen_human_notified_current_episode() {
         let child = child();
         let mut ledger = Ledger::default();
         crate::delivery::watch::start(&mut ledger, &actor("parent"), &actor("child"), 100).unwrap();
-        mailbox::send(
-            &mut ledger,
-            &actor("observer"),
-            &actor("parent"),
-            "warning",
-            "warning",
-            "request",
-            None,
-            200,
-        )
-        .unwrap();
-        ledger.letters[0].watch_warning = Some(crate::delivery::watch::WarningReceipt {
-            target: actor("child"),
-            activity_at_unix_ms: 100,
-            ordinal: 1,
-            parent_notified: false,
-        });
+        ledger.watches[0].warning_count = 1;
+        ledger.watches[0].first_warning_at_unix_ms = Some(200);
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
-        ledger.letters[0]
-            .watch_warning
-            .as_mut()
-            .unwrap()
-            .parent_notified = true;
+        ledger.watches[0].operator_notified = true;
         let raised = of(&child, Some(&ledger), &BTreeMap::new(), LATER).unwrap();
         assert_eq!(raised.cause, Cause::ObserverUnconfirmed);
+        assert_eq!(raised.since_unix_ms, Some(200));
         assert!(
             raised.human_notice,
             "the existing watch notice owns the push"
         );
-        ledger.watches[0].last_activity_at_unix_ms = 300;
+        ledger.watches[0].operator_notified = false;
         assert!(
             of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
             "new activity ends the episode"
         );
-        ledger.watches[0].last_activity_at_unix_ms = 100;
+        ledger.watches[0].operator_notified = true;
         ledger.watches.clear();
         assert!(
             of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
@@ -1180,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn session_child_escalates_only_for_a_current_parent_hold_or_undelivered_letter() {
+    fn session_child_escalates_only_for_a_parent_hold_the_operator_lifts() {
         let mut child = child();
         let actor = |pane: &str| Actor {
             pane_id: pane.into(),
@@ -1207,7 +1110,6 @@ mod tests {
             (Hold::Blocked, Cause::ParentBlocked),
             (Hold::AwaitingOperator, Cause::ParentBlocked),
             (Hold::Draft, Cause::Draft),
-            (Hold::Exhausted, Cause::BellExhausted),
         ] {
             let holds = BTreeMap::from([(id.clone(), hold)]);
             assert_eq!(
@@ -1215,14 +1117,24 @@ mod tests {
                 cause
             );
         }
-        ledger.letters[0].state = State::Undelivered;
-        assert!(
-            of(&child, Some(&ledger), &BTreeMap::new(), LATER)
-                .unwrap()
-                .human_notice
-        );
-        child.activity = "working".into();
+        // Bells not taken, an unreachable parent pane or another session
+        // there are Hide's to settle, never the operator's (B14).
+        for hold in [Hold::Exhausted, Hold::Absent, Hold::Session] {
+            let holds = BTreeMap::from([(id.clone(), hold)]);
+            assert!(
+                of(&child, Some(&ledger), &holds, LATER).is_none(),
+                "{hold:?}"
+            );
+        }
+        // A letter that ended with no recipient raises nothing (B7).
+        ledger.letters[0].state = State::NoRecipient;
+        ledger.letters[0].waiting_answer = false;
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
+        ledger.letters[0].state = State::Pending;
+        ledger.letters[0].waiting_answer = true;
+        let holds = BTreeMap::from([(id.clone(), Hold::Draft)]);
+        child.activity = "working".into();
+        assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
         child.activity = "stopped".into();
         ledger.letters[0].recipient.session = Some("replacement-parent".into());
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());

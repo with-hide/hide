@@ -8,7 +8,7 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { sendKeys, withControl } from "./daemon-actions";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
+import { countSent, enterWorkspace, screenshot, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -18,23 +18,21 @@ async function paneText(page: Page, pane: string): Promise<string> {
   return page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane);
 }
 
-/** The last rows sit on adjacent lines: a frame drawn at another grid wraps each row onto two. */
-const DRAWN_AT_GRID = /row-159 *\nrow-160/;
-
-type Docked = { page: Page; daemon: Daemon; fixture: AgentFixture; focused: string; workspace: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>> };
+type LaneUp = { page: Page; daemon: Daemon; fixture: AgentFixture; focused: string; workspace: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>> };
 
 /**
- * The fixture's two agents with long history, the Explorer pinned beside them
- * and `notes.txt` open in a View area, the keyboard in the second pane.
+ * The fixture's two agents with long history, the lane over them with the
+ * Explorer and `notes.txt` open in a View area, the keyboard in the first pane.
  */
-async function dockedWithDocument(page: Page, label: string, use: (docked: Docked) => Promise<void>): Promise<void> {
+async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1680, height: 900 });
   const fixture = await startFixture();
   let daemon: Daemon | null = null;
   try {
     fs.writeFileSync(path.join(fixture.root, "fixture", "notes.txt"), "notes\n");
     daemon = await startHided(fixture, label);
-    const focused = fixture.panes[1];
+    // The first pane, at the body's left, which the lane over the agents leaves uncovered.
+    const focused = fixture.panes[0];
     // Long history in both agent panes: the shim echoes what the PTY gets.
     const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
     await withControl(daemon, async (control) => {
@@ -46,17 +44,17 @@ async function dockedWithDocument(page: Page, label: string, use: (docked: Docke
     await enterWorkspace(page, "fixture");
     for (const pane of fixture.panes) await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("row-160");
 
-    // The lane is pinned, so it docks beside the agents (PRD right-lane B5).
+    // The Explorer floats over the agents and the file opened from it floats
+    // beside it; the press on the pane closes the Explorer, and the desk
+    // stands beside the panes (PRD lane-desk-pair-view D-50).
     await showExplorer(page);
-    await setLanePinned(page, true);
     const workspace = page.locator("[data-workspace-screen]");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     await page.locator(`[data-explorer-row$="/notes.txt"]`).dblclick();
     await expect(page.locator("[data-view-area]")).toBeVisible();
-    // Both panes narrow and redraw at the new grid.
-    for (const pane of fixture.panes) await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toMatch(DRAWN_AT_GRID);
-    await page.locator(`[data-pane-view="${focused}"] [data-terminal-host]`).click();
+    await page.locator(`[data-pane-view="${focused}"] [data-terminal-host]`).click({ position: { x: 40, y: 60 } });
     await expect(page.locator(`[data-pane-view="${focused}"]`)).toHaveAttribute("data-focused", "true");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await use({ page, daemon, fixture, focused, workspace, sent, last });
   } finally {
     daemon?.stop();
@@ -65,7 +63,7 @@ async function dockedWithDocument(page: Page, label: string, use: (docked: Docke
 }
 
 test("Cmd+F in a focused pane opens that pane's find bar, not the document's, and in the View area stays the document's", async ({ page }) => {
-  await dockedWithDocument(page, "pane-find-bar", async ({ focused }) => {
+  await laneWithDocument(page, "pane-find-bar", async ({ focused }) => {
     // B4: with a document open beside the agents, Cmd+F in a focused pane
     // opens that pane's find bar, not the document's.
     await page.keyboard.press(chord("find_in_pane"));
@@ -91,7 +89,7 @@ test("Cmd+F in a focused pane opens that pane's find bar, not the document's, an
 });
 
 test("the find bar steps through matches with Enter and Shift+Enter and counts from 1", async ({ page }) => {
-  await dockedWithDocument(page, "pane-find-count", async ({ focused, sent, last }) => {
+  await laneWithDocument(page, "pane-find-count", async ({ focused, sent, last }) => {
     await page.keyboard.press(chord("find_in_pane"));
     const bar = page.locator("[data-find-bar]");
     await expect(bar).toBeVisible();
@@ -114,11 +112,12 @@ test("the find bar steps through matches with Enter and Shift+Enter and counts f
   });
 });
 
-test("closing the last view leaves the Explorer alone in the docked lane", async ({ page }) => {
-  await dockedWithDocument(page, "pane-last-view", async ({ workspace }) => {
-    // Closing the last view keeps the docked lane with the Explorer alone in
+test("closing the last view leaves the Explorer alone in the lane", async ({ page }) => {
+  await laneWithDocument(page, "pane-last-view", async ({ workspace }) => {
+    // Closing the last view keeps the lane with the Explorer alone in
     // its column, so the next file brings the View areas back beside it (PRD
     // lane-two-columns B12).
+    await showExplorer(page);
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     const viewTab = page.locator('[data-view-tab-bar] [role="tab"][data-display]').first();
     await viewTab.hover();
@@ -126,7 +125,7 @@ test("closing the last view leaves the Explorer alone in the docked lane", async
     await expect(page.locator("[data-view-area]")).toHaveCount(0);
     await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
     await expect(workspace).toHaveAttribute("data-lane-view", "none");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     await screenshot(page, "view-region-gone");
     await page.locator(`[data-explorer-row$="/notes.txt"]`).dblclick();
     await expect(page.locator("[data-view-area]")).toBeVisible();

@@ -23,6 +23,8 @@ pub(super) struct KitDevice {
     /// What it answers for its profiles; with none it refuses the call, as a
     /// node that keeps no profiles does.
     profiles: Mutex<Option<serde_json::Value>>,
+    /// What its store answers a `store` or `follow_store` call, as JSON.
+    store: Mutex<Result<serde_json::Value, String>>,
 }
 
 impl KitDevice {
@@ -34,7 +36,13 @@ impl KitDevice {
             closed: Mutex::new(None),
             gate: Mutex::new(None),
             profiles: Mutex::new(None),
+            store: Mutex::new(Err("no store answer was set".to_owned())),
         })
+    }
+
+    /// What its store answers from now on.
+    pub(super) fn answer_store(&self, answer: Result<serde_json::Value, String>) {
+        *self.store.lock().unwrap() = answer;
     }
 
     /// A device whose next non-removal call answers only once the returned
@@ -71,6 +79,7 @@ impl NodeLink for KitDevice {
             return Err(LinkError::NotConnected("kit calls only".to_owned()));
         };
         let removing = action == KitAction::Remove;
+        let store = matches!(action, KitAction::Store { .. } | KitAction::FollowStore);
         self.retirement_projects
             .lock()
             .unwrap()
@@ -78,6 +87,12 @@ impl NodeLink for KitDevice {
         self.calls.lock().unwrap().push((action, cli_dir));
         if !removing && let Some(gate) = self.gate.lock().unwrap().take() {
             let _ = gate.recv();
+        }
+        if store {
+            return match &*self.store.lock().unwrap() {
+                Ok(answer) => Ok(LinkAnswer::Parsed(answer.clone())),
+                Err(reason) => Err(LinkError::Unknown(reason.clone())),
+            };
         }
         if removing {
             let removed = hide_node_link::protocol::KitRemoved {
@@ -106,6 +121,7 @@ impl NodeLink for KitDevice {
 
 pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
     KitReport {
+        store: None,
         components: states
             .iter()
             .map(|(id, state)| ComponentReport {
@@ -132,7 +148,7 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
 
 /// Dispatches one event and answers whether the core would announce a change
 /// to the shell for it.
-fn dispatch(shared: &Mutex<Runtime>, kind: &str, payload: serde_json::Value) -> bool {
+pub(super) fn dispatch(shared: &Mutex<Runtime>, kind: &str, payload: serde_json::Value) -> bool {
     let event =
         serde_json::json!({"schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload});
     shared
@@ -190,7 +206,7 @@ fn granted(runtime: &Mutex<Runtime>) -> crate::model::HostConsent {
     runtime.lock().unwrap().new_host_consent()
 }
 
-fn kit(shared: &Mutex<Runtime>) -> crate::model::KitSnapshot {
+pub(super) fn kit(shared: &Mutex<Runtime>) -> crate::model::KitSnapshot {
     shared
         .lock()
         .unwrap()
@@ -206,7 +222,7 @@ fn kit(shared: &Mutex<Runtime>) -> crate::model::KitSnapshot {
 
 /// Waits for the device's kit worker to finish what is queued.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
-fn settle(shared: &Mutex<Runtime>) {
+pub(super) fn settle(shared: &Mutex<Runtime>) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while shared.lock().unwrap().device_kit_running.contains(DEVICE) {
         assert!(

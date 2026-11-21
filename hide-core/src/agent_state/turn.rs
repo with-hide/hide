@@ -669,11 +669,20 @@ pub fn agent_group_for(
         // group as on every root, reaches the operator (B29).
         return AgentGroup::Seen;
     }
-    if let Ownership::HideAi { operator_turn } = ownership {
+    if let Ownership::HideAi {
+        operator_turn,
+        look_calls,
+    } = ownership
+    {
         // Its home shows the work's progress and result; the operator is
         // called out only for what the operator has to do: the agent's own
-        // question or block, read like any row's, or the home's turn.
-        return if operator_turn || blocked || (demand != AgentDemand::None && unread) {
+        // question or block, read like any row's, the home's turn, or, for
+        // a home that shows no result of its own, a View the agent opened.
+        return if operator_turn
+            || blocked
+            || (demand != AgentDemand::None && unread)
+            || (look_calls && look)
+        {
             AgentGroup::NeedsYou
         } else {
             AgentGroup::Seen
@@ -1257,14 +1266,13 @@ pub mod push {
     }
 
     /// The states a notification announces; the wire value is also the key of
-    /// the phone's translated word for it. The last two are the human delivery
-    /// causes (`hide_core::delivery::worker::HumanNoticeKind`).
+    /// the phone's translated word for it. The last is the human delivery
+    /// cause (`hide_core::delivery::worker::HumanNoticeKind`).
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum NoticeState {
         NeedsYou,
         Done,
         ObserverUnconfirmed,
-        LetterUndelivered,
     }
 
     impl NoticeState {
@@ -1273,7 +1281,6 @@ pub mod push {
                 Self::NeedsYou => "needs_you",
                 Self::Done => "done",
                 Self::ObserverUnconfirmed => "observer_unconfirmed",
-                Self::LetterUndelivered => "letter_undelivered",
             }
         }
     }
@@ -1572,6 +1579,40 @@ mod row_tests {
             "agents": [{"pane_id": "root", "agent": "claude", "agent_status": "idle", "state_change_seq": 1}]
         })).unwrap();
         project_agents(payload).agents.remove(0)
+    }
+
+    /// PRD automations B15: a View an automation run's agent opened calls
+    /// the operator to Needs You, since the automation's home shows no
+    /// result of its own; another Hide AI home's row stays Seen for it.
+    #[test]
+    fn a_view_an_automation_run_opened_calls_the_operator_and_another_homes_does_not() {
+        let group = |look_calls| {
+            agent_group_for(
+                AgentDemand::None,
+                AgentActivity::Stopped,
+                true,
+                false,
+                false,
+                Ownership::HideAi {
+                    operator_turn: false,
+                    look_calls,
+                },
+                false,
+                true,
+            )
+        };
+        assert_eq!(group(true), AgentGroup::NeedsYou);
+        assert_eq!(group(false), AgentGroup::Seen);
+        assert!(
+            crate::coordination::TaskKind::Automation
+                .home()
+                .is_some_and(|home| home.calls_on_look())
+        );
+        assert!(
+            !crate::coordination::TaskKind::MemoryPromote
+                .home()
+                .is_some_and(|home| home.calls_on_look())
+        );
     }
 
     // A root whose own AI question was read, with a raised descendant, asks

@@ -67,16 +67,24 @@ impl Runtime {
             .filter(|(_, (scope, _, _, _))| scope == key)
             .map(|(id, _)| id.clone())
             .collect();
-        let mut changed = store.views.entry(&key.0, &key.1).reconcile_agent_groups(
-            topology,
-            reserved,
-            &admitted,
-            &unconfirmed,
-        )?;
+        // Tabs listed are made an entry if the checkout has none; a checkout
+        // with no tabs gets none, and one it kept is reconciled as it is
+        // (`workspace_views::MAX_WORKSPACES`).
+        if !topology.is_empty() {
+            store.views.entry(&key.0, &key.1);
+        }
+        let Some(view) = store.views.get_mut(&key.0, &key.1) else {
+            return Ok(self.prune_view_callers(key, &[]));
+        };
+        let mut changed =
+            view.reconcile_agent_groups(topology, reserved, &admitted, &unconfirmed)?;
         // The same bounded placement receipt applies on this machine and devices.
         let mut placement_changed = false;
         let mut errors = Vec::new();
-        let view = store.views.entry(&key.0, &key.1);
+        let view = store
+            .views
+            .get_mut(&key.0, &key.1)
+            .expect("reconciled above");
         let placements = store
             .agent_placements
             .iter()
@@ -148,6 +156,16 @@ impl Runtime {
             }
         }
         changed |= placement_changed;
+        // Tabs that arrived, moved or left are a use of the checkout's entry
+        // (`WorkspaceView::used_unix_ms`); a listing that changes nothing is not.
+        if changed
+            && let Some(view) = self
+                .workspace_views
+                .as_mut()
+                .and_then(|store| store.views.get_mut(&key.0, &key.1))
+        {
+            view.used_unix_ms = unix_milliseconds();
+        }
         for error in errors {
             self.push_diagnostic("agent_layout.placement_refused", error);
         }
@@ -307,18 +325,18 @@ impl Runtime {
 
     /// Whether `key` has room for one more Agent tab, counting those placed,
     /// arriving and still opening.
-    fn agent_tab_fits(&mut self, key: &WorkspaceKey) -> bool {
-        let Some(store) = self.workspace_views.as_mut() else {
+    fn agent_tab_fits(&self, key: &WorkspaceKey) -> bool {
+        let Some(store) = self.workspace_views.as_ref() else {
             return true;
         };
-        store.views.entry(&key.0, &key.1);
-        let store = self.workspace_views.as_ref().expect("layout exists");
-        let view = store.views.get(&key.0, &key.1).expect("entry exists");
-        let placed = view.agent_tab_count();
+        let view = store.views.get(&key.0, &key.1);
+        let placed = view.map_or(0, |view| view.agent_tab_count());
         let arriving = store
             .agent_placements
             .iter()
-            .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_none())
+            .filter(|(id, (scope, _, _, _))| {
+                scope == key && view.is_none_or(|view| view.agent_tab_group(id).is_none())
+            })
             .count();
         let pending = self.pending_agent_admissions(key);
         placed + arriving + pending < Tab::LIMITS.items
@@ -1151,8 +1169,9 @@ impl Runtime {
     /// a local close is taking away (`PendingClose::leaving_tab`), so its chip
     /// leaves when the close is approved and each area shows what it will show
     /// once the engine confirms. The stored layout keeps the tab, so a close that
-    /// does not happen puts it back where it stood. Nothing is cloned while
-    /// no close is running.
+    /// does not happen puts it back where it stood. An automation run's tab is
+    /// left out too (`automation_run_tabs`). Nothing is cloned while no close
+    /// is running and no run's tab is in the layout.
     pub(super) fn shown_agent_layout<'a>(
         &self,
         key: &WorkspaceKey,
@@ -1161,11 +1180,13 @@ impl Runtime {
         if key.0 != self.node.as_str() {
             return Cow::Borrowed(layout);
         }
+        let runs = self.automation_run_tabs(key);
         let leaving = self
             .close_operations
             .values()
             .filter(|operation| operation.request.context.checkout_path == key.1)
             .filter_map(|operation| operation.leaving_tab())
+            .chain(runs.iter().map(String::as_str))
             .filter(|id| {
                 layout.tree.display(id).is_some() || layout.canvases.values().any(|tab| tab == id)
             })
@@ -1184,12 +1205,29 @@ impl Runtime {
         Cow::Owned(shown)
     }
 
+    /// The tabs of `key` that hold only automation runs' terminals: a run
+    /// lives in the automation screen, never in its folder's tab row (PRD
+    /// automations B12), also when that folder is one of the operator's
+    /// projects.
+    fn automation_run_tabs(&self, key: &WorkspaceKey) -> Vec<String> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == key.0)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == key.1)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter(|tab| tab.automation)
+            .filter_map(|tab| tab.id.clone())
+            .collect()
+    }
+
     pub(super) fn agent_layout_snapshot(
         &self,
         key: &WorkspaceKey,
         layout: &Layout,
     ) -> crate::model::AgentLayoutSnapshot {
         let layout = self.shown_agent_layout(key, layout);
+        let runs = self.automation_run_tabs(key);
+        let listed = |id: &String| !runs.contains(id);
         let view = self
             .workspace_views
             .as_ref()
@@ -1204,18 +1242,22 @@ impl Runtime {
                         .tree
                         .displays()
                         .map(|t| t.id.clone())
+                        .filter(listed)
                         .collect(),
                 })
-                .chain(
-                    view.agent_groups
-                        .items
-                        .iter()
-                        .map(|g| crate::model::AgentGroupSnapshot {
-                            id: Some(g.id.clone()),
-                            name: Some(g.name.clone()),
-                            tabs: g.layout.tree.displays().map(|t| t.id.clone()).collect(),
-                        }),
-                )
+                .chain(view.agent_groups.items.iter().map(|g| {
+                    crate::model::AgentGroupSnapshot {
+                        id: Some(g.id.clone()),
+                        name: Some(g.name.clone()),
+                        tabs: g
+                            .layout
+                            .tree
+                            .displays()
+                            .map(|t| t.id.clone())
+                            .filter(listed)
+                            .collect(),
+                    }
+                }))
                 .collect()
             })
             .unwrap_or_default();

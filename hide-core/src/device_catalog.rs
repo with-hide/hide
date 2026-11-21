@@ -683,6 +683,7 @@ pub(crate) fn apply_registrations(
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: registration.pinned,
+            unlisted: false,
             checkouts: vec![CheckoutSnapshot {
                 id: checkout_id(target, &registration.path),
                 next_tab_label: crate::model::next_tab_label(std::iter::empty()),

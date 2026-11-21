@@ -16,7 +16,8 @@ import { ArrowUpIcon, ShieldCheckIcon, XIcon } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { cardVersion, dismissUpdateCard, readyVersion, releaseNotesUrl, restartIntoUpdate, useUpdateStatus } from "../updates";
+import { cardVersion, dismissUpdateCard, readyVersion, restartIntoUpdate, useUpdateStatus } from "../updates";
+import { useReleaseNotes } from "../whatsNew";
 import { Button } from "./ui/button";
 import { useReturnFocus } from "./ui/layer";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -76,6 +77,7 @@ export function UpdateReadyCardBody({ version, required = false, onRestart, onLa
 export function UpdateReadyButton({ actions, place }: { actions: Actions; place: MenuPlace }) {
   const { t } = useInterfaceTranslation();
   const status = useUpdateStatus();
+  const releaseNotes = useReleaseNotes(actions.openLink.bind(actions));
   const ready = readyVersion(status);
   // The version whose card opened by itself and was closed here, until the host's echo of the close arrives.
   const [closed, setClosed] = useState<string | null>(null);
@@ -121,7 +123,7 @@ export function UpdateReadyButton({ actions, place }: { actions: Actions; place:
         onEscapeKeyDown={(event) => (auto ? event.preventDefault() : undefined)}
         onCloseAutoFocus={lateClose}
       >
-        <UpdateReadyCardBody version={ready} required={required} onRestart={restartIntoUpdate} onLater={fold} onReleaseNotes={() => actions.openLink(releaseNotesUrl(ready), true)} />
+        <UpdateReadyCardBody version={ready} required={required} onRestart={restartIntoUpdate} onLater={fold} onReleaseNotes={() => releaseNotes(ready)} />
       </PopoverContent>
     </Popover>
   );

@@ -47,13 +47,10 @@ fn caller_fixture() -> (Runtime, tempfile::TempDir) {
 }
 
 fn seed_browser_areas(runtime: &mut Runtime, context: &Context) -> (String, String, String) {
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(&context.device_id, &context.checkout_path)
-        .layout;
+    let layout = runtime.front_desk_mut(&(
+        context.device_id.to_string(),
+        context.checkout_path.to_string(),
+    ));
     let first = layout.new_browser_display("https://example.test/page", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -109,13 +106,10 @@ fn caller_query_reads_only_its_live_checkout_and_untouched_views_are_empty() {
         Some(Vec::new())
     );
 
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(crate::node::TEST_NODE, "/checkouts/b")
-        .layout;
+    let layout = runtime.front_desk_mut(&(
+        (crate::node::TEST_NODE).to_string(),
+        ("/checkouts/b").to_string(),
+    ));
     let display = layout.new_display(
         "/checkouts/b/보고서.md",
         crate::view_layout::DisplayKind::File,
@@ -253,13 +247,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
         .unwrap()
         .context;
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     for path in ["first.md", "second.md"] {
         let display = layout.new_display(
             &format!("/checkouts/b/{path}"),
@@ -275,7 +263,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
         runtime.snapshot.ui_state.selected_pane_id.clone(),
     );
     let view_id = runtime
-        .view_layout_of(&(key.0.into(), key.1.into()))
+        .front_tray_layout(&(key.0.into(), key.1.into()))
         .unwrap()
         .areas()[0]
         .displays[0]
@@ -311,7 +299,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
     assert_eq!(retry, first);
     assert_eq!(
         runtime
-            .view_layout_of(&(key.0.into(), key.1.into()))
+            .front_tray_layout(&(key.0.into(), key.1.into()))
             .unwrap()
             .area_count(),
         2
@@ -390,13 +378,7 @@ fn close_of_an_already_closed_view_returns_a_no_change_result() {
         .unwrap()
         .context;
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     let display = layout.new_browser_display("https://example.org", 1);
     let view_id = display.id.clone();
     layout.insert("a1", display, 1).unwrap();
@@ -432,7 +414,7 @@ fn close_of_an_already_closed_view_returns_a_no_change_result() {
     );
     assert!(
         runtime
-            .view_layout_of(&(key.0.into(), key.1.into()))
+            .front_tray_layout(&(key.0.into(), key.1.into()))
             .unwrap()
             .displays()
             .next()
@@ -453,13 +435,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     let (mut runtime, _dir) = caller_fixture();
     runtime.sync_agent_lineage_layouts();
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     let first = layout.new_browser_display("https://example.org", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -477,7 +453,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     let called = |runtime: &Runtime| runtime.workspace_views.as_ref().unwrap().lane_calls;
     let in_front = |runtime: &Runtime| {
         runtime
-            .view_layout_of(&(key.0.to_owned(), key.1.to_owned()))
+            .front_tray_layout(&(key.0.to_owned(), key.1.to_owned()))
             .and_then(|layout| layout.active_area().active.clone())
     };
     operator_in(&mut runtime, "workspace-a", "checkout-a", "pane-a");
@@ -498,8 +474,14 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     );
     assert_eq!(
         in_front(&runtime).as_deref(),
-        Some(first_id.as_str()),
-        "a Workspace not on screen shows what its agent selected, which it can then drive"
+        Some(second_id.as_str()),
+        "a Workspace not on screen has no watched pane: its agent's select moves nothing"
+    );
+    assert!(
+        runtime
+            .view_display(&(key.0.to_owned(), key.1.to_owned()), &first_id)
+            .is_some_and(|display| display.unseen.is_some()),
+        "and marks the View To look at (PRD lane-desk-pair-view D-36)"
     );
     assert!(
         !views_of(&runtime, key),
@@ -511,22 +493,41 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
         "a select from another pane calls no lane"
     );
 
+    // PRD lane-desk-pair-view B2, D-36: the pane the operator watches
+    // selects on its tab's desk; a closed lane stays closed, the View marked
+    // To look at, and an open lane is called with the View in front.
     operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     runtime
         .workspace_control_action(
             crate::node::TEST_NODE,
             "pane-b",
             &expected,
-            &action_id("select-operator"),
-            select(&second_id),
+            &action_id("select-operator-closed"),
+            select(&first_id),
             Ok(None),
         )
         .unwrap();
+    assert!(!views_of(&runtime, key), "a closed lane stays closed");
+    assert_eq!(called(&runtime), 0);
     assert_eq!(in_front(&runtime).as_deref(), Some(second_id.as_str()));
-    assert!(
-        views_of(&runtime, key),
-        "a select from the operator's pane opens the files lane"
-    );
+    runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(key.0, key.1)
+        .open = true;
+    runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &action_id("select-operator"),
+            select(&first_id),
+            Ok(None),
+        )
+        .unwrap();
+    assert_eq!(in_front(&runtime).as_deref(), Some(first_id.as_str()));
     // The shell shows a called lane over the terminals; a call from the CLI
     // reaches it only as this count rising (PRD right-lane B1, B16).
     assert_eq!(called(&runtime), 1, "the operator's pane calls the lane");
@@ -553,7 +554,7 @@ fn views_of(runtime: &Runtime, key: (&str, &str)) -> bool {
         .workspaces
         .iter()
         .find(|view| view.is(key.0, key.1))
-        .map(|view| view.shows_documents())
+        .map(|view| view.open && view.trays.iter().any(|tray| tray.shown))
         .unwrap()
 }
 
@@ -613,9 +614,38 @@ fn file_open_reads_outside_the_runtime_then_places_once_in_the_callers_workspace
     assert_eq!(retried, first);
 }
 
+/// #2624: a file of a checkout whose folder is gone from where Hide opened
+/// it, as after a rename, is refused as a folder not found, not as a device
+/// to reconnect.
+#[test]
+fn a_file_open_in_a_checkout_whose_folder_is_gone_says_the_folder_was_not_found() {
+    let (mut runtime, _dir) = caller_fixture();
+    runtime.file_roots = Some(crate::files::FileRoots::from_identities(Vec::new()));
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
+        .unwrap()
+        .context;
+    let action = Action::OpenFile {
+        path: "/checkouts/b/README.md".to_owned(),
+    };
+    let refused = runtime
+        .workspace_control_prepare_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &action_id("gone"),
+            &action,
+        )
+        .err()
+        .expect("a checkout Hide did not open is refused");
+    assert_eq!(refused.reason, "host_unavailable");
+    assert!(refused.next_action.contains("folder could not be found"));
+}
+
 #[test]
 fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     let (mut runtime, _dir) = caller_fixture();
+    operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
         .unwrap()
@@ -643,7 +673,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         expected.checkout_path.clone(),
     );
     let load = runtime
-        .view_layout_of(&key)
+        .front_tray_layout(&key)
         .unwrap()
         .display(&first.view_id)
         .unwrap()
@@ -663,7 +693,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     );
     assert_eq!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .display(&first.view_id)
             .unwrap()
@@ -716,7 +746,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         )
         .unwrap();
     let newer = runtime
-        .view_layout_of(&key)
+        .front_tray_layout(&key)
         .unwrap()
         .display(&first.view_id)
         .unwrap()
@@ -743,7 +773,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
     let (existing, other_view, other_area) = seed_browser_areas(&mut runtime, &expected);
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
     assert_eq!(
-        runtime.view_layout_of(&key).unwrap().active_area().id,
+        runtime.front_tray_layout(&key).unwrap().active_area().id,
         other_area
     );
     let before =
@@ -766,7 +796,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
         .unwrap();
     assert_ne!(first.view_id, existing);
     assert_eq!(first.area_id.as_deref(), Some("a1"));
-    let layout = runtime.view_layout_of(&key).unwrap();
+    let layout = runtime.front_tray_layout(&key).unwrap();
     assert_eq!(layout.area("a1").unwrap().displays.len(), 2);
     assert_eq!(
         layout.area(&other_area).unwrap().active.as_deref(),
@@ -816,7 +846,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
     assert_eq!(second.area_id.as_deref(), Some("a1"));
     assert_eq!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .area("a1")
             .unwrap()
@@ -865,7 +895,7 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
     assert_eq!(reloaded.view_id, first.view_id);
     assert_eq!(reloaded.area_id.as_deref(), Some("a1"));
     assert!(reloaded.load.unwrap() > first.load.unwrap());
-    let layout = runtime.view_layout_of(&key).unwrap();
+    let layout = runtime.front_tray_layout(&key).unwrap();
     assert_eq!(layout.displays().count(), 3);
     assert_eq!(layout.display(&other_view).unwrap().load, 2);
     assert_eq!(
@@ -877,6 +907,7 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
 #[test]
 fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
     let (mut runtime, _dir) = caller_fixture();
+    operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
         .unwrap()
@@ -914,7 +945,10 @@ fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
         .unwrap();
     assert_eq!(reused.view_id, existing);
     assert_eq!(reused.area_id.as_deref(), Some("a1"));
-    assert_eq!(runtime.view_layout_of(&key).unwrap().displays().count(), 3);
+    assert_eq!(
+        runtime.front_tray_layout(&key).unwrap().displays().count(),
+        3
+    );
 }
 
 #[test]
@@ -1005,11 +1039,11 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
     let material = source.read().unwrap();
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
     runtime
-        .change_view_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
+        .change_front_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
         .unwrap();
     assert!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .area(&other_area)
             .is_none()
@@ -1093,7 +1127,7 @@ fn scoped_browser_close_and_select_refuse_a_page_moved_after_prepare() {
         let key = (expected.device_id.clone(), expected.checkout_path.clone());
         assert_eq!(
             runtime
-                .view_layout_of(&key)
+                .front_tray_layout(&key)
                 .unwrap()
                 .area_of(&view_id)
                 .unwrap()
@@ -1127,13 +1161,10 @@ fn scoped_browser_close_and_select_refuse_a_document_in_the_named_area() {
             .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
             .unwrap()
             .context;
-        let layout = &mut runtime
-            .workspace_views
-            .as_mut()
-            .unwrap()
-            .views
-            .entry(&expected.device_id, &expected.checkout_path)
-            .layout;
+        let layout = runtime.front_desk_mut(&(
+            expected.device_id.to_string(),
+            expected.checkout_path.to_string(),
+        ));
         let file = layout.new_display(
             "/checkouts/b/index.html",
             crate::view_layout::DisplayKind::File,
@@ -1266,7 +1297,7 @@ fn browser_scope_is_part_of_retry_identity_and_closed_target_replays_its_receipt
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
     assert!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .display(&view_id)
             .is_none()
@@ -1849,6 +1880,7 @@ fn hide_memory_reads_a_person_only_in_a_pane_no_agent_runs_in() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
     assert_eq!(

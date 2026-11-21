@@ -41,6 +41,9 @@ pub async fn run(env: Env) -> Result<(), String> {
             json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
         );
     }
+    if let Some(record) = hide_node::diagnostics::raise_open_files() {
+        hide_core::diagnostic!(record);
+    }
     // Listened for before anything else waits, so a stop at any moment of
     // the process's life is kept.
     let stop = crate::ending::Ending::on_stop_signal();

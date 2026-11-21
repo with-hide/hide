@@ -716,7 +716,7 @@ impl Runtime {
     }
 
     pub(in crate::runtime) fn request_dormant_wake(&mut self, id: &SleepId) -> bool {
-        match self.begin_dormant_wake(id) {
+        match self.begin_dormant_wake(id, "request") {
             Ok(started) => started,
             Err(refusal) if refusal.kept => {
                 self.reject_dormant_action(id, refusal.code, refusal.message);
@@ -731,10 +731,13 @@ impl Runtime {
 
     /// Saves the intent to wake a sleeping session in its own tab, for the
     /// Factory worker it belongs to when `worker` names one. `Ok(false)` when
-    /// a transition of it is already running.
+    /// a transition of it is already running. A session another pane already
+    /// runs is not woken: its record ends and the operator is taken there
+    /// (`sleep_live_elsewhere`).
     pub(in crate::runtime) fn begin_dormant_wake(
         &mut self,
         id: &SleepId,
+        trigger: &str,
     ) -> Result<bool, WakeRefusal> {
         let Some(record) = self.snapshot.ui_state.agent_sleep.dormant.get(id).cloned() else {
             return Err(WakeRefusal {
@@ -757,6 +760,26 @@ impl Runtime {
                 "agent_sleep.wake_refused",
                 "The session's close has not been confirmed",
             ));
+        }
+        if let Some(live) = self.live_conversation_pane(
+            &record.node_id,
+            &record.kind,
+            &record.native_session_id,
+            &record.old_pane_id,
+        ) {
+            self.snapshot.ui_state.agent_sleep.dormant.remove(id);
+            self.release_dormant_registration(&record);
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_sleep",
+                "kind": "agent_sleep.live_elsewhere",
+                "sleep_id": id.as_str(),
+                "live_pane_id": live,
+                "trigger": trigger,
+            }));
+            self.refresh_dormant_rows();
+            self.show_live_conversation(live, trigger);
+            self.persist_ui_state();
+            return Ok(true);
         }
         if let Some(reason) = self.dormant_wake_blocker(&record) {
             return Err(refuse("agent_sleep.wake_unavailable", reason));

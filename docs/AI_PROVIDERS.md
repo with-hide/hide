@@ -556,7 +556,7 @@ Claude reset times use the printed year and IANA zone, or the next wall-clock ma
 `hide-core/src/zoneinfo.rs` uses `jiff`, with system zoneinfo on macOS and Linux and its bundled database on Windows.
 The observed 2.1.274 `/usage` output and the endpoint's windows from 2026-11-06 are fixed as fixtures under `hide-core/tests/fixtures/claude-usage/`, and the endpoint's whole answer under `hide-host/tests/fixtures/`.
 Only English output is parsed; an unrecognized response is unavailable.
-A `/cost` response with no `Current` line means signed out; transport failures and timeouts retain a recent success for up to fifteen minutes.
+Only the summary a CLI with no subscription sign-in prints (its `Total duration (API):` line, fixed as `cost-2.1.274.json` and `cost-2.1.329.json`) means signed out; any other text with no `Current` line, an empty one included, is a changed format, and the core logs its length and line count, never its words (`usage.claude_usage_text_unrecognized`); transport failures and timeouts retain a recent success for up to fifteen minutes.
 The snapshot carries cause codes, not screen wording: the web gives a sign-in action only for an authentication failure and keeps network diagnostics out of the screen.
 
 For Antigravity, the core's own node runs `agy --log-file <log> -p /usage --output-format json` through `AntigravityCliBackend::usage_text`, with the same environment as a request and no model turn (`hide-host/src/usage.rs`).

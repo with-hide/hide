@@ -708,12 +708,13 @@ pub fn adopt(
     handover: &Handover<'_>,
     moved: &BTreeSet<String>,
 ) -> Result<usize, String> {
-    let ledger_path = hide_kit::layout::delivery_ledger(state_dir);
-    if !ledger_path.exists() {
+    let ledger_path = hide_kit::layout::delivery_store(state_dir);
+    if !ledger_path.exists() && !crate::delivery::store::legacy_path(&ledger_path).exists() {
         return Ok(0);
     }
-    let mut ledger = crate::delivery::ledger::load(&ledger_path)
+    let (mut store, held, _) = crate::delivery::store::LedgerStore::open(&ledger_path)
         .map_err(|reason| format!("the delivery ledger could not be read: {reason}"))?;
+    let mut ledger = held.clone();
     let mut terminals = BTreeMap::new();
     let mut given = 0;
     for record in &mut ledger.agents {
@@ -756,7 +757,8 @@ pub fn adopt(
         crate::node_migration::write(&views_path, &bytes)
             .map_err(|error| format!("{} could not be replaced: {error}", views_path.display()))?;
     }
-    crate::delivery::ledger::save(&ledger_path, &ledger)
+    store
+        .write(&held, &ledger)
         .map_err(|error| format!("the delivery ledger could not be written: {error}"))?;
     Ok(given)
 }
@@ -1016,9 +1018,7 @@ mod tests {
                 "ended": false,
             })
         };
-        let ledger_path = hide_kit::layout::delivery_ledger(state);
-        // The core reads only a private ledger, so it is written as the core
-        // writes it.
+        let ledger_path = hide_kit::layout::delivery_store(state);
         let ledger = crate::delivery::ledger::from_bytes(
             serde_json::json!({
                 "version": 1, "next_id": 4, "letters": [], "watches": [],
@@ -1032,7 +1032,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        crate::delivery::ledger::save(&ledger_path, &ledger).unwrap();
+        crate::delivery::store::save(&ledger_path, &ledger).unwrap();
         let views_path = state.join(crate::node_migration::WORKSPACE_VIEWS);
         std::fs::write(
             &views_path,
@@ -1056,7 +1056,7 @@ mod tests {
             to_scope: &scope,
         };
         assert_eq!(adopt(state, &handover, &moved).unwrap(), 1);
-        let ledger = crate::delivery::ledger::load(&ledger_path).unwrap();
+        let ledger = crate::delivery::store::load(&ledger_path).unwrap();
         let given = |id: &str| {
             let record = ledger.agents.iter().find(|record| record.id == id).unwrap();
             (

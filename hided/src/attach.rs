@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,7 @@ use hide_platform::ipc::LocalStream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::accepting::{CloseOnDrop, ListenerHealth, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::relay::RelayRequests;
 use crate::state_file::new_token;
@@ -59,9 +60,6 @@ const GRANT_BIND_WAIT: Duration = Duration::from_secs(10);
 const STALE_PROBE: Duration = Duration::from_secs(3);
 /// How long a grant handed to a node may wait for its link to be taken.
 const UNBOUND_GRANT_LIFETIME: Duration = Duration::from_secs(60);
-/// The wait after an accept that failed, doubling to [`ACCEPT_RETRY_MAX`].
-const ACCEPT_RETRY_FIRST: Duration = Duration::from_millis(100);
-const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// Why the attach role reached no core on its machine; the node reports it
 /// as the reason it waits.
@@ -359,28 +357,39 @@ impl Drop for AttachingNode<'_> {
     }
 }
 
-/// Takes nodes' links on `listener` until `shutdown`.
+/// Takes nodes' links on `listener` until `shutdown`, saying in `health`
+/// what its accept thread does.
 pub async fn serve(
     listener: BootstrapListener,
     service: Arc<AttachService>,
+    health: Arc<ListenerHealth>,
     shutdown: crate::ending::Ending,
 ) {
-    // Closed however this future ends, a drop included, so the accept
-    // thread never outlives it.
-    let closing = CloseOnDrop {
-        closer: listener.closer(),
-        closed: Arc::new(AtomicBool::new(false)),
-    };
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_ATTACHING);
     let accepting = {
-        let closed = Arc::clone(&closing.closed);
+        let closed = closing.closed();
+        let health = Arc::clone(&health);
         std::thread::Builder::new()
             .name("node-attach-accept".to_owned())
-            .spawn(move || accept_nodes(&listener, &accepted, &closed))
+            .spawn(move || {
+                accept_until_closed(
+                    || listener.accept(),
+                    &accepted,
+                    &closed,
+                    &health,
+                    ("node_link", "attach.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
+                );
+            })
     };
-    if let Err(error) = accepting {
-        attach_stopped(&error.to_string());
-        return;
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            attach_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(tokio::sync::Semaphore::new(MAX_ATTACHING));
     loop {
@@ -389,6 +398,9 @@ pub async fn serve(
             () = shutdown.ended() => break,
         };
         let Some(stream) = arrival else {
+            // The accept thread ended though the listener is open.
+            health.stopped();
+            attach_stopped("the accept thread ended");
             break;
         };
         // The folder admits only this account already; a peer the system
@@ -414,54 +426,6 @@ pub async fn serve(
             let _permit = permit;
             take_link(stream, &service);
         });
-    }
-}
-
-/// Accepts nodes until the listener is closed. An accept that fails (out of
-/// descriptors, a peer gone before it was taken) is logged and tried again
-/// after a bounded wait, so one failure never ends the attach service while
-/// its record still tells nodes a core runs here.
-#[allow(clippy::disallowed_methods)] // a production wait between accepts, not test code
-fn accept_nodes(
-    listener: &BootstrapListener,
-    accepted: &tokio::sync::mpsc::Sender<LocalStream>,
-    closed: &AtomicBool,
-) {
-    let mut wait = ACCEPT_RETRY_FIRST;
-    loop {
-        match listener.accept() {
-            Ok(stream) => {
-                wait = ACCEPT_RETRY_FIRST;
-                if accepted.blocking_send(stream).is_err() {
-                    return;
-                }
-            }
-            Err(_) if closed.load(Ordering::SeqCst) => return,
-            Err(error) => {
-                hide_core::diagnostic!(json!({
-                    "component": "node_link",
-                    "kind": "attach.accept_failed",
-                    "message": error.to_string(),
-                    "retry_ms": wait.as_millis() as u64,
-                }));
-                std::thread::sleep(wait);
-                wait = (wait * 2).min(ACCEPT_RETRY_MAX);
-            }
-        }
-    }
-}
-
-struct CloseOnDrop {
-    closer: hide_platform::ipc::ListenerCloser,
-    /// Set before the close, so the accept thread tells its own stop from an
-    /// accept that failed.
-    closed: Arc<AtomicBool>,
-}
-
-impl Drop for CloseOnDrop {
-    fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.closer.close();
     }
 }
 

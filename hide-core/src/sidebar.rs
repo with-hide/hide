@@ -1262,6 +1262,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: vec![checkout],
             pinned: false,
+            unlisted: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -1355,6 +1356,7 @@ mod tests {
                 label: None,
                 empty: false,
                 delegated: false,
+                automation: false,
             }],
             ..Default::default()
         };
@@ -1389,6 +1391,7 @@ mod tests {
             session_workspace_ids: vec![],
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),

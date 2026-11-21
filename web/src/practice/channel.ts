@@ -32,7 +32,7 @@ export type ShellAnswer = {
 };
 
 /** The window's hello and the steps it reaches; the shell's ask to play a chapter in a window that is already open. */
-export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "play"; chapter: string };
+export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "play"; chapter: string } | { kind: "show"; chapter: string };
 
 /** The chapter a newcomer starts on: handing over a mission (`chapters/mission.ts`). */
 export const FIRST_CHAPTER = "mission";
@@ -85,24 +85,25 @@ export function usePracticeChannel(actions: Actions): void {
 }
 
 /** The practice address on this shell's origin, in the operator's language, opening on `chapter` when one is named. */
-export function practiceAddress(language: string, chapter?: string): string {
-  const opening = chapter === undefined ? "" : `&chapter=${encodeURIComponent(chapter)}`;
+export function practiceAddress(language: string, chapter?: string, show = false): string {
+  const opening = chapter === undefined ? "" : `&chapter=${encodeURIComponent(chapter)}${show ? "&show=1" : ""}`;
   return `/?practice=1&lang=${encodeURIComponent(language)}${opening}`;
 }
 
 /**
  * Opens the practice window, or brings the open one forward: the desktop
  * app's own window, or a tab of its own in a browser (one per shell, reused).
- * With `chapter` the window plays that chapter: a new one from its address,
- * one already open because it is told to here.
+ * With `chapter` the window plays that chapter, or with `show` opens its card
+ * on the list (the window after an update's 체험하기): a new window from its
+ * address, one already open because it is told to here.
  */
-export function openPractice(chapter?: string): void {
+export function openPractice(chapter?: string, show = false): void {
   const bridge = hostBridge();
   if (chapter !== undefined) {
     const channel = new BroadcastChannel(PRACTICE_CHANNEL);
-    channel.postMessage({ kind: "play", chapter } satisfies PracticeMessage);
+    channel.postMessage((show ? { kind: "show", chapter } : { kind: "play", chapter }) satisfies PracticeMessage);
     channel.close();
   }
-  if (bridge) bridge.openPractice(clientI18n.language, chapter);
-  else window.open(practiceAddress(clientI18n.language, chapter), PRACTICE_CHANNEL);
+  if (bridge) bridge.openPractice(clientI18n.language, chapter, show);
+  else window.open(practiceAddress(clientI18n.language, chapter, show), PRACTICE_CHANNEL);
 }

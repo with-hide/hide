@@ -30,6 +30,14 @@
 //!
 //! Two retirements of one account's folder run one after the other: each
 //! holds an exclusive lock on the account's home folder.
+//!
+//! The automations keep their default folders in `~/hide/automations` (PRD
+//! automations D-08), which is Hide's and never the operator's: a folder whose
+//! only other entry is the marker loses the marker and stays where it is,
+//! answered as not kept so the core drops the old registration and no `hide`
+//! project appears (D-09, B31). A marker-less `~/hide` that only the
+//! automations keep is answered the same, without anything in it touched, so a
+//! stop after the marker went converges.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,7 +53,9 @@ use crate::error::{ErrorCode, HostError, HostResult};
 pub use hide_node_link::home::HomeRetired;
 
 /// The old Home folder's name inside the account's home directory.
-pub const HOME_DIR_NAME: &str = "hide";
+pub const HOME_DIR_NAME: &str = hide_kit::layout::OLD_HOME_FOLDER;
+/// The automations' folder inside it, Hide's own (PRD automations D-09).
+const AUTOMATIONS_DIR: &str = hide_kit::layout::AUTOMATIONS_FOLDER;
 /// Present in a folder Hide made: which links are Hide's.
 pub const MARKER_FILE: &str = ".hide-home.json";
 const AGENTS_FILE: &str = "AGENTS.md";
@@ -137,7 +147,13 @@ pub fn retire(user_home: &Path, keep_empty: bool, settle: bool) -> HostResult<Ho
     // failure before it is found says nothing about the folder, and is the
     // call's.
     if !marker_present(&home_path)? {
-        retired.kept = true;
+        // A folder without the marker is the operator's unless it holds the
+        // automations' folder alone; one that cannot be read is kept, as it
+        // always was.
+        let only_automations = !keep_empty
+            && what_is_left(&home_path).is_ok_and(|left| left == Left::Automations)
+            && recorded_session(user_home, &home_path).is_ok_and(|recorded| !recorded);
+        retired.kept = !only_automations;
         return Ok(retired);
     }
     retired.marked = true;
@@ -197,9 +213,14 @@ fn clean(
     // in one step, and the rename is the record that the retirement is past
     // the point of turning back, so a stop after it is finished by the next
     // run (`finish_leftovers`) and the folder reads as gone.
-    let removable = !keep_empty
-        && only_the_marker_is_left(home_path)?
-        && !recorded_session(user_home, home_path)?;
+    let left = what_is_left(home_path)?;
+    let removable = !keep_empty && left != Left::More && !recorded_session(user_home, home_path)?;
+    if removable && left == Left::Automations {
+        // The automations' folder stays where it is: only the marker goes,
+        // and the folder holds nothing of the operator's (D-09).
+        remove_file(home_path, MARKER_FILE, retired)?;
+        return Ok(());
+    }
     if !removable {
         // A folder that stays keeps its marker until the caller has saved
         // what the answer means (`settle`), so a stop in between is asked
@@ -579,18 +600,36 @@ fn is_hide_claude_file(path: &Path) -> HostResult<bool> {
     }
 }
 
-/// Whether the marker is the only entry of the folder; a folder that cannot be
-/// listed is an error, not an answer.
-fn only_the_marker_is_left(folder: &Path) -> HostResult<bool> {
-    let entries = std::fs::read_dir(folder)
-        .map_err(|error| io_error(&error, "~/hide could not be listed"))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| io_error(&error, "~/hide could not be listed"))?;
-        if entry.file_name() != MARKER_FILE {
-            return Ok(false);
+/// What the folder holds besides the marker, once Hide's entries are gone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Left {
+    /// Nothing.
+    Nothing,
+    /// The automations' folder, and nothing of the operator's.
+    Automations,
+    /// Something of the operator's.
+    More,
+}
+
+/// What the folder holds besides the marker; a folder that cannot be listed
+/// is an error, not an answer. `automations` counts as Hide's only while it is
+/// a folder, not a link or a file the operator put there.
+fn what_is_left(folder: &Path) -> HostResult<Left> {
+    let unlisted = |error: std::io::Error| io_error(&error, "~/hide could not be listed");
+    let mut left = Left::Nothing;
+    for entry in std::fs::read_dir(folder).map_err(unlisted)? {
+        let entry = entry.map_err(unlisted)?;
+        let name = entry.file_name();
+        if name == MARKER_FILE {
+            continue;
         }
+        if name == AUTOMATIONS_DIR && entry.file_type().map_err(unlisted)?.is_dir() {
+            left = Left::Automations;
+            continue;
+        }
+        return Ok(Left::More);
     }
-    Ok(true)
+    Ok(left)
 }
 
 /// Whether an agent recorded a session whose folder is `home_path`. Asked last,
@@ -600,6 +639,15 @@ fn only_the_marker_is_left(folder: &Path) -> HostResult<bool> {
 fn recorded_session(user_home: &Path, home_path: &Path) -> HostResult<bool> {
     let catalog = hide_session::SessionCatalog::new(&hide_session::Accounts::new(user_home), "");
     let found = catalog.worked_folders(0, Instant::now() + SESSION_SEARCH);
+    // A store read only to its newest sessions cannot say an older one was
+    // not there, so the folder is kept as if one were, quietly.
+    if found
+        .refusals
+        .iter()
+        .any(|refusal| refusal.reason == hide_session::SESSIONS_CUT)
+    {
+        return Ok(true);
+    }
     if !found.refusals.is_empty() {
         return Err(HostError::new(
             ErrorCode::Io,
@@ -744,6 +792,74 @@ mod tests {
                 retired.removed.iter().any(|name| name == expected),
                 "{retired:?}"
             );
+        }
+    }
+
+    /// PRD automations B31: a folder the automations alone keep loses Hide's
+    /// entries and its marker, stays where it is with the automations'
+    /// results, and is not kept, so the core drops the registration; a rerun
+    /// after the marker went answers the same and touches nothing.
+    #[test]
+    fn a_folder_only_the_automations_keep_loses_its_marker_and_stays_unregistered() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = old_home(dir.path(), &["alpha"]);
+        let result = home.join(AUTOMATIONS_DIR).join("daily-abc123");
+        std::fs::create_dir_all(&result).unwrap();
+        std::fs::write(result.join("report.md"), "result").unwrap();
+
+        let retired = retire(dir.path(), false, false).unwrap();
+        assert!(
+            retired.marked && !retired.kept && retired.failure.is_none(),
+            "{retired:?}"
+        );
+        assert!(
+            retired.removed.iter().any(|name| name == MARKER_FILE),
+            "{retired:?}"
+        );
+        assert_eq!(names(&home), [AUTOMATIONS_DIR]);
+        assert_eq!(
+            std::fs::read_to_string(result.join("report.md")).unwrap(),
+            "result"
+        );
+
+        let again = retire(dir.path(), false, false).unwrap();
+        assert!(
+            !again.marked && !again.kept && again.removed.is_empty(),
+            "{again:?}"
+        );
+        assert_eq!(names(&home), [AUTOMATIONS_DIR]);
+    }
+
+    /// D-09 holds only for the automations' own folder: the operator's file
+    /// beside it, a pane open in the folder, or an `automations` that is no
+    /// folder keeps the project as before.
+    #[test]
+    fn the_automations_folder_does_not_hide_what_keeps_the_project() {
+        type Case = (&'static str, fn(&Path), bool);
+        let cases: [Case; 3] = [
+            (
+                "a file beside it",
+                |home| std::fs::write(home.join("notes.md"), "mine").unwrap(),
+                false,
+            ),
+            ("a pane open", |_| {}, true),
+            (
+                "a file named automations",
+                |home| {
+                    std::fs::remove_dir_all(home.join(AUTOMATIONS_DIR)).unwrap();
+                    std::fs::write(home.join(AUTOMATIONS_DIR), "mine").unwrap();
+                },
+                false,
+            ),
+        ];
+        for (what, arrange, keep_empty) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let home = old_home(dir.path(), &["alpha"]);
+            std::fs::create_dir(home.join(AUTOMATIONS_DIR)).unwrap();
+            arrange(&home);
+            let retired = retire(dir.path(), keep_empty, false).unwrap();
+            assert!(retired.marked && retired.kept, "{what}: {retired:?}");
+            assert!(home.join(MARKER_FILE).is_file(), "{what}");
         }
     }
 
@@ -1042,6 +1158,27 @@ mod tests {
         let retired = retire(other.path(), false, true).unwrap();
         assert!(retired.kept && !retired.marked);
         assert!(empty.is_dir());
+    }
+
+    /// A `~/hide` without the marker that cannot be listed is kept, as it
+    /// was before the automations' folder counted: an answer, not a failure.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_without_the_marker_that_cannot_be_listed_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join(HOME_DIR_NAME);
+        std::fs::create_dir_all(home.join(AUTOMATIONS_DIR)).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let binds = std::fs::read_dir(&home).is_err();
+        let result = retire(dir.path(), false, true);
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !binds {
+            return; // the mode does not bind this user: nothing to prove
+        }
+        let retired = result.unwrap();
+        assert!(retired.kept && !retired.marked, "{retired:?}");
+        assert!(home.join(AUTOMATIONS_DIR).is_dir());
     }
 
     /// B11: a folder that cannot be set aside is a failure reported with the

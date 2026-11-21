@@ -83,6 +83,8 @@
   --color-warning: var(--warning);
   --color-success: var(--success);
   --color-agent-working: var(--agent-working);
+  --color-pair-view: var(--pair-view);
+  --color-pair-view-band: var(--pair-view-band);
   --color-status-foreground: var(--status-foreground);
   --color-status-seen: var(--status-seen);
   --color-swatch-hide: var(--swatch-hide);
@@ -258,6 +260,11 @@
   --size-settings-field: 28px;
   --size-settings-control-w: 200px;
   --size-agent-permission-w: 144px;
+  --size-store-column: 44px;
+  --size-store-shared-column: 104px;
+  --size-store-switch-column: 56px;
+  --size-store-label: 72px;
+  --size-store-detail-inset: 56px;
   --size-checkout-row: 32px;
   --size-checkout-row-detailed: 48px;
   --size-project-row: 32px;
@@ -281,6 +288,7 @@
   --size-worktree-dialog: 440px;
   --size-tab-preferred: 180px;
   --size-tab-title-min: 104px;
+  --size-tab-selected-max: 240px;
   --size-tab-icon-identity: 40px;
   --size-tab-overflow-control: 28px;
   --size-tab-status-dot: 5px;
@@ -340,6 +348,7 @@
   --size-mission-wide: 900px;
   --size-mission-panel-words: 480px;
   --size-mission-list: 288px;
+  --size-automation-card: 280px;
   --size-missions-split: 760px;
   --size-mission-table-project: 144px;
   --size-mission-table-steps: 168px;
@@ -352,6 +361,7 @@
   --size-mission-popover: 320px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
+  --size-chip-edge-bar: 2px;
   --size-flow-title: 196px;
   --size-flow-bar: 8px;
   --size-pr-number: 38px;
@@ -564,6 +574,8 @@
   --warning: var(--orange-57);
   --success: var(--green-53);
   --agent-working: var(--blue-55);
+  --pair-view: var(--blue-55);
+  --pair-view-band: #eaf0fc;
   --status-foreground: var(--gray-100);
   --status-seen: var(--gray-46);
   --swatch-hide: #b7c9cc;
@@ -682,6 +694,8 @@
   --warning: var(--amber-83);
   --success: var(--green-83);
   --agent-working: var(--blue-72);
+  --pair-view: var(--blue-72);
+  --pair-view-band: #1e2738;
   --status-foreground: var(--gray-17);
   --status-seen: var(--gray-70);
   --swatch-hide: #b7c9cc;
@@ -773,6 +787,7 @@
   --border: var(--slate-91-5);
   --input: var(--slate-89);
   --sidebar: var(--slate-97);
+  --pair-view-band: #e3ebfb;
   --pr-closed: var(--slate-52);
   --lineage-rail: var(--slate-78);
   --terminal-black: #1f2429;
@@ -801,6 +816,7 @@
   --border: var(--slate-34);
   --input: var(--slate-38);
   --sidebar: var(--slate-23);
+  --pair-view-band: #212d3f;
   --pr-closed: var(--slate-68);
   --lineage-rail: var(--slate-48);
   --terminal-black: #2b3035;

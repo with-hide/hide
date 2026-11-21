@@ -26,14 +26,14 @@ use super::workspace_view::WorkspaceKey;
 use super::*;
 use crate::delivery::ledger::{Ledger, State as LetterState};
 use crate::model::{
-    OpenedViewSnapshot, ViewCommentSnapshot, ViewFeedbackGroupSnapshot, ViewFeedbackSendReason,
-    ViewFeedbackSendSnapshot, ViewFeedbackSendState, ViewFeedbackSnapshot, ViewLayoutSnapshot,
-    ViewNodeSnapshot, ViewOpenerSnapshot,
+    OpenedViewSnapshot, ViewCommentSnapshot, ViewDisplaySnapshot, ViewFeedbackGroupSnapshot,
+    ViewFeedbackSendReason, ViewFeedbackSendSnapshot, ViewFeedbackSendState, ViewFeedbackSnapshot,
+    ViewOpenerSnapshot,
 };
 use crate::node_access::{LinkError, NodeLink, call_as};
 use crate::view_feedback::{
     Anchor, COMMENTS_PER_CHECKOUT, COMMENTS_PER_VIEW, Comment, CommentState, Feedback, LetterItem,
-    Opener, Shot, Target, WAITING_SENDS, WaitingSend,
+    OpenedBy, Opener, Shot, Target, WAITING_SENDS, WaitingSend,
 };
 use crate::view_layout::DisplayKind;
 
@@ -82,9 +82,10 @@ struct PendingOpener {
     key: WorkspaceKey,
     path: String,
     kind: DisplayKind,
-    /// The agent whose terminal the link was in; `None` for the operator's
-    /// own open, which makes the View the operator's (PRD session-files D-10).
-    opener: Option<Opener>,
+    /// The agent or the pane with no agent whose terminal the link was in
+    /// (D-33, D-54); the operator's own open makes the View the operator's
+    /// (PRD session-files D-10).
+    opener: OpenedBy,
     at: u64,
 }
 
@@ -209,7 +210,7 @@ impl Runtime {
             .ok()
     }
 
-    fn pane_opener(&self, pane_id: &str) -> Result<Opener, &'static str> {
+    pub(super) fn pane_opener(&self, pane_id: &str) -> Result<Opener, &'static str> {
         let device = crate::address::pane_device(pane_id)
             .unwrap_or(self.node.as_str())
             .to_owned();
@@ -298,29 +299,21 @@ impl Runtime {
         }
     }
 
-    /// Marks the View `view_id` of `key` as opened by `opener` (D-03), and
-    /// puts it in that session's Files strip (PRD session-files D-26); with
-    /// no opener the operator opened it, and it is in every strip (D-10).
+    /// Marks the View `view_id` of `key` as opened by `by` (D-03, D-54).
+    /// Every agent's or pane's open stamps the View, the same one's again
+    /// too, so it leads its pane's `N views` as the newest.
     pub(super) fn stamp_view_opener(
         &mut self,
         key: &WorkspaceKey,
         view_id: &str,
-        opener: Option<Opener>,
+        by: impl Into<OpenedBy>,
     ) {
-        let stamped = self.change_view_layout(key, |layout, stamp| {
+        let by = by.into();
+        let stamped = self.change_view(key, view_id, |layout, stamp| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
-            let changed = match opener {
-                // Every open stamps the View, the same agent's again too, so
-                // it leads its pane's `N views` as the newest.
-                Some(opener) => {
-                    display.opened_by(opener, stamp);
-                    true
-                }
-                None => !std::mem::replace(&mut display.operator, true),
-            };
-            Ok(((), changed))
+            Ok(((), display.opened_as(by, stamp)))
         });
         if let Err(error) = stamped {
             crate::diagnostic!(serde_json::json!({
@@ -372,11 +365,11 @@ impl Runtime {
         }
     }
 
-    /// A terminal link the operator clicked in an agent's pane names the
-    /// pane; the View the file lands in, now or once it is read, is that
-    /// agent's (D-02, B2). Any other open of the operator's, from the
-    /// Explorer, ⌘K or a plain shell's link, makes it the operator's (PRD
-    /// session-files D-10, D-28).
+    /// A terminal link the operator clicked in a pane names the pane; the
+    /// View the file lands in, now or once it is read, is that pane's: its
+    /// agent's (D-02, B2), or a shell's by its terminal (D-54). Any other
+    /// open of the operator's, from the Explorer, ⌘P or ⌘K, makes it the
+    /// operator's (PRD session-files D-10, D-28).
     pub(super) fn expect_view_opener(
         &mut self,
         key: &WorkspaceKey,
@@ -384,8 +377,45 @@ impl Runtime {
         kind: DisplayKind,
         pane: Option<&str>,
     ) {
-        let opener = pane.and_then(|pane| self.opener_of_pane(pane));
-        self.expect_view_opener_as(key, path, kind, opener);
+        let by = pane.map_or(OpenedBy::Operator, |pane| self.link_owner(pane));
+        self.expect_view_opener_as(key, path, kind, by);
+    }
+
+    /// Who a link pressed in `pane`'s terminal opens for (D-33, D-54): the
+    /// agent running there, else the pane's terminal, so a shell's link is
+    /// that pane's too; the operator's own when the pane is not listed.
+    pub(super) fn link_owner(&self, pane: &str) -> OpenedBy {
+        if let Some(opener) = self.opener_of_pane(pane) {
+            return OpenedBy::Agent(opener);
+        }
+        let device = crate::address::pane_device(pane).unwrap_or(self.node.as_str());
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|row| row.id == pane)
+            .and_then(|row| row.terminal_id.clone())
+            .map_or(OpenedBy::Operator, |terminal_id| {
+                OpenedBy::Terminal(crate::view_feedback::LinkTerminal {
+                    device_id: device.to_owned(),
+                    terminal_id,
+                })
+            })
+    }
+
+    /// The pane that holds `terminal` now, on its machine.
+    pub(super) fn link_terminal_pane(
+        &self,
+        terminal: &crate::view_feedback::LinkTerminal,
+    ) -> Option<String> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == terminal.device_id)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|row| row.terminal_id.as_deref() == Some(terminal.terminal_id.as_str()))
+            .map(|row| row.id.clone())
     }
 
     /// The View the document lands in is `opener`'s, or the operator's with
@@ -397,8 +427,9 @@ impl Runtime {
         key: &WorkspaceKey,
         path: &str,
         kind: DisplayKind,
-        opener: Option<Opener>,
+        opener: impl Into<OpenedBy>,
     ) {
+        let opener = opener.into();
         let pending = &mut self.view_feedback.pending_openers;
         pending.retain(|old| !(old.key == *key && old.path == path && old.kind == kind));
         if pending.len() >= PENDING_OPENERS {
@@ -432,13 +463,17 @@ impl Runtime {
             return false;
         };
         let opener = pending.remove(index).expect("found above").opener;
-        let Some(view_id) = self.view_layout_of(key).and_then(|layout| {
+        let front = self.front_tray_layout(key).and_then(|layout| {
             let area = layout.active_area();
             area.active
                 .as_ref()
                 .and_then(|id| area.displays.iter().find(|display| &display.id == id))
                 .filter(|display| display.shows(path, kind, committed))
-                .or_else(|| layout.displays().find(|d| d.shows(path, kind, committed)))
+                .map(|display| display.id.clone())
+        });
+        let Some(view_id) = front.or_else(|| {
+            self.view_displays(key)
+                .find(|d| d.shows(path, kind, committed))
                 .map(|display| display.id.clone())
         }) else {
             return false;
@@ -504,8 +539,7 @@ impl Runtime {
                 revision,
             } => {
                 let display = self
-                    .view_layout_of(key)
-                    .and_then(|layout| layout.display(&display_id))
+                    .view_display(key, &display_id)
                     .cloned()
                     .ok_or_else(|| {
                         (
@@ -634,13 +668,11 @@ impl Runtime {
                 }
                 // Undo keeps the caps an add keeps: a View that filled up
                 // since the delete takes it back no more than a new one.
-                let view_full = self.view_layout_of(key).is_some_and(|layout| {
-                    layout.displays().any(|display| {
-                        comment.on(display)
-                            && self.feedback_of(key).is_some_and(|feedback| {
-                                feedback.on(display).count() >= COMMENTS_PER_VIEW
-                            })
-                    })
+                let view_full = self.view_displays(key).any(|display| {
+                    comment.on(display)
+                        && self.feedback_of(key).is_some_and(|feedback| {
+                            feedback.on(display).count() >= COMMENTS_PER_VIEW
+                        })
                 });
                 if view_full {
                     self.release_shots(std::slice::from_ref(&comment));
@@ -765,8 +797,7 @@ impl Runtime {
         }
         let display = match display_id.as_deref() {
             Some(id) => Some(
-                self.view_layout_of(key)
-                    .and_then(|layout| layout.display(id))
+                self.view_display(key, id)
                     .cloned()
                     .ok_or(("view_feedback.unknown_view", "That View is closed".into()))?,
             ),
@@ -1124,16 +1155,12 @@ impl Runtime {
                 shots.insert(shot.node.clone(), link);
             }
         }
-        let layout = self.view_layout_of(key);
         let views = comments
             .iter()
             .map(|comment| {
-                layout.and_then(|layout| {
-                    layout
-                        .displays()
-                        .find(|display| comment.on(display))
-                        .map(|display| display.id.clone())
-                })
+                self.view_displays(key)
+                    .find(|display| comment.on(display))
+                    .map(|display| display.id.clone())
             })
             .collect();
         let checkout = self
@@ -1345,7 +1372,8 @@ impl Runtime {
                             false
                         }
                         Some(
-                            LetterState::Undelivered
+                            LetterState::NoRecipient
+                            | LetterState::Superseded
                             | LetterState::Expired
                             | LetterState::Cancelled,
                         ) => {
@@ -1691,18 +1719,21 @@ impl Runtime {
     pub(super) fn view_feedback_snapshot(
         &self,
         key: &WorkspaceKey,
-        layout: &ViewLayoutSnapshot,
+        displays: &[ViewDisplaySnapshot],
     ) -> Option<ViewFeedbackSnapshot> {
-        let mut displays = Vec::new();
-        collect_displays(&layout.root, &mut displays);
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
         let mut shown: Vec<(String, crate::view_layout::Shown<'_>, u64)> = Vec::new();
-        let views = self.view_layout_of(key);
-        for display in &displays {
-            let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
+        for display in displays {
+            let stored = self.view_display(key, &display.id);
+            // The pane the View belongs to (`owner_pane_of`), but a record
+            // card, which is the operator's to read and no pane's open.
+            let Some(pane) = display
+                .owner_pane
+                .clone()
+                .filter(|_| display.card.is_none())
+            else {
                 continue;
             };
-            let stored = views.and_then(|views| views.display(&display.id));
             let unseen = stored.is_some_and(|stored| stored.unseen.is_some());
             let stamp = stored.map_or(0, |stored| stored.opened_stamp);
             // Two tabs showing the same thing are one row, which is unseen
@@ -1751,10 +1782,7 @@ impl Runtime {
             .as_ref()
             .filter(|(deleted, _, _)| deleted == key)
             .map(|(_, _, comment)| comment.id.clone());
-        let stored = self
-            .view_layout_of(key)
-            .map(|layout| layout.displays().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let stored: Vec<_> = self.view_displays(key).collect();
         let mut comments = Vec::new();
         let mut groups: Vec<ViewFeedbackGroupSnapshot> = Vec::new();
         let mut targets: HashMap<String, Vec<&Target>> = HashMap::new();
@@ -1840,19 +1868,6 @@ impl Runtime {
             send,
             deleted,
         })
-    }
-}
-
-fn collect_displays<'a>(
-    node: &'a ViewNodeSnapshot,
-    out: &mut Vec<&'a crate::model::ViewDisplaySnapshot>,
-) {
-    match node {
-        ViewNodeSnapshot::Area(area) => out.extend(area.displays.iter()),
-        ViewNodeSnapshot::Split(split) => {
-            collect_displays(&split.first, out);
-            collect_displays(&split.second, out);
-        }
     }
 }
 
@@ -2168,8 +2183,9 @@ mod tests {
 
     fn opened_view_at(runtime: &mut Runtime, path: &str) -> String {
         let key = key();
+        let place = runtime.front_place(&key);
         let view = runtime
-            .change_view_layout(&key, |layout, stamp| {
+            .change_view_layout(&key, &place, |layout, stamp| {
                 let display = layout.new_display(path, DisplayKind::File, None, false);
                 let id = display.id.clone();
                 let area = layout.active_area().id.clone();
@@ -2231,7 +2247,7 @@ mod tests {
         let mut guard = runtime.lock().unwrap();
         let view = opened_view(&mut guard);
         let opener = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
@@ -2295,7 +2311,7 @@ mod tests {
         );
         let view = opened_view(&mut guard);
         let opener = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
@@ -2313,8 +2329,9 @@ mod tests {
         let (runtime, worker, _) = send_fixture(root.path());
         let mut guard = runtime.lock().unwrap();
         let opener = guard.opener_of_pane("recipient");
+        let place = guard.front_place(&key());
         let page = guard
-            .change_view_layout(&key(), |layout, stamp| {
+            .change_view_layout(&key(), &place, |layout, stamp| {
                 let mut display = layout.new_browser_display("http://localhost:5173/", 1);
                 display.opener = opener;
                 let id = display.id.clone();
@@ -2325,7 +2342,7 @@ mod tests {
             .unwrap();
         guard.navigate_browser(&key(), &page, "http://localhost:5173/other".into());
         let display = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&page)
             .unwrap();
@@ -2438,18 +2455,18 @@ mod tests {
         }
         // The comments left their View with the letter (D-13).
         let display = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
             .clone();
         assert_eq!(guard.feedback_of(&key()).unwrap().on(&display).count(), 0);
-        // The letter expires undelivered: the comments come back marked (B29).
+        // The letter ends with no recipient: the comments come back marked (B29).
         let mut expired = (*ledger).clone();
         let letter_id = letter.id.clone();
         for letter in &mut expired.letters {
             if letter.id == letter_id {
-                letter.state = LetterState::Undelivered;
+                letter.state = LetterState::NoRecipient;
             }
         }
         guard.publish_delivery(Arc::new(expired.clone()), true);
@@ -2563,7 +2580,7 @@ mod tests {
             (1, Some("recipient"))
         );
         let guard = runtime.lock().unwrap();
-        let layout = guard.view_layout_of(&key()).unwrap();
+        let layout = guard.front_tray_layout(&key()).unwrap();
         let on = |id: &str| {
             let display = layout.display(id).unwrap().clone();
             guard.feedback_of(&key()).unwrap().on(&display).count()

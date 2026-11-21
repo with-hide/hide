@@ -39,10 +39,6 @@
     "terminal-links.spec.ts::dense terminal path hover measures cold and warm native work": {
       "lines": 124,
       "expect": 14
-    },
-    "right-lane.spec.ts::the lane comes and goes over the terminals without a resize, the pin and a docked divider resize once, and input continues through all of it": {
-      "lines": 222,
-      "expect": 49
     }
   }
 }

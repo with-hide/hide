@@ -235,10 +235,7 @@ impl Runtime {
             worker: false,
             kept: None,
         };
-        let kept = self
-            .view_layout_of(key)
-            .and_then(|layout| layout.display(view_id))
-            .and_then(kept_of);
+        let kept = self.view_display(key, view_id).and_then(kept_of);
         let lineage = self.lineage_of(&actor);
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
@@ -315,10 +312,11 @@ impl Runtime {
         let mut links: Vec<ViewLink> = Vec::new();
         if !show.is_empty() {
             let place = self.show_place(id, actor).ok_or("mission_show_unknown")?;
-            let layout = self.view_layout_of(&place).ok_or("mission_show_unknown")?;
             let now = super::memory::now_ms();
             for view in show {
-                let display = layout.display(view).ok_or("mission_show_unknown")?;
+                let display = self
+                    .view_display(&place, view)
+                    .ok_or("mission_show_unknown")?;
                 let link = ViewLink {
                     device_id: place.0.clone(),
                     checkout_path: place.1.clone(),
@@ -359,10 +357,7 @@ impl Runtime {
                 break;
             }
             let key = (link.device_id.clone(), link.checkout_path.clone());
-            let Some(display) = self
-                .view_layout_of(&key)
-                .and_then(|layout| layout.display(&link.display_id))
-            else {
+            let Some(display) = self.view_display(&key, &link.display_id) else {
                 continue;
             };
             if !links.iter().any(|known| known.same_view(&link)) {
@@ -501,11 +496,9 @@ impl Runtime {
     /// one showing what it kept.
     fn linked_display(&self, link: &ViewLink) -> Option<&Display> {
         let key = (link.device_id.clone(), link.checkout_path.clone());
-        let layout = self.view_layout_of(&key)?;
-        layout.display(&link.display_id).or_else(|| {
+        self.view_display(&key, &link.display_id).or_else(|| {
             let kept = link.kept.as_ref()?;
-            layout
-                .displays()
+            self.view_displays(&key)
                 .filter(|display| kept.shown_by(display))
                 .max_by_key(|display| display.last_focused_unix_ms)
         })
@@ -578,7 +571,7 @@ impl Runtime {
                     opener: kept.opener,
                 });
             }
-            DisplayKind::External => return Err("mission_view_not_kept"),
+            DisplayKind::External | DisplayKind::Card => return Err("mission_view_not_kept"),
         }
         // Not open now, it opens only while its file's read or its device's
         // front is still to come; otherwise the reveal was refused as it was
@@ -824,7 +817,6 @@ impl Runtime {
             "mission": id, "question": key, "intent": intent,
         }));
         self.save_missions();
-        self.flush_mission_wakes();
         Ok(true)
     }
 

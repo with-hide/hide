@@ -24,10 +24,13 @@ export type HumanTurnTarget = { id: string; kind: HumanKind; place: string; devi
  * `outline` so the button stands out from it, and one that already says why
  * the device is away leaves `reason` off.
  */
-export function HumanTurnDone({ turn, actions, variant = "secondary", reason = true, className }: { turn: HumanTurnTarget; actions: Pick<Actions, "finishHumanTurn">; variant?: "secondary" | "outline"; reason?: boolean; className?: string }) {
+export function HumanTurnDone({ turn, actions, variant = "secondary", reason = true, className }: { turn: HumanTurnTarget; actions: Pick<Actions, "finishHumanTurn" | "openStoreAsk">; variant?: "secondary" | "outline"; reason?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const unreachable = useUnreachable({ device: turn.device_id ?? null });
   const what = humanTurnText(t, turn);
+  // An install an agent asked for is answered on its confirm, not with Done
+  // (PRD skill-mcp-manager B32): 확인하기 opens it in Settings › 스킬·MCP.
+  const install = turn.kind === "install";
   return (
     <span className={cn("relative z-10 flex min-w-0 items-center gap-xs", className)} data-human-turn-done-slot={turn.id}>
       <Button
@@ -35,16 +38,18 @@ export function HumanTurnDone({ turn, actions, variant = "secondary", reason = t
         variant={variant}
         size="sm"
         disabled={unreachable !== null}
-        aria-label={t("agents.human.doneName", { what })}
+        aria-label={install ? undefined : t("agents.human.doneName", { what })}
         data-human-turn-done={turn.id}
+        data-human-turn-install={install ? turn.id : undefined}
         className="shrink-0"
         onMouseDown={(event) => event.preventDefault()}
         onClick={(event) => {
           event.stopPropagation();
-          actions.finishHumanTurn(turn.id);
+          if (install) actions.openStoreAsk(turn.id);
+          else actions.finishHumanTurn(turn.id);
         }}
       >
-        {t("agents.human.done")}
+        {install ? t("agents.human.confirm") : t("agents.human.done")}
       </Button>
       {unreachable && reason ? <span className="min-w-0 truncate text-caption text-muted-foreground" title={unreachable} data-human-turn-unreachable={turn.id}>{unreachable}</span> : null}
     </span>

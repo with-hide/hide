@@ -461,7 +461,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -562,6 +562,9 @@ jobs:
         # suites report line endings instead of code.
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+      - name: Reuse Windows fixture programs
+        uses: ./.github/actions/fixture-shims
+        timeout-minutes: 5
       # Windows's one saver of the workspace set, the most any Windows job builds.
       - uses: ./.github/actions/rust-cache
         with:
@@ -599,6 +602,14 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^pairing::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
+      - name: Automations, their command and their daemon
+        # PRD automations D-23: the CLI's reading of a schedule and a folder,
+        # the core's schedules in the system's zone, its book and runs, and
+        # the built `hide automation` against a daemon and its screen section
+        # (docs/INSTALL.md, What each system supports: Automations).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hided) & kind(lib) & test(/^automation_cli::/)) | (binary_id(hided::it) & test(/^automations::/)) | (package(hide-core) & kind(lib) & test(/automations/))'
       - name: The peer connection's key and grant files, its loopback transport and two iroh endpoints
         # hide-peer saves the machine key, the grants and the event inbox
         # through the platform layer's private files, and hide-peer-iroh

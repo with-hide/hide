@@ -1397,10 +1397,8 @@ mod tests {
     fn a_raised_descendant_notifies_its_root_once_and_clears_with_the_raise() {
         for (cause, human_notice) in [
             ("draft", false),
-            ("bell_exhausted", false),
             ("child_blocked", false),
             ("input_unconfirmed", false),
-            ("undelivered", true),
             ("observer_unconfirmed", true),
         ] {
             let mut transitions = Transitions::default();

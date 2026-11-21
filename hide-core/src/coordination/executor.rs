@@ -332,6 +332,8 @@ pub(crate) fn mutate(
                 context: authority.context.clone(),
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
+                written: None,
             },
             actor: actor.clone(),
             mutation: Box::new(mutation),
@@ -754,6 +756,7 @@ pub(crate) fn registration(
         ended: false,
         terminal_id: native.terminal_id,
         forked: false,
+        successor: None,
     }
 }
 
@@ -1008,6 +1011,7 @@ fn register_code_owned(
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let registered = mutate(
         client,
@@ -1026,6 +1030,30 @@ fn register_code_owned(
 
 /// How long the device's node may take to answer one of the spawn's checks.
 const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Whether `folder` is a folder on the machine `node` runs, asked of that
+/// machine now and off the runtime lock: one that is gone is refused as
+/// [`super::FOLDER_GONE`], and a machine that cannot answer refuses the
+/// start as unanswered, since an unattended start never runs in a folder
+/// no one confirmed.
+fn folder_there(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    folder: &str,
+) -> Result<(), String> {
+    use crate::node_access::{call_as, link_failure_code};
+    let node = node.ok_or("machine_unavailable")?;
+    match call_as::<Option<String>>(
+        node,
+        hide_node_link::protocol::Call::Directory {
+            path: folder.to_owned(),
+        },
+        TARGET_CHECK_TIMEOUT,
+    ) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(super::FOLDER_GONE.to_owned()),
+        Err(error) => Err(link_failure_code(&error)),
+    }
+}
 
 /// The destination a mission's spawn starts a new branch from, judged
 /// before anything is made (PRD mission-destination D-04): the mission's
@@ -1441,6 +1469,28 @@ fn spawn(
         // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
         answer_by += hook_started.elapsed();
     }
+    // An automation's run works unattended, so its folder is read as its
+    // machine has it now, not as the catalog read it up to a minute ago: a
+    // pane asked for a folder that is gone opens in the home folder
+    // instead, and the run would work there. It is asked before anything is
+    // reserved, so one that is gone leaves nothing behind; a retry whose pane
+    // exists is judged before its start is typed.
+    let unattended = task
+        .as_ref()
+        .is_some_and(|task| task.kind == super::TaskKind::Automation);
+    if unattended && earlier.as_ref().is_none_or(|record| record.pane.is_none()) {
+        let device = machine.as_deref().unwrap_or(&actor.device_id);
+        let node = context(client, device)
+            .map_err(|reason| {
+                if machine.is_some() {
+                    "machine_unavailable".to_owned()
+                } else {
+                    reason
+                }
+            })?
+            .node;
+        folder_there(node.as_deref(), repo)?;
+    }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
     // creates something runs under it.
@@ -1542,6 +1592,8 @@ fn spawn(
                     context: authority.context.clone(),
                     also_reads: Vec::new(),
                     proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
+                    written: None,
                 },
                 actor: actor.clone(),
                 spawn: reserved.id.clone(),
@@ -1692,6 +1744,9 @@ fn spawn(
                         .map_err(|failure| match failure.code() {
                             Some(hide_node_link::holders::HOLDER_CAP_REFUSAL) => {
                                 holder_cap(&child_device, failure.message())
+                            }
+                            Some(super::WORKSPACE_CLOSING) => {
+                                super::refusal(super::WORKSPACE_CLOSING, failure.message())
                             }
                             _ => failure.message().to_owned(),
                         })?;
@@ -1885,6 +1940,18 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
+            // The pane's shell opened where its machine put it: an unattended
+            // start is typed only while its folder is there, so a folder gone
+            // before the pane was made, its shell left in the home folder,
+            // starts no agent.
+            let folder = reserved.path.as_deref().unwrap_or(repo);
+            let check = || {
+                if unattended {
+                    folder_there(node.as_deref(), folder)
+                } else {
+                    Ok(())
+                }
+            };
             let started = crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
@@ -1898,6 +1965,7 @@ fn spawn(
                 codex_daemon,
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+                &check,
             )
             .map_err(|not| {
                 // A pane nothing of this start is left in closes, so the
@@ -2529,6 +2597,29 @@ pub(super) fn close_refused_pane(
         "pane_id": pane, "refusal": reason, "closed": closed.is_ok(),
         "reason": closed.err(),
     }));
+}
+
+/// Closes the pane `record`'s start made, for its owner's cleanup (PRD
+/// automations D-13): only while it still runs the terminal the start
+/// recorded, so a pane that later answers to the same id is never closed.
+/// What became of it: `closed`, `none` (the start made no pane), `gone`,
+/// `replaced` (another terminal runs there) or `unrecorded` (a record from
+/// before terminals were kept, which proves nothing and is left).
+pub(crate) fn close_spawn_pane(
+    engine: &dyn Engine,
+    record: &SpawnRecord,
+) -> Result<&'static str, String> {
+    let Some(pane) = record.pane.as_deref() else {
+        return Ok("none");
+    };
+    let Some(recorded) = record.terminal.as_deref() else {
+        return Ok("unrecorded");
+    };
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => close_pane(engine, pane).map(|()| "closed"),
+        RecordedPane::Gone => Ok("gone"),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Ok("replaced"),
+    }
 }
 
 /// Whether `pane` is still the terminal `record` recorded with it, so a pane
@@ -3284,6 +3375,7 @@ mod tests {
                         ended: false,
                         terminal_id: None,
                         forked: false,
+                        successor: None,
                         actor: actor.clone(),
                     },
                     check: false,
@@ -3484,7 +3576,7 @@ mod tests {
 
     #[test]
     fn completed_spawn_replay_after_restart_preserves_report_stop_end_and_explicit_watch() {
-        use crate::delivery::{ledger, mailbox, watch, worker::Worker};
+        use crate::delivery::{ledger, mailbox, store, watch, worker::Worker};
         use crate::handle::ChangeNotifier;
         use crate::runtime::delivery::tests::{authority, fixture};
         use crate::sidebar::SessionSnapshotPayload;
@@ -3518,6 +3610,7 @@ mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
                 actor: Actor {
                     pane_id: "sender".into(),
                     name: "sender".into(),
@@ -3630,6 +3723,7 @@ mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             };
             let child_id = super::super::apply(
                 &mut state,
@@ -3690,8 +3784,8 @@ mod tests {
                     }
                 }
             }
-            ledger::save(&path, &state).unwrap();
-            let restored = ledger::load(&path).unwrap();
+            store::save(&path, &state).unwrap();
+            let restored = store::load(&path).unwrap();
             let expected_watch = restored.watches.first().map(|watch| watch.id.clone());
             let next_id = restored.next_id;
             runtime
@@ -3713,7 +3807,7 @@ mod tests {
                 "{ending}"
             );
             drop(worker);
-            let after = ledger::load(&path).unwrap();
+            let after = store::load(&path).unwrap();
             assert_eq!(after.agents.len(), 2, "{ending}");
             assert_eq!(after.next_id, next_id, "{ending}");
             assert!(after.spawns[0].completed);

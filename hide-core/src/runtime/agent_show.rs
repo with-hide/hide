@@ -293,8 +293,6 @@ fn waiting(
             Cause::HumanTurn => WaitCause::HumanTurn,
             Cause::Draft => WaitCause::Draft,
             Cause::ParentBlocked => WaitCause::ParentBlocked,
-            Cause::BellExhausted => WaitCause::BellExhausted,
-            Cause::Undelivered => WaitCause::Undelivered,
             Cause::ObserverUnconfirmed => WaitCause::ObserverUnconfirmed,
         };
         let mut waiting = Waiting::on(cause, Some(OPERATOR), escalation.since_unix_ms);
@@ -566,10 +564,10 @@ mod tests {
         );
         let mut raised = row("question", true);
         raised.escalation = Some(crate::agent_state::escalation::Escalation {
-            cause: crate::agent_state::escalation::Cause::Undelivered,
+            cause: crate::agent_state::escalation::Cause::Draft,
             letter_id: Some("letter-9".into()),
             since_unix_ms: Some(3),
-            human_notice: true,
+            human_notice: false,
         });
         let raised = waiting(raised).unwrap();
         assert_eq!(
@@ -579,7 +577,7 @@ mod tests {
                 raised.letter_id.as_deref()
             ),
             (
-                crate::delivery::answer::WaitCause::Undelivered,
+                crate::delivery::answer::WaitCause::Draft,
                 Some("operator"),
                 Some("letter-9")
             )

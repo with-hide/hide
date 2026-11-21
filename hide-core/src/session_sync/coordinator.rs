@@ -258,8 +258,11 @@ fn run_coordinator(
                         // core's, or a node's that dials it.
                         changed
                             | match &context.target {
+                                // Automations run on this core's own machine
+                                // (PRD automations D-21).
                                 SessionSyncTarget::Local { .. } => {
                                     guard.tick_agent_sleep(now_unix_ms)
+                                        | guard.tick_automations(now_unix_ms)
                                 }
                                 SessionSyncTarget::Remote { target_id, .. } => {
                                     guard.tick_node_agent_sleep(target_id, now_unix_ms)
@@ -611,7 +614,7 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
-    let resting = session.published_state().resting_payloads();
+    let healing = &session.published_state().healing;
     let not_resumed = &session.published_state().not_resumed;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
@@ -636,7 +639,9 @@ fn publish_session(
                 }
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
+                guard.take_heal(target_id, context.engine.as_ref(), crate::links::now_ms());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
+                guard.note_healing(target_id, healing, crate::links::now_ms());
                 // The restore after the device's switch said what it closed.
                 if let Some(left) = &session.published_state().not_carried {
                     guard.settle_switch_open(target_id, left);
@@ -866,18 +871,17 @@ fn publish_session(
     };
     let (changed, readback) = match runtime.lock() {
         Ok(mut guard) => {
-            // A restore's resting agents become sleeping records first, so
-            // this ingest draws their rows as sleeping.
-            let kept = guard.adopt_resting(resting, overlay.as_ref());
-            // So is an agent a restore did not resume ended, with the engine
+            // An agent a restore did not resume is ended, with the engine
             // still naming it until an agent shows in its pane.
             let device = guard.node().to_string();
+            guard.take_heal(&device, context.engine.as_ref(), crate::links::now_ms());
             guard.end_unresumed(&device, host_scope, &payload, not_resumed);
+            guard.note_healing(&device, healing, crate::links::now_ms());
             // The ingest observes this payload for delivery and lays the
             // turns its observations wait on, with this pass's overlay.
             let (changed, readback) =
                 guard.ingest_observed_session(payload, Some(precomputed), host_scope, overlay);
-            (changed || kept, readback)
+            (changed, readback)
         }
         Err(_) => return false,
     };

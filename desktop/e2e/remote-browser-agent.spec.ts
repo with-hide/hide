@@ -12,7 +12,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { deviceBridges, deviceHome, proveDeviceHome, resetDeviceHome, writeSshConfig } from "./device-home";
 import { endChild, HIDE_CLI, hostLog, isolate, launch, test, type Isolated } from "./fixture";
 
@@ -76,6 +76,23 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
     await expect.poll(() => appliedFor(daemonLog, "ssh-browser"), { timeout: 120_000 }).toBe(true);
     await remote.attach(run, "ssh-browser");
 
+    // While the operator is on this Mac's Workspace, a device agent's page
+    // loads on no desk on screen, and the agent reads and drives it there
+    // (PRD lane-desk-pair-view B31, B32).
+    const behind = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/behind.html`, "--wait"], "device-open-behind");
+    expect(behind.status, behind.out).toBe(0);
+    expect(lastJson(behind.out)).toMatchObject({ ok: true, page: { state: "loaded" } });
+    const behindDisplay = (lastJson(behind.out).result as { view_id: string }).view_id;
+    expect(hostLog(run.env).some((line) => line.event === "browser.loaded_off_screen")).toBe(true);
+    const behindShot = await deviceCli(remote, run, bridge, ["browser", "snapshot", behindDisplay], "device-snapshot-behind");
+    expect(behindShot.status, behindShot.out).toBe(0);
+    const behindPress = /(@\d+) button "Press"/.exec(behindShot.out)?.[1];
+    expect(behindPress, behindShot.out).toBeDefined();
+    const behindClick = await deviceCli(remote, run, bridge, ["browser", "click", behindDisplay, behindPress!], "device-click-behind");
+    expect(behindClick.status, behindClick.out).toBe(0);
+    expect(String(lastJson(behindClick.out).changed)).toContain("clicked from the device");
+    expect(await page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen")).not.toContain("ssh-browser");
+
     // The operator goes to the device, so its agent's page opens in front:
     // from a pane the operator is not in it would only join the list behind.
     await page.evaluate(async ({ port, token }) => {
@@ -91,6 +108,8 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
       });
     }, { port: state.port, token: state.token });
     await expect.poll(() => page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen"), { timeout: 20_000 }).toContain("ssh-browser");
+    // An open from the operator's pane comes in front only while the lane is up (PRD lane-desk-pair-view B2).
+    await showExplorer(page);
     const opened = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/device.html`, "--wait"], "device-open");
     expect(opened.status, opened.out).toBe(0);
     const display = (lastJson(opened.out).result as { view_id: string }).view_id;

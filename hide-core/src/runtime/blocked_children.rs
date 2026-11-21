@@ -26,7 +26,6 @@ use serde_json::json;
 
 use super::Runtime;
 use super::delivery::Observation;
-use super::hide_notes::{Note, NoteKind};
 use crate::agent_state::escalation::CHILD_BLOCKED_GRACE_MS;
 use crate::model::SidebarAgentSnapshot;
 
@@ -43,8 +42,9 @@ pub(in crate::runtime) struct BlockedChildren {
     /// The block each pane's parent was told of, by its note's key, while
     /// that block lasts.
     told: BTreeMap<String, String>,
-    /// A thread is sending notes; it is the only one.
-    sending: bool,
+    /// The panes whose block ended since the last tick, whose parent's
+    /// cell goes (`drive_blocked_notes`).
+    ended: Vec<String>,
 }
 
 struct Start {
@@ -55,6 +55,10 @@ struct Start {
 
 struct Owed {
     key: String,
+    /// The block as the engine dated it: the moment the child last changed
+    /// state, which a restart keeps (`labels::store`), else when this core
+    /// first read the block. The parent's cell's revision.
+    fact: u64,
     parent: String,
     /// The parent session the child's lineage was written for.
     parent_session: Option<String>,
@@ -76,6 +80,7 @@ impl BlockedChildren {
                 && was != now
             {
                 self.starts.remove(&row.pane_id);
+                self.ended.push(row.pane_id.clone());
             }
             if row.blocked {
                 // A child whose lineage a restore has not given back yet
@@ -90,12 +95,20 @@ impl BlockedChildren {
                     }
                     row.blocked_since_unix_ms = Some(start.since);
                 }
-            } else if crate::agent_state::settled(row) {
-                self.starts.remove(&row.pane_id);
+            } else if crate::agent_state::settled(row) && self.starts.remove(&row.pane_id).is_some()
+            {
+                self.ended.push(row.pane_id.clone());
             }
         }
         let panes: HashSet<&str> = rows.iter().map(|row| row.pane_id.as_str()).collect();
-        self.starts.retain(|pane, _| panes.contains(pane.as_str()));
+        let ended = &mut self.ended;
+        self.starts.retain(|pane, _| {
+            let stays = panes.contains(pane.as_str());
+            if !stays {
+                ended.push(pane.clone());
+            }
+            stays
+        });
         let starts = &self.starts;
         self.told.retain(|pane, _| starts.contains_key(pane));
         let told = &self.told;
@@ -106,11 +119,13 @@ impl BlockedChildren {
             .filter_map(|row| {
                 let since = row.blocked_since_unix_ms?;
                 let key = format!("{}:{since}", row.pane_id);
+                let fact = row.changed_at_unix_ms.unwrap_or(since);
                 (told.get(&row.pane_id) != Some(&key)).then(|| {
                     Some((
                         row.pane_id.clone(),
                         Owed {
                             key,
+                            fact,
                             parent: row.lineage_parent_pane_id.clone()?,
                             parent_session: row.declared_parent_session.clone(),
                             label: row.identity_label.clone(),
@@ -123,54 +138,53 @@ impl BlockedChildren {
 }
 
 impl Runtime {
-    /// Tells each blocked child's parent once per block. Run by the
-    /// coordinator's tick; a tick with nothing owed is one test.
+    /// Gives each blocked child's parent its cell about the child once per
+    /// block, and takes the cell back once the child moves again, another
+    /// session runs in its pane or the pane is gone (B10). Run by the
+    /// coordinator's tick; a tick with nothing owed or ended is two tests.
     pub(crate) fn drive_blocked_notes(&mut self) {
-        if self.blocked_children.owed.is_empty() || self.blocked_children.sending {
+        for pane in std::mem::take(&mut self.blocked_children.ended) {
+            self.retract_status(&super::status_cells::child_subject(&pane));
+        }
+        if self.blocked_children.owed.is_empty() {
             return;
         }
         let owed = std::mem::take(&mut self.blocked_children.owed);
-        let mut notes = Vec::new();
         for (pane, owed) in owed {
-            self.blocked_children
-                .told
-                .insert(pane.clone(), owed.key.clone());
             let Some(target) = self.blocked_parent(&owed) else {
                 crate::diagnostic!(json!({
                     "component": "delivery", "kind": "child_blocked.note_unaddressed",
                     "pane_id": pane, "parent_pane_id": owed.parent,
                 }));
+                self.blocked_children.told.insert(pane, owed.key);
                 continue;
             };
             crate::diagnostic!(json!({
                 "component": "delivery", "kind": "child_blocked.noted",
                 "pane_id": pane, "parent_pane_id": target.actor.pane_id,
-                "intent": format!("child-blocked:{}", owed.key),
             }));
             let child = self
                 .delivery_observations
                 .get(&pane)
-                .map_or(owed.label, |observation| observation.actor.name.clone());
-            notes.push(Note {
-                body: note_body(&child, &pane),
-                letter: owed.key,
-                target,
-            });
+                .map_or(owed.label.clone(), |observation| {
+                    observation.actor.name.clone()
+                });
+            match self.post_status(
+                &target.actor,
+                super::status_cells::child_subject(&pane),
+                note_body(&child, &pane),
+                false,
+                owed.fact,
+            ) {
+                Ok(()) => {
+                    self.blocked_children.told.insert(pane, owed.key);
+                }
+                // Refused for room: still owed, the next tick tries again.
+                Err(_) => {
+                    self.blocked_children.owed.insert(pane, owed);
+                }
+            }
         }
-        if notes.is_empty() {
-            return;
-        }
-        let kind = NoteKind {
-            role: BLOCKED_ROLE,
-            thread: "hide-blocked-notes",
-            intent: "child-blocked",
-            component: "delivery",
-            unsent: "child_blocked.note_unsent",
-            now: true,
-        };
-        self.blocked_children.sending = self.send_hide_notes(kind, notes, |runtime| {
-            runtime.blocked_children.sending = false;
-        });
     }
 
     /// The parent a blocked child's note goes to: the agent the lineage names
@@ -213,11 +227,6 @@ impl Runtime {
             .iter()
             .map(|(pane, key)| (pane.clone(), key.clone()))
             .collect()
-    }
-
-    /// A thread is still sending notes.
-    pub(in crate::runtime) fn blocked_notes_sending(&self) -> bool {
-        self.blocked_children.sending
     }
 }
 

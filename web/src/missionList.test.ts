@@ -49,7 +49,7 @@ describe("the group a mission stands in (B5) and the rail's number (D-08)", () =
     // What waits on the Conductor is not the operator's yet.
     expect(group(mission("m", { nodes: [node("x", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } })] }))).not.toBe("turn");
     expect(group(mission("m", { status: "merge_wait", nodes: [node("x", { status: "done", pr: 3, pr_state: "mergeable", landing: { state: "left", action: "merge" } })], landing_order: ["x"] }))).toBe("turn");
-    const raised = { escalation: { cause: "bell_exhausted" } } as unknown as AgentRow;
+    const raised = { escalation: { cause: "draft" } } as unknown as AgentRow;
     expect(group(mission("m", { nodes: [node("x", { status: "working", pane_id: "p9" })] }), (n) => (n.pane_id === "p9" ? raised : null))).toBe("turn");
   });
 
@@ -99,12 +99,12 @@ describe("a mission whose Conductor has not got its letters (hide-private issue 
   it("stands in 내 차례 with the count and what to do, and leaves it once they are delivered", async () => {
     const { initializeInterfaceI18n } = await import("./i18n/instance");
     const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
-    const held = mission("a", { conductor_letters: { count: 4, reason: "unanswered", since_unix_ms: 1 } });
+    const held = mission("a", { conductor_letters: { count: 4, reason: "draft", since_unix_ms: 1 } });
     const entry = missionEntry(held, () => null);
     expect(entry.group).toBe("turn");
     expect(turnCount([entry])).toBe(1);
     expect(missionPillKey(held, entry.turn[0] ?? null)).toBe("missionScreen.pill.letters");
-    expect(rowLineText(rowLine(held, entry.turn[0] ?? null)!, t)).toBe("Letters waiting for the Conductor: 4 · three bells went unanswered: tell the Conductor to read its letters");
+    expect(rowLineText(rowLine(held, entry.turn[0] ?? null)!, t)).toBe("Letters waiting for the Conductor: 4 · unsent text in the Conductor's input: send or clear it");
     expect(group(mission("a", { conductor_letters: null }))).toBe("running");
   });
 });

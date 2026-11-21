@@ -1,0 +1,21 @@
+name: Windows fixture programs
+description: Reuse source-matched fixture programs on the same Windows runner image.
+
+runs:
+  using: composite
+  steps:
+    - name: Identify the compiler image
+      id: image
+      shell: pwsh
+      run: |
+        "version=$env:ImageVersion" >> $env:GITHUB_OUTPUT
+    - name: Restore and save finished fixture programs
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: web/.e2e-shims
+        key: fixture-shims-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}-${{ hashFiles('web/e2e/shims/*.c', 'web/e2e/shims/*.h', 'web/e2e/shims/build.ts', 'web/e2e/bounded-child.ts') }}
+    - name: Measure cold and warm compiler reads
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: ./scripts/measure-fixture-compiler.ps1

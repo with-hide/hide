@@ -46,7 +46,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 13;
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; it is the operator's to watch, so it takes no `--parent`) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work: planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation | first ask in one line: Shall I run this as a mission, or do it directly? Follow the operator's answer; if they already requested a mission or invoked `/hide-mission`, run `hide mission help` and follow it without asking again. With none of these signals, work directly without asking |\n| Hide itself misbehaves: a crash, a command that fails or answers wrongly for no reason of yours, a pane or screen that breaks | `hide issue help`, which the `hide-issue` skill points at: collect the exact error, versions and steps into the bug template, show the operator, and file it in with-hide/hide after their yes |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens beside your terminal when the operator watches your pane, else waits in your pane's Views list, and stays in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; it is the operator's to watch, so it takes no `--parent`) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work: planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation | first ask in one line: Shall I run this as a mission, or do it directly? Follow the operator's answer; if they already requested a mission or invoked `/hide-mission`, run `hide mission help` and follow it without asking again. With none of these signals, work directly without asking |\n| Hide itself misbehaves: a crash, a command that fails or answers wrongly for no reason of yours, a pane or screen that breaks | `hide issue help`, which the `hide-issue` skill points at: collect the exact error, versions and steps into the bug template, show the operator, and file it in with-hide/hide after their yes |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\n| repeat a task at set times with no one present (every weekday morning, every few hours) | `hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`; run `hide automation help` first for the schedule forms, then tell the operator what it reads as and when it runs next. Not a cron job, an OS scheduler or a script of your own. A wait or a check shorter than five minutes, or one that ends within this conversation, you keep doing yourself as now |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
     };
 }
 
@@ -382,13 +382,21 @@ impl AgentRuntime {
     /// Codex's is the `config.toml` in its folder, which only Codex writes.
     pub fn trust_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
         let at = at.into();
-        if self == Self::ClaudeCode {
-            let legacy = self.home_directory(at).join(".config.json");
-            if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                return legacy;
-            }
+        self.older_config(at)
+            .unwrap_or_else(|| at.place(self.dialect().adapter(), AccountPath::FolderTrust))
+    }
+
+    /// Claude Code's older global config, `.config.json`, which it reads in
+    /// place of `.claude.json` while that file has content: for its folder
+    /// trust and its MCP servers alike (`crate::mcp::McpFile::of`).
+    pub(crate) fn older_config(self, at: AccountAt<'_>) -> Option<PathBuf> {
+        if self != Self::ClaudeCode {
+            return None;
         }
-        at.place(self.dialect().adapter(), AccountPath::FolderTrust)
+        let legacy = self.home_directory(at).join(".config.json");
+        std::fs::metadata(&legacy)
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            .then_some(legacy)
     }
 }
 
@@ -577,12 +585,22 @@ mod tests {
                 "`hide file open <path>`",
                 "`hide diff open <path>`",
                 "`hide browser open <url-or-path>`",
-                "waits in the operator's Needs You as To look at",
+                "stays in the operator's Needs You as To look at",
+                "else waits in your pane's Views list",
                 "such as `aside`, not `hide browser open`",
                 "open it again from your own pane",
                 "`hide agent spawn --beside …`",
                 "`hide agent spawn --parent here …`",
                 "`hide agent spawn …` without --parent",
+                // An agent asked for a repeated task makes an automation
+                // (PRD automations B9).
+                "`hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`",
+                "run `hide automation help` first",
+                // Only unattended repeats at set times: a short wait inside
+                // the conversation stays the agent's own (D-16 caps runs,
+                // not polling).
+                "with no one present",
+                "or one that ends within this conversation, you keep doing yourself as now",
                 // Propose before complex work, but do not re-ask an explicit choice.
                 "first ask in one line: Shall I run this as a mission, or do it directly?",
                 "Follow the operator's answer",

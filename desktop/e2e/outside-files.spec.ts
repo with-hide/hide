@@ -14,10 +14,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { agentPane } from "../../web/e2e/agent-pane";
+import { chord } from "../../web/e2e/chords";
 import { runInPane } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
 import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 import { hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
@@ -57,7 +58,8 @@ test.afterEach(async () => {
 async function start(): Promise<{ page: Page; paneId: string; sent: string[] }> {
   const launched = await launchShell(run.env);
   app = launched.app;
-  await fitWindow(app, { width: 1024, height: 681 });
+  // Wide enough that a pane beside the standing desk still holds the longest temporary path on one row (D-50).
+  await fitWindow(app, { width: 1400, height: 681 });
   const page = launched.page;
   const sent: string[] = [];
   page.on("websocket", (socket) => socket.on("framesent", (frame) => sent.push(String(frame.payload))));
@@ -152,15 +154,35 @@ test("an outside image, text file and HTML page open read-only in the View with 
   for (const line of grants) expect(JSON.stringify(line)).not.toMatch(/shot\.png|notes\.txt|index\.html|hide-outside-/);
 });
 
+test("an outside file a shell's link opened is that shell's, and ⌘. with the keyboard on it puts the shell beside it (D-54)", async () => {
+  const notes = path.join(scratch!, "shell-notes.txt");
+  fs.writeFileSync(notes, ["shell owned", "second"].join("\n"));
+  const { page, paneId } = await start();
+  await printInPane(fixture, stack.daemon, page, paneId, [`txt ${notes}`, "END-SHELL-OUTSIDE"], "END-SHELL-OUTSIDE");
+
+  await click(page, paneId, notes);
+  const tab = outsideTab(page, "shell-notes.txt");
+  await expect(tab).toHaveAttribute("data-external", "held", { timeout: 20_000 }); // wait-ok: the host grants the file and the core places its tab
+  // The keyboard goes to the file's view, then ⌘. enters focus mode from there.
+  await page.locator("[data-external-text] .cm-content").click();
+  await page.keyboard.press(chord("pair_view"));
+  await expect(page.locator(`[data-pair-pane="${paneId}"]`)).toBeVisible();
+  await expect(page.locator(`[data-pair-layer="${paneId}"]`)).not.toHaveAttribute("data-pair-alone", "true");
+  await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /shell-notes\.txt/);
+  await screenshot(page, "outside-shell-focus");
+});
+
 test("a reload keeps outside tabs readable, and closing one ends its grant", async () => {
   const notes = path.join(scratch!, "kept.txt");
   fs.writeFileSync(notes, "kept across a reload");
   const gone = path.join(scratch!, "gone.txt");
   fs.writeFileSync(gone, "closed and let go");
   const { page, paneId } = await start();
-  await printInPane(fixture, stack.daemon, page, paneId, [`keep ${notes}`, `close ${gone}`, "END-RELOAD"], "END-RELOAD");
+  await printInPane(fixture, stack.daemon, page, paneId, [`keep ${notes}`, "END-KEEP"], "END-KEEP");
   await click(page, paneId, notes);
   await expect(outsideTab(page, "kept.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  // The desk stood up beside the pane, which reflowed; the next link is printed at the pane's new width (D-50).
+  await printInPane(fixture, stack.daemon, page, paneId, [`close ${gone}`, "END-RELOAD"], "END-RELOAD");
   await click(page, paneId, gone);
   await expect(outsideTab(page, "gone.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
 
@@ -258,6 +280,8 @@ test("hide file open and hide browser open of outside files open External tabs b
   fs.writeFileSync(report, "<!doctype html><title>Outside report</title><h1>Report</h1>");
   fs.mkdirSync(path.join(scratch!, "folder"));
   const { page, sent } = await start();
+  // An open from the operator's pane comes in front only while the lane is up (PRD lane-desk-pair-view B2).
+  await showExplorer(page);
 
   // An image opens in its viewer and an HTML page as a page of its own folder, each an External tab.
   expect(await shellHide(["file", "open", shot])).toMatchObject({ ok: true });

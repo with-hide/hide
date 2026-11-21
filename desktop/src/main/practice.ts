@@ -13,14 +13,14 @@ const CHAPTER_ID = /^[a-z0-9-]{1,32}$/;
 
 /**
  * The practice page on `origin` in `language`, opening on `chapter` when one
- * is asked for and on the chapter list otherwise, or why a request for it is
- * refused.
+ * is asked for (playing it, or with `show` on its card in the list) and on the
+ * chapter list otherwise, or why a request for it is refused.
  */
-export function practiceUrl(origin: string, language: unknown, platform: string, chapter?: unknown): string | { refused: "language" | "chapter" } {
+export function practiceUrl(origin: string, language: unknown, platform: string, chapter?: unknown, show = false): string | { refused: "language" | "chapter" } {
   if (!isInterfaceLanguage(language)) return { refused: "language" };
   if (chapter !== undefined && (typeof chapter !== "string" || !CHAPTER_ID.test(chapter))) return { refused: "chapter" };
   const url = new URL("/", origin);
-  url.search = new URLSearchParams({ practice: "1", lang: language, ...(chapter === undefined ? {} : { chapter }), host: "electron", platform }).toString();
+  url.search = new URLSearchParams({ practice: "1", lang: language, ...(chapter === undefined ? {} : { chapter }), ...(chapter !== undefined && show ? { show: "1" } : {}), host: "electron", platform }).toString();
   return url.href;
 }
 
@@ -29,9 +29,10 @@ const PRACTICE_SHARE = 0.85;
 
 /**
  * The narrowest practice window whose screen shows every part side by side:
- * chapter 1's device rail, sidebar, Agent Views at their 480 px and a docked
- * lane with its tool rail need about 1264 px, and a narrower window draws the
- * lane over the agents it is meant to sit beside.
+ * chapter 1's device rail, sidebar, Agent Views at their 480 px and the lane
+ * at its ideal width with its tool rail need about 1264 px, and a narrower
+ * window has the lane, drawn over the agents' right edge, cover the part of
+ * them the chapter points at.
  */
 const PRACTICE_MIN_WIDTH = 1280;
 

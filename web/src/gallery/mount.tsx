@@ -9,6 +9,7 @@ import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
 import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
+import { AutomationScreenScene, automationScreenSceneParams } from "./AutomationScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
 import { StartPanelScene } from "./StartPanelScene";
@@ -36,6 +37,7 @@ import { PrCardScene } from "./PrCardScene";
 import { PrListScene } from "./PrListScene";
 import { CloseTreeScene } from "./CloseTreeScene";
 import { ViewsCloseScene } from "./ViewsCloseScene";
+import { WhatsNewScene } from "./WhatsNewScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
 import { SharedPartsScene } from "./SharedPartsScene";
@@ -115,6 +117,11 @@ export function mountGallery(root: Root) {
       root.render(<StrictMode><CloseTreeScene params={params} /></StrictMode>);
       return;
     }
+    if (scene === "whats-new") {
+      document.title = "hide · What's new scene";
+      root.render(<StrictMode><WhatsNewScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "views-close") {
       document.title = "hide · Views close scene";
       root.render(<StrictMode><ViewsCloseScene params={params} /></StrictMode>);
@@ -180,6 +187,11 @@ export function mountGallery(root: Root) {
     // A scene seeds the app's own stores, so it is one document per scene.
     if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
+      return;
+    }
+    if (scene === "automation-screen") {
+      document.title = "hide · Automation screen scene";
+      root.render(<StrictMode><AutomationScreenScene {...automationScreenSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "mission-screen") {

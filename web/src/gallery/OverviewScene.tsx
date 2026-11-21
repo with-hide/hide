@@ -2,7 +2,7 @@
 // in the production screens over invented device data
 // (`overviewSceneData.ts`): the backlog with ⌘⇧M open, Projects after the
 // disk sweep, a session's record beside the tabs at Home, and an agent pane
-// whose head showed its record in the lane's 보기 slot. No daemon runs; the
+// whose head showed its record as a card tab on a desk. No daemon runs; the
 // isolated daemon tests own runtime policy.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -114,7 +114,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       }];
       rest.terminal = { headers: Object.fromEntries(checkout.tabs[0]!.panes.map((pane) => [pane.id, { working: pane.id !== "h-a1c2", notice: null, band: null }])) } as never;
       rest.workspace_view = {
-        device_id: "local", path: checkout.path, open: false, documents: false, tool: "project", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+        device_id: "local", path: checkout.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "project", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
         layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 32 }, display_count: 0 },
         agent_layout: { root: { area: { id: "g1", active: tabId, displays: [{ id: tabId }] } }, active_area: "g1", canvases: {}, limits: { areas: 6, depth: 3, displays: 16 }, display_count: 1 },
       } as never;

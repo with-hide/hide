@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { escapeConsumed } from "./components/ui/tooltip";
 
 // The pick a work page's map keeps, shared by a mission's page and a plan's
 // (PRD mission-map-git-criteria B30, B34): one card picked at a time, its
@@ -35,7 +36,7 @@ export function useMapPick(keys: readonly string[], cardSelector: string): MapPi
     if (key) requestAnimationFrame(() => panel.current?.scrollIntoView?.({ block: "nearest" }));
   }, []);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented || !selected) return;
+    if (event.key !== "Escape" || escapeConsumed(event) || !selected) return;
     event.preventDefault();
     setPicked(null);
   };

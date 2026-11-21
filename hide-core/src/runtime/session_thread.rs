@@ -14,8 +14,8 @@
 //!
 //! Input goes only to the pane the thread was opened for, while it still
 //! runs that session, as the phone's reply does: the node's input permit,
-//! the sleep gate, then the engine's `submit_text` (the engine's
-//! `pane.send_input` with Enter).
+//! the sleep gate, then the engine's `prompt_agent`, which types the words as
+//! a letter's bell is typed.
 
 use super::*;
 use crate::delivery::ledger::Ledger;
@@ -530,7 +530,12 @@ impl Runtime {
                 // their permit or the pane's admission: ask once more, last.
                 still()?;
                 engine
-                    .submit_text(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
+                    .prompt_agent(
+                        crate::engine::Wait::Each(SEND_TIMEOUT),
+                        &raw_pane,
+                        &text,
+                        crate::engine::PromptBy::Operator,
+                    )
                     .map_err(|error| match error {
                         crate::engine::EngineError::Refused { code, .. }
                             if code.contains("not_found") =>
@@ -1499,7 +1504,7 @@ mod tests {
         let terminals = Arc::new(GrantingTerminals::default());
         runtime.set_terminals(Arc::clone(&terminals) as _);
         let fake = crate::engine::fake::FakeEngine::start(|method, _| {
-            assert_eq!(method, "submit_text");
+            assert_eq!(method, "prompt_agent");
             crate::engine::fake::reply(())
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
@@ -1518,11 +1523,14 @@ mod tests {
             text: "이거 봐줘".to_owned(),
             paths: vec![file.clone()],
         });
-        let sent = fake.calls_of("submit_text");
+        let sent = fake.calls_of("prompt_agent");
         assert_eq!(sent.len(), 1, "{sent:?}");
         let params = &sent[0];
-        assert_eq!(params["pane"], "w1:p1");
+        assert_eq!(params["target"], "w1:p1");
         assert_eq!(params["text"], format!("\"{file}\" 이거 봐줘"));
+        // The operator's words may answer a question on screen, so a blocked
+        // agent does not refuse them as it refuses a letter.
+        assert_eq!(params["by"], "Operator");
         assert_eq!(
             terminals.permits.lock().unwrap().as_slice(),
             &[(
@@ -1550,7 +1558,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert_eq!(fake.calls_of("submit_text").len(), 1);
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1);
         assert_eq!(
             thread(&runtime)
                 .input
@@ -1567,7 +1575,7 @@ mod tests {
         let mut runtime = runtime(&node);
         runtime.set_terminals(Arc::new(GrantingTerminals::default()) as _);
         let fake = crate::engine::fake::FakeEngine::start(|method, _| {
-            assert_eq!(method, "submit_text");
+            assert_eq!(method, "prompt_agent");
             crate::engine::fake::refused("pane_not_found", "no such pane")
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
@@ -1593,7 +1601,7 @@ mod tests {
 
         // The core still sees the pane, the engine does not.
         send(&mut runtime);
-        assert_eq!(fake.calls_of("submit_text").len(), 1);
+        assert_eq!(fake.calls_of("prompt_agent").len(), 1);
         assert_eq!(refusal(&runtime), gone);
 
         // The engine's next read has no such pane.
@@ -1603,7 +1611,7 @@ mod tests {
         assert_eq!(thread(&runtime).pane, ThreadPane::Gone);
         send(&mut runtime);
         assert_eq!(
-            fake.calls_of("submit_text").len(),
+            fake.calls_of("prompt_agent").len(),
             1,
             "a closed pane is not asked"
         );
@@ -1623,7 +1631,7 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         runtime.set_terminals(Arc::clone(&terminals) as _);
         let fake = crate::engine::fake::FakeEngine::start(|method, _| {
-            assert_eq!(method, "submit_text");
+            assert_eq!(method, "prompt_agent");
             crate::engine::fake::reply(())
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&fake));
@@ -1658,9 +1666,9 @@ mod tests {
                 .is_some_and(|input| input.state != ThreadInputState::Sending)
         });
         assert!(
-            fake.calls_of("submit_text").is_empty(),
+            fake.calls_of("prompt_agent").is_empty(),
             "{:?}",
-            fake.calls_of("submit_text")
+            fake.calls_of("prompt_agent")
         );
         assert_eq!(
             thread(&shared.lock().unwrap())
@@ -1694,7 +1702,7 @@ mod tests {
             text: "계속".to_owned(),
             paths: Vec::new(),
         });
-        assert!(fake.calls_of("submit_text").is_empty());
+        assert!(fake.calls_of("prompt_agent").is_empty());
         assert_eq!(
             thread(&runtime)
                 .input
@@ -1720,7 +1728,7 @@ mod tests {
         });
         crate::runtime::delivery::tests::set_live(&mut runtime, Some(&local));
         let device = crate::engine::fake::FakeEngine::start(|method, _| {
-            assert_eq!(method, "submit_text");
+            assert_eq!(method, "prompt_agent");
             crate::engine::fake::reply(())
         });
         runtime
@@ -1762,9 +1770,9 @@ mod tests {
             text: "계속해".to_owned(),
             paths: Vec::new(),
         });
-        let sent = device.calls_of("submit_text");
+        let sent = device.calls_of("prompt_agent");
         assert_eq!(sent.len(), 1, "{sent:?}");
-        assert_eq!(sent[0]["pane"], "w1:p1");
+        assert_eq!(sent[0]["target"], "w1:p1");
         assert_eq!(sent[0]["text"], "계속해");
         assert_eq!(
             terminals.permits.lock().unwrap().as_slice(),
@@ -1804,6 +1812,7 @@ mod tests {
                 ended,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             }
         };
         let ledger = Ledger {

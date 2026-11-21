@@ -49,7 +49,7 @@ export function MissionScreenScene({ theme, scale, content, state, window }: Mis
       const node = held?.nodes.find((one) => one.status === "planned");
       const delayed = missions.find((mission) => mission !== held && (mission.status === "running" || mission.status === "planning") && !mission.decision);
       if (!node || !delayed) throw new Error("held scene needs a running mission with a planned node and another open one");
-      node.hold = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 3_600_000 - 60_000 };
+      node.wait = { why: "아침에 실기기로 확인", until_unix_ms: now + 9 * 3_600_000 - 60_000, mission: false };
       delayed.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
       delayed.delay_until_unix_ms = now + 40 * 60_000;
     }

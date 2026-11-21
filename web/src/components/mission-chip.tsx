@@ -12,7 +12,7 @@ import { Hint } from "./ui/tooltip";
 /**
  * The Conductor row's mission mark (PRD software-factory-conductor B14): the
  * mission it conducts as `미션 n/m`, its plan or its merge wait; pressing it
- * opens the map in the lane's 보기 slot. Its face is the mission icon and,
+ * opens the map as a card tab on a desk. Its face is the mission icon and,
  * while it runs, `n/m`; its words move to its hint and name. Its colour is the
  * map's state colour (PRD mission-plan-visibility B35, D-23); the operator's
  * turn, a decision or a node raised to them, adds `!` before it

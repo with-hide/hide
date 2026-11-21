@@ -8,12 +8,12 @@ use hide_platform::fs::identity::{self, FileId};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
-    PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode,
-    PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView, ThemePreference,
-    UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
-    default_pane_text_scale, default_panel_visible, default_sidebar_width,
-    default_terminal_font_size, practice_chapter_id_valid,
+    AgentLogoMode, ColorTheme, DeviceRegistration, OverviewGraphChoices, PRACTICE_CHAPTER_LIMIT,
+    PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode, PracticeProgress,
+    RightPanelSection, SidebarLens, SidebarProject, TaskView, ThemePreference, UiStateSnapshot,
+    WorkspaceRegistration, default_accent_hex, default_font_size, default_pane_text_scale,
+    default_panel_visible, default_sidebar_width, default_terminal_font_size,
+    practice_chapter_id_valid,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;
@@ -93,20 +93,21 @@ struct StoredUiState {
     practice: Option<serde_json::Value>,
     #[serde(default)]
     practice_invite_closed: bool,
-    /// Kept as JSON so a slot this build cannot read loads empty instead of
-    /// making the whole store unreadable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// An older build's 보기 slots, read once to move their cards onto
+    /// trays (PRD lane-desk-pair-view D-18) and never written again: the
+    /// slot in front (`detail`, for the pane `detail_pane`) and the slots of
+    /// the panes not in front (`detail_panes`). Kept as JSON and read item
+    /// by item, so a card this build cannot read is left out and the rest
+    /// still move.
+    #[serde(default, skip_serializing)]
     detail: Option<serde_json::Value>,
-    /// The pane `detail` belongs to, and the slots of the panes not in
-    /// front, the one seen longest ago first. The per-tab slots earlier
-    /// builds kept (`detail_home`, `detail_tabs`) are not read: their front
-    /// slot loads as `detail` and goes to the pane in front, the other tabs'
-    /// are dropped and leave the file on the next write (operator decision
-    /// 2026-11-09).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     detail_pane: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     detail_panes: Option<serde_json::Value>,
+    /// The cards still moving onto their pane's tray, while any are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    moving_cards: Option<serde_json::Value>,
     /// Kept as JSON and read record by record
     /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
     /// read is left out and the rest of the store still loads.
@@ -357,6 +358,77 @@ pub enum LoadDisposition {
     Corrupt,
 }
 
+/// The cards of an older build's 보기 slots, and of an earlier move this
+/// build has not finished, each with the pane whose tray takes it (PRD
+/// lane-desk-pair-view D-18). A card that does not read is left out and says
+/// so; the rest move.
+fn moving_cards(
+    front: Option<serde_json::Value>,
+    front_pane: Option<String>,
+    kept: Option<serde_json::Value>,
+    moving: Option<serde_json::Value>,
+    unrecognized: &mut Vec<UnrecognizedField>,
+) -> Vec<crate::model::MovingCards> {
+    let mut unread = false;
+    let slot = |pane: Option<String>, value: &serde_json::Value, unread: &mut bool| {
+        let cards = value
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let card = serde_json::from_value(item.clone()).ok();
+                        *unread |= card.is_none();
+                        card
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let shown = value
+            .get("shown")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        (!cards.is_empty()).then_some(crate::model::MovingCards { pane, cards, shown })
+    };
+    let mut out = Vec::new();
+    if let Some(front) = &front {
+        out.extend(slot(front_pane, front, &mut unread));
+    }
+    if let Some(serde_json::Value::Array(slots)) = &kept {
+        for held in slots {
+            let pane = held
+                .get("pane")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            match (pane, held.get("slot")) {
+                (Some(pane), Some(value)) => out.extend(slot(Some(pane), value, &mut unread)),
+                _ => unread = true,
+            }
+        }
+    }
+    if let Some(moving) = moving {
+        match serde_json::from_value::<Vec<crate::model::MovingCards>>(moving) {
+            Ok(moving) => out.extend(moving.into_iter().filter(|held| !held.cards.is_empty())),
+            Err(_) => unread = true,
+        }
+    }
+    if unread {
+        unrecognized.push(UnrecognizedField::Detail);
+    }
+    // What an older build's slots held at most: 20 cards each, the front
+    // slot and 64 kept ones. A file past that was not written by Hide; the
+    // move keeps the newest cards within it.
+    const SLOT_CARDS: usize = 20;
+    const SLOTS: usize = 65;
+    out.truncate(SLOTS);
+    for held in &mut out {
+        let older = held.cards.len().saturating_sub(SLOT_CARDS);
+        held.cards.drain(..older);
+    }
+    out
+}
+
 /// A stored appearance field whose value this build does not know.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnrecognizedField {
@@ -375,7 +447,7 @@ pub enum UnrecognizedField {
     SidebarProject,
     /// Practice-mode progress; the chapters that read loaded.
     Practice,
-    /// The lane's 보기 slot; it loaded empty.
+    /// A card of an older build's 보기 slot; the cards that read move.
     Detail,
     /// Records of the Overview map's choices; the ones that read loaded.
     OverviewGraph,
@@ -626,40 +698,13 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             practice
         }
     };
-    let detail = match stored.detail {
-        None => DetailSlot::default(),
-        Some(value) => serde_json::from_value::<DetailSlot>(value)
-            .ok()
-            .filter(|slot| slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT)
-            .unwrap_or_else(|| {
-                unrecognized.push(UnrecognizedField::Detail);
-                DetailSlot::default()
-            }),
-    };
-    // One slot this build cannot read drops alone; the others still load,
-    // the newest up to the cap.
-    let detail_panes = match stored.detail_panes {
-        None => crate::model::PaneDetailSlots::default(),
-        Some(serde_json::Value::Array(slots)) => {
-            let mut kept = crate::model::PaneDetailSlots::default();
-            for value in slots {
-                match serde_json::from_value::<crate::model::PaneDetailSlot>(value)
-                    .ok()
-                    .filter(|held| held.slot.items.len() <= crate::model::DETAIL_HISTORY_LIMIT)
-                {
-                    Some(held) => {
-                        kept.keep(held.pane, held.slot);
-                    }
-                    None => unrecognized.push(UnrecognizedField::Detail),
-                }
-            }
-            kept
-        }
-        Some(_) => {
-            unrecognized.push(UnrecognizedField::Detail);
-            crate::model::PaneDetailSlots::default()
-        }
-    };
+    let moving_cards = moving_cards(
+        stored.detail,
+        stored.detail_pane,
+        stored.detail_panes,
+        stored.moving_cards,
+        &mut unrecognized,
+    );
     let overview_graph = match stored.overview_graph {
         None => OverviewGraphChoices::default(),
         Some(value) => match OverviewGraphChoices::read_stored(value) {
@@ -761,9 +806,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             sidebar_project,
             practice,
             practice_invite_closed: stored.practice_invite_closed,
-            detail,
-            detail_pane: stored.detail_pane,
-            detail_panes,
+            moving_cards,
             overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
@@ -952,11 +995,12 @@ pub fn save(
             serde_json::to_value(&state.practice).expect("practice progress serializes"),
         ),
         practice_invite_closed: state.practice_invite_closed,
-        detail: (state.detail != DetailSlot::default())
-            .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
-        detail_pane: state.detail_pane.clone(),
-        detail_panes: (!state.detail_panes.is_empty())
-            .then(|| serde_json::to_value(&state.detail_panes).expect("the 보기 slots serialize")),
+        detail: None,
+        detail_pane: None,
+        detail_panes: None,
+        moving_cards: (!state.moving_cards.is_empty()).then(|| {
+            serde_json::to_value(&state.moving_cards).expect("the moving cards serialize")
+        }),
         overview_graph: Some(
             serde_json::to_value(&state.overview_graph)
                 .expect("the Overview map's choices serialize"),
@@ -1845,15 +1889,15 @@ mod tests {
         assert_eq!(unreadable.task_view, TaskView::Project);
     }
 
-    /// PRD sidebar-task-lens B3, D-25, D-48, D-50: the sidebar's lens, the
-    /// 태스크 view option and the 보기 slot survive a relaunch; a store
-    /// written before them opens on the projects, by state, with an empty
-    /// slot; a value this build does not know loads the same way and says so.
+    /// PRD sidebar-task-lens B3, D-25, D-48: the sidebar's lens and the 태스크
+    /// view option survive a relaunch; a store written before them opens on
+    /// the projects, by state; a value this build does not know loads the
+    /// same way and says so.
     #[test]
-    fn the_lens_view_option_and_detail_slot_survive_a_relaunch() {
+    fn the_lens_and_view_option_survive_a_relaunch() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("state.json");
-        let mut state = UiStateSnapshot {
+        let state = UiStateSnapshot {
             sidebar_lens: SidebarLens::Tasks,
             task_view: TaskView::Project,
             sidebar_project: Some(SidebarProject {
@@ -1863,26 +1907,13 @@ mod tests {
             sessions_expanded_agent_pane_ids: vec!["w1:p1".to_owned()],
             ..UiStateSnapshot::default()
         };
-        state.detail.open(crate::model::DetailItem::PullRequest {
-            workspace_id: "workspace:alpha".to_owned(),
-            number: 7,
-        });
-        state.detail_pane = Some("w1:p1".to_owned());
-        let mut other = DetailSlot::default();
-        other.open(crate::model::DetailItem::Cost {
-            workspace_id: "workspace:alpha".to_owned(),
-        });
-        state.detail_panes.keep("w1:p2".to_owned(), other);
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the lens");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
-        assert_eq!(restored.detail_pane, state.detail_pane);
-        assert_eq!(restored.detail_panes, state.detail_panes);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
         assert_eq!(restored.sidebar_project, state.sidebar_project);
         assert_eq!(restored.sessions_expanded_agent_pane_ids, ["w1:p1"]);
-        assert_eq!(restored.detail, state.detail);
 
         let older = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null}"#;
         let (older_state, _sizes, older_disposition) = decode(older);
@@ -1890,74 +1921,64 @@ mod tests {
         assert_eq!(older_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(older_state.task_view, TaskView::Status);
         assert_eq!(older_state.sidebar_project, None);
-        assert_eq!(older_state.detail, DetailSlot::default());
-        assert_eq!(
-            (older_state.detail_pane, older_state.detail_panes.len()),
-            (None, 0)
-        );
+        assert!(older_state.moving_cards.is_empty());
+    }
 
-        let unknown = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
-            "sidebar_lens":"sessions","task_view":"status","detail":{"items":[{"kind":"tab"}],"shown":true}}"#;
-        let (unknown_state, _sizes, unknown_disposition) = decode(unknown);
+    /// PRD lane-desk-pair-view D-18, B34, B35: an older build's 보기 slots,
+    /// the one in front and each pane's, load as cards moving onto their
+    /// pane's tray, a card that does not read left out and said; the slot
+    /// fields are never written again, and cards not moved yet are kept in
+    /// their own field until they are.
+    #[test]
+    fn an_older_slot_loads_as_cards_moving_to_their_panes_tray_and_is_not_written_again() {
+        use crate::model::{DetailItem, MovingCards};
+        let older = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+            "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"tab"}],"shown":true},
+            "detail_pane":"w1:p1",
+            "detail_panes":[{"pane":"w1:p2","slot":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":false}}]}"#;
+        let (state, _sizes, disposition) = decode(older);
         assert_eq!(
-            unknown_disposition,
-            LoadDisposition::Unrecognized(vec![
-                UnrecognizedField::SidebarLens,
-                UnrecognizedField::Detail
-            ])
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::Detail])
         );
-        assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
-        assert_eq!(unknown_state.detail, DetailSlot::default());
-
-        // A mission's card in a slot, the front one's or a pane's, loads as
-        // it was saved, between the other items (operator decision
-        // 2026-11-09, replacing PRD mission-screen B20).
-        let with_mission = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
-            "detail":{"items":[{"kind":"pull_request","workspace_id":"w","number":7},{"kind":"mission","mission":"mission-3"}],"shown":true},
-            "detail_panes":[{"pane":"w1:p2","slot":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}]}"#;
-        let (mission_state, _sizes, mission_disposition) = decode(with_mission);
-        assert_eq!(mission_disposition, LoadDisposition::Loaded);
         assert_eq!(
-            mission_state.detail,
-            DetailSlot {
-                items: vec![
-                    crate::model::DetailItem::PullRequest {
+            state.moving_cards,
+            vec![
+                MovingCards {
+                    pane: Some("w1:p1".into()),
+                    cards: vec![DetailItem::PullRequest {
                         workspace_id: "w".into(),
                         number: 7
-                    },
-                    crate::model::DetailItem::Mission {
-                        mission: "mission-3".into()
-                    },
-                ],
-                shown: true,
-            }
-        );
-        assert_eq!(
-            mission_state.detail_panes.0[0].slot.items,
-            vec![crate::model::DetailItem::Mission {
-                mission: "mission-4".into()
-            }]
+                    }],
+                    shown: true,
+                },
+                MovingCards {
+                    pane: Some("w1:p2".into()),
+                    cards: vec![DetailItem::Mission {
+                        mission: "mission-4".into()
+                    }],
+                    shown: false,
+                },
+            ]
         );
 
-        // An earlier build's per-tab slots: the front one loads for the pane
-        // in front to take, the other tabs' are dropped, and the store still
-        // loads whole (operator decision 2026-11-09).
-        let per_tab = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
-            "detail":{"items":[{"kind":"mission","mission":"mission-41"}],"shown":true},
-            "detail_home":"w1:t1",
-            "detail_tabs":{"w1:t2":{"items":[{"kind":"mission","mission":"mission-4"}],"shown":true}}}"#;
-        let (per_tab_state, _sizes, per_tab_disposition) = decode(per_tab);
-        assert_eq!(per_tab_disposition, LoadDisposition::Loaded);
-        assert_eq!(
-            per_tab_state.detail.items,
-            vec![crate::model::DetailItem::Mission {
-                mission: "mission-41".into()
-            }]
-        );
-        assert_eq!(
-            (per_tab_state.detail_pane, per_tab_state.detail_panes.len()),
-            (None, 0)
-        );
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        save(&path, &state, &PaneTerminalSizes::new()).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for retired in ["detail", "detail_pane", "detail_panes"] {
+            assert!(written.get(retired).is_none(), "{retired} is not written");
+        }
+        let (reloaded, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(reloaded.moving_cards, state.moving_cards);
+
+        let moved = UiStateSnapshot::default();
+        save(&path, &moved, &PaneTerminalSizes::new()).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.get("moving_cards").is_none());
     }
 
     /// Practice-mode progress survives a relaunch; a store written before it

@@ -175,6 +175,18 @@ Follow the skill's verification prerequisites, and use its `screenshots` command
 Write the issue it finishes on the `Closes #N` line and nothing else there; a big issue split across several pull requests gets one sub-issue per piece, and each pull request closes its own.
 `Related:` names only the PRD path and the pull requests this one follows or depends on, because Hide and GitHub relate a pull request to an issue only through a closing keyword.
 
+### A main feature brings its practice and its scene
+
+A feature a release will name among its main features, a new screen or a new way of working rather than a fix or a tweak, is shown once to everyone who updates, in the What's new window ([docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md#whats-new-and-update-history)).
+What makes them want to try it is seeing the feature itself work and trying it right there, so its pull request brings both:
+
+- Its scene, `web/src/components/whats-new-scenes/<name>.tsx`, listed in that folder's `index.ts` and in `RELEASE_DRAWINGS` (`web/src/releases.ts`): the feature's real screen at its real size, from its own parts and words, playing one short loop of example work from the first press to the result, with a still moment for the gallery and reduced motion.
+- Its practice chapter, `web/src/practice/chapters/<id>.ts`, which the window's `Try it` (`체험하기`) opens, with `since` set to the version it ships in.
+
+Both are app code, so they must be merged before the release candidate is cut; the release itself only writes the version's words in `web/src/releases.json` and names the scene and the chapter there.
+A feature merged without them ships with a practice card's move for its drawing and no `Try it`, and the release's draft says so.
+Check the scene in the gallery (`/gallery?scene=whats-new&version=<version>&state=dialog`) with the entry that names it, and put its capture in the pull request.
+
 ### Waiting for CI
 
 An agent that waits for a run, a pull request's `verify` or main's push run after a merge, keeps a background watch on it; a turn never ends on "CI is running" with nothing watching, and never waits in a foreground `sleep` loop.

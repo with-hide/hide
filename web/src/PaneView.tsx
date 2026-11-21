@@ -1,10 +1,10 @@
 import { paneMoveStartTarget } from "./paneMove";
 import { usePaneMove } from "./PaneMoveControls";
-import { useKeyboardOwner } from "./viewFocus";
+import { keyboardCommandOwner, keyboardInputRevision, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
-import { CircleAlertIcon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
@@ -17,16 +17,19 @@ import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
 import { PaneLetterButton } from "./components/letter-mark";
 import { LookButton, StatusMark } from "./components/status-mark";
+import { Separator } from "./components/ui/separator";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
 import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { ToolMark } from "./components/tool-mark";
-import { PaneViews } from "./ViewComments";
+import { PaneViews, usePaneViewRows } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
-import { AncestorPath, usePaneMenu, type TerminalMenuContext } from "./PaneRelations";
+import { AncestorPath, usePaneMenu, type PaneHeadOffer, type TerminalMenuContext } from "./PaneRelations";
+import { workspaceViewOf } from "./workspace";
+import { pairCellShown, pairLabelKey, pairOffer } from "./pairView";
 import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -161,7 +164,10 @@ export const PaneView = memo(function PaneView({
   paneCount,
   zoomed,
   local = true,
+  keysStayOnDesk = false,
+  entryInput = null,
   offline = false,
+  owned = false,
 }: {
   pane: PaneRow;
   transport: TerminalPane | undefined;
@@ -182,8 +188,14 @@ export const PaneView = memo(function PaneView({
   zoomed: boolean;
   /** False for a pane on a selected SSH device. */
   local?: boolean;
+  /** Pair view's left pane taken while pair view was on screen: a desk the keys are on keeps them (D-09). */
+  keysStayOnDesk?: boolean;
+  /** For the pane focus mode was asked for: the keyboard's input count then; arriving, it takes the keys only while the operator has not moved them since (`pairEntryInput`). */
+  entryInput?: number | null;
   /** True while that device's connection is down. */
   offline?: boolean;
+  /** True where a screen owns the pane's life, as an automation's run terminal (PRD automations B16): its head carries no ⋯ menu and no ✕. */
+  owned?: boolean;
 }) {
   const { t } = useInterfaceTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -199,7 +211,7 @@ export const PaneView = memo(function PaneView({
   const paneId = pane.id;
   const owner = useKeyboardOwner();
   const input = owner.kind === "pane" && owner.paneId === paneId;
-  // The grip, `@` and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
+  // The grip, ◧ and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
   const tools = input ? "" : "opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100";
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
@@ -210,7 +222,12 @@ export const PaneView = memo(function PaneView({
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
-  const paneMenu = usePaneMenu(pane, title, actions);
+  // What ◧ offers for this pane (`pairOffer`), which the head's split button and the menus read (PRD lane-desk-pair-view B19, D-43, D-53).
+  const pair = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
+  const head: PaneHeadOffer = { mention: Boolean(agentKind), pair };
+  // `@` is an item of the pane menu (D-32, B21); its list opens under the `…`.
+  const [mention, setMention] = useState(false);
+  const paneMenu = usePaneMenu(pane, title, actions, head, () => setMention(true));
 
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
@@ -306,8 +323,14 @@ export const PaneView = memo(function PaneView({
     // operator is typing into a palette opened since. The palette hands the
     // keyboard back to the focused pane when it closes (`restoreFocus`).
     if (document.activeElement?.closest("[data-palette]")) return;
+    // A desk tab the operator chose in pair view takes its agent's pane to the left and makes it the tab's keyboard
+    // pane, so pane commands reach the pane on screen; the keys stay on the desk where the operator pressed. An entry
+    // mounts the pair layer anew, so it is never this case and the pane takes the keys.
+    if (keysStayOnDesk && keyboardCommandOwner().kind === "view") return;
+    // Focus mode arrives with the core's answer: a desk tab or page the operator pressed after asking keeps the keys.
+    if (entryInput !== null && keyboardInputRevision() !== entryInput) return;
     focusTerminal(paneId);
-  }, [paneId, focused, snapshotIncludesLastClick]);
+  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk, entryInput]);
 
   // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
   // runs in the capture phase, before xterm's textarea sees the event.
@@ -381,7 +404,7 @@ export const PaneView = memo(function PaneView({
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          paneMenu.openAt(event.clientX, event.clientY);
+          if (!owned) paneMenu.openAt(event.clientX, event.clientY);
         }}
       >
         {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
@@ -438,17 +461,22 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <span className="contents pane-head-tight:hidden"><PanePrChip paneId={paneId} actions={actions} /></span> : null}
         {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
         {/* The views chip gives way below the tight breakpoint too: the View area already shows what it lists. The ask and the letters after it stay, since the operator acts on them here. */}
-        {agentKind ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={title} actions={actions} /></span> : null}
+        {/* The views chip and ◧ are one two-cell button (D-43): the left cell lists what the pane's agent opened and what the
+            operator opened from its terminal's links, a shell's included (D-54), the right puts the pane beside its desk, filled
+            with the pair view accent while pressed. A pane with nothing to show draws neither. Below the tight breakpoint the
+            views cell gives way, below the narrow one ◧ too, which the pane menu then holds; its hint carries ⌘. */}
+        <PaneSplit paneId={paneId} name={title} actions={actions} />
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
-        {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneOpenAsksMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>
+        {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
+            always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
+        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
-        {/* A narrow pane draws neither `@` nor zoom: zoom waits in the pane menu, and `@` comes back as the pane widens. */}
-        {agentKind ? <PaneMention paneId={paneId} actions={actions} className={`${tools} pane-head-narrow:hidden`} /> : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
@@ -469,7 +497,10 @@ export const PaneView = memo(function PaneView({
               {hidden > 0 ? <span>+{hidden}</span> : null}
             </Button>
           </Hint>
-        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        ) : null}
+        {owned ? null : (
+        <>
+        <PaneMention paneId={paneId} actions={actions} open={mention} setOpen={setMention} anchor={
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"
@@ -491,12 +522,15 @@ export const PaneView = memo(function PaneView({
             <EllipsisIcon />
           </Button>
         </Hint>
+        } />
         <Hint label={t("panes.close", { name: title })}>
           <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
           </Button>
         </Hint>
         {paneMenu.menu}
+        </>
+        )}
       </header>
       <div className="h-[var(--size-hairline)] shrink-0 bg-border" />
       <div className="relative min-h-0 flex-1">
@@ -540,3 +574,43 @@ export const PaneView = memo(function PaneView({
     </section>
   );
 });
+
+/**
+ * The pane head's views chip and ◧ as one button of two cells (PRD
+ * lane-desk-pair-view D-43, B19, B20). ◧ is drawn on a pane with a View to
+ * show (its agent's, or one opened from its links, D-54) and, pressed, on
+ * the pane pair view draws; every other pane
+ * enters pair view from ⌘. and its menus, so its head stays quiet (D-53).
+ */
+function PaneSplit({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const offer = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
+  const cell = useShellStore((s) => pairCellShown(workspaceViewOf(s.rest), paneId));
+  const views = usePaneViewRows(paneId).length > 0;
+  if (!views && !cell) return null;
+  const label = t(pairLabelKey(offer));
+  const pressed = offer === "on";
+  return (
+    // Drawn like the head's other icons, with no box (D-48): two ghost cells and one hairline between them, only the
+    // hovered cell filled and ◧ pressed in the pair view accent. Below the narrow breakpoint both cells give way.
+    <span data-pane-split={paneId} className="flex shrink-0 items-center gap-xxs pane-head-narrow:hidden">
+      {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
+      {views && cell ? <Separator orientation="vertical" className="data-[orientation=vertical]:h-(--size-icon) pane-head-tight:hidden" data-pane-split-line="true" /> : null}
+      {cell ? (
+        <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            aria-label={label}
+            aria-pressed={pressed}
+            data-pane-pair={offer}
+            onClick={() => actions.togglePairView(paneId)}
+          >
+            <Columns2Icon aria-hidden="true" />
+          </Button>
+        </Hint>
+      ) : null}
+    </span>
+  );
+}

@@ -583,6 +583,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: vec![checkout(id, last_commit_unix_seconds, pane_ids)],
             pinned: false,
+            unlisted: false,
             inactive_checkouts: InactiveCheckoutGroupSnapshot::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -614,6 +615,7 @@ mod tests {
                 label: None,
                 empty: pane_ids.is_empty(),
                 delegated: false,
+                automation: false,
                 panes: pane_ids
                     .iter()
                     .map(|pane_id| PaneSnapshot {

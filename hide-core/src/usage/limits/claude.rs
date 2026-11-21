@@ -172,12 +172,33 @@ fn parse_text(text: &str, now_s: u64) -> Result<LimitReading, Cause> {
         }
     }
     if !recognized {
-        return Err(Cause::SignedOut);
+        return Err(text_without_windows(text));
     }
     if valid_lines == 0 {
         return Err(Cause::FormatChanged);
     }
     complete(LimitSource::ClaudeUsage, windows, now_s)
+}
+
+/// Why `/usage` printed no `Current …` line. The summary a CLI with no
+/// subscription sign-in prints (its `Total duration (API):` line, under
+/// `Total cost:` in 2.1.274 and `Estimated cost:` in 2.1.329) is the one answer that
+/// says the account is signed out; any other text, an empty one included,
+/// is not known, and its shape alone, never its words, goes to the log so
+/// the next one can be named.
+fn text_without_windows(text: &str) -> Cause {
+    let summary = text
+        .lines()
+        .any(|line| line.trim_start().starts_with("Total duration (API):"));
+    if summary {
+        return Cause::SignedOut;
+    }
+    crate::diagnostic!(serde_json::json!({
+        "component": "usage", "kind": "claude_usage_text_unrecognized",
+        "chars": text.chars().count(),
+        "lines": text.lines().filter(|line| !line.trim().is_empty()).count(),
+    }));
+    Cause::FormatChanged
 }
 
 /// One `Current week …` line, as printed: `Current week (<scope>): <n>%

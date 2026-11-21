@@ -68,6 +68,8 @@ impl Device {
                     .chain(agent_home_variables().into_iter().map(|(name, _)| name))
                     .map(|name| (name, self.home().join("account").join(name))),
             )
+            // What sshd sets for the commands of a session.
+            .envs(SSH_SESSION_VARIABLES.map(|name| (name, "192.0.2.1 50000 192.0.2.2 22")))
             .env("TMPDIR", self.tmp())
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
@@ -545,22 +547,27 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
 }
 
 /// B24: the helper starts in place of the script, on the same pipes, with
-/// the home folders the registration names.
+/// the home folders the registration names, and outside the ssh session the
+/// connection is (with-hide/hide#2776).
 #[test]
 fn the_helper_starts_on_the_same_pipes_with_the_chosen_homes() {
     let device = Device::new();
-    // It names each folder variable it was started with, and each agent's
-    // home.
-    let moved: String = HOME_FOLDER_VARIABLES
-        .iter()
-        .map(|name| format!("${{{name}+ {name}}}"))
-        .collect();
+    // It names each folder variable it was started with, each agent's home
+    // and each of the ssh session's variables.
+    let named = |names: &[&str]| -> String {
+        names
+            .iter()
+            .map(|name| format!("${{{name}+ {name}}}"))
+            .collect()
+    };
+    let moved = named(HOME_FOLDER_VARIABLES);
+    let session = named(&SSH_SESSION_VARIABLES);
     let agents: String = agent_home_variables()
         .iter()
         .map(|(name, _)| format!(" ${{{name}:-}}"))
         .collect();
     let helper = format!(
-        "#!/bin/sh\necho \"args:$*\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\necho \"agents:{agents}\"\n"
+        "#!/bin/sh\necho \"args:$*\"\necho \"home:$HOME pwd:$(pwd -P)\"\necho \"moved:{moved}\"\necho \"agents:{agents}\"\necho \"session:{session}\"\n"
     );
     let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, &helper);
     let mut pipe = device.connect("");
@@ -597,6 +604,7 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_homes() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("agents:{account}")
     );
+    assert_eq!(pipe.line(soon()).unwrap(), b"session:");
 
     // A home of the node's own (`HIDE_DEV_DEVICE_HOME`) takes the account's
     // place, made private where it was missing, none of the account's
@@ -630,6 +638,7 @@ fn the_helper_starts_on_the_same_pipes_with_the_chosen_homes() {
         String::from_utf8(pipe.line(soon()).unwrap()).unwrap(),
         format!("agents:{agents}")
     );
+    assert_eq!(pipe.line(soon()).unwrap(), b"session:");
     assert_eq!(mode(&made), 0o700);
     for (_, folder) in agent_home_variables() {
         assert_eq!(mode(&made.join(&folder)), 0o700, "{folder}");

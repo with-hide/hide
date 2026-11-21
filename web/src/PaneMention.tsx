@@ -1,66 +1,48 @@
-import { AtSignIcon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentReference, mentionCandidates } from "./agentReference";
-import { Button } from "./components/ui/button";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "./components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
-import { Hint } from "./components/ui/tooltip";
+import { useReturnFocus } from "./components/ui/layer";
+import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { allAgents } from "./paneAgents";
 import { useShellStore } from "./store";
 import { focusTerminal, typeReference } from "./terminals";
 
 /**
- * An agent pane's @: the other agents on its device, found by name or task,
- * and the one chosen typed into this pane's prompt as its reference, with no
- * Enter, so the operator only adds what to say. The list is read when it
- * opens; choosing hands the keyboard to this pane's terminal, and Escape back
- * to the @.
+ * An agent pane's @, an item of its pane menu (PRD lane-desk-pair-view
+ * D-32, B21): the other agents on its device, found by name or task, and the
+ * one chosen typed into this pane's prompt as its reference, with no Enter,
+ * so the operator only adds what to say. The list opens under `anchor`, the
+ * menu's `…` button, and is read when it opens; choosing hands the keyboard
+ * to this pane's terminal, and Escape back to the `…`; a press elsewhere
+ * keeps the keyboard where it landed (`useReturnFocus`).
  */
-export function PaneMention({ paneId, actions, className = "" }: { paneId: string; actions: Actions; className?: string }) {
+export function PaneMention({ paneId, actions, open, setOpen, anchor }: { paneId: string; actions: Actions; open: boolean; setOpen: (open: boolean) => void; anchor: ReactNode }) {
   const { t } = useInterfaceTranslation();
-  const [open, setOpen] = useState(false);
   // A closed @ reads nothing from the store, so it adds no work to the header's renders.
   const agents = useShellStore((state) => (open ? allAgents(state.agents, state.rest?.status?.remote) : null));
   const rest = useShellStore((state) => (open ? state.rest : null));
-  const chosen = useRef(false);
+  const anchorBox = useRef<HTMLSpanElement>(null);
   const candidates = agents ? mentionCandidates(rest, agents, paneId) : [];
+  // The list has no trigger of its own: the keyboard goes back to the `…` it opened under.
+  const returnFocus = useReturnFocus(open, { target: () => anchorBox.current?.querySelector("button") ?? null });
   const choose = (reference: string) => {
-    chosen.current = true;
     setOpen(false);
     actions.focusPane(paneId);
     focusTerminal(paneId);
     typeReference(paneId, reference);
   };
-  const label = t("panes.mention.button");
-  // `className` may hide a closed @; an open one stays drawn while the pointer is on its list.
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Hint label={label} active={!open}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={`shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground data-[state=open]:bg-secondary data-[state=open]:text-foreground ${open ? "" : className}`}
-            aria-label={label}
-            data-pane-mention={paneId}
-          >
-            <AtSignIcon aria-hidden="true" />
-          </Button>
-        </PopoverTrigger>
-      </Hint>
+      {/* A box of its own, so the list measures the `…` whatever its hint wraps it in. */}
+      <PopoverAnchor asChild><span ref={anchorBox} className="flex shrink-0">{anchor}</span></PopoverAnchor>
       <PopoverContent
         align="end"
         className="w-(--size-pr-popover) p-none"
         data-pane-mention-list={paneId}
-        onOpenAutoFocus={() => {
-          chosen.current = false;
-        }}
-        onCloseAutoFocus={(event) => {
-          if (chosen.current) event.preventDefault();
-        }}
+        onCloseAutoFocus={returnFocus}
       >
         <Command>
           <CommandInput placeholder={t("panes.mention.search")} autoFocus />

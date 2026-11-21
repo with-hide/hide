@@ -373,6 +373,7 @@ fn spawned_record(
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 

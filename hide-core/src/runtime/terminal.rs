@@ -1315,10 +1315,7 @@ impl Runtime {
         self.recent_visible_tabs
             .truncate(ATTACHED_TAB_LIMIT.max(shown.len()));
         let released = self.release_sessions_outside_attach_window();
-        // The 보기 slot follows the pane now in front, on every path that
-        // moves it.
-        let detail = self.sync_detail_pane();
-        self.sync_terminal_intents() | released | detail
+        self.sync_terminal_intents() | released
     }
     /// Ends the terminal session of every pane whose tab has left the attach
     /// window.
@@ -1334,6 +1331,8 @@ impl Runtime {
             .iter()
             .cloned()
             .collect::<HashSet<_>>();
+        // The panes of the runs a window shows in the automation screen are
+        // on screen though their tabs are not (PRD automations B16).
         let attached = self
             .snapshot
             .pane_layouts
@@ -1341,6 +1340,7 @@ impl Runtime {
             .filter(|layout| window.contains(&layout.tab_id))
             .flat_map(|layout| layout.pane_ids())
             .map(str::to_owned)
+            .chain(self.viewed_panes().iter().cloned())
             .collect::<HashSet<_>>();
         // A pane no layout claims is not a pane that left the window; the
         // session reconcile owns those and drops them with the session.
@@ -1489,6 +1489,7 @@ impl Runtime {
             .filter(|layout| shown_tabs.contains(&layout.tab_id))
             .flat_map(|layout| layout.pane_ids())
             .map(str::to_owned)
+            .chain(self.viewed_panes().iter().cloned())
             .collect::<Vec<_>>();
         // The router tells each node which of its own panes are shown.
         shown.sort();

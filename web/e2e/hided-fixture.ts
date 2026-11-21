@@ -152,6 +152,16 @@ export async function asFirstRun(daemon: Daemon): Promise<Daemon> {
   });
 }
 
+/**
+ * Seeds the delivery ledger of a stopped daemon's `stateDir` with `ledger`, a ledger in the JSON shape of
+ * `delivery-ledger.json`: the file builds before the store kept it in, which the next start imports into a new
+ * `delivery.sqlite3` as an update's first start does (docs/delivery.md, Persistence, clocks and limits).
+ */
+export function seedLedger(stateDir: string, ledger: string): void {
+  for (const sidecar of ["", "-wal", "-shm"]) fs.rmSync(path.join(stateDir, `delivery.sqlite3${sidecar}`), { force: true });
+  fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), ledger, { mode: 0o600 });
+}
+
 export function aiSettingsFile(home: string): string {
   const stateUnderHome = process.platform === "darwin" ? path.join("Library", "Application Support") : process.platform === "win32" ? path.join("AppData", "Local") : path.join(".local", "state");
   return path.join(home, stateUnderHome, "hide", "ai.json");

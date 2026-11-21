@@ -1,6 +1,7 @@
 // The one next step of a screen that has nothing on it yet: the owl, what to
-// do in one line, and the action that does it. The Home with no project and
-// the Overview's Work with no session draw it alike.
+// do in one line, and the action that does it. The Home with no project, the
+// Overview's Work with no session and the automation screen with none draw it
+// alike.
 import type { ReactNode } from "react";
 import { BrandOwl, type OwlPose } from "./brand-owl";
 
@@ -12,7 +13,7 @@ export function EmptyWelcome({ pose, title, detail, children, owl = true, ...dat
   title: string;
   /** A second line under the title, quieter than it. */
   detail?: ReactNode;
-  /** The action, and under it at most one quiet way on. */
+  /** The action, and under it the quiet ways on: one link, or a screen's few starting points and a line of how else to begin. */
   children: ReactNode;
   /** False while another first-run surface already shows an owl. */
   owl?: boolean;
