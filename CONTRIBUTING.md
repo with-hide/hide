@@ -270,24 +270,19 @@ Each merge changes the counts, so run the script again before adding the next on
 
 ### When main's push run fails
 
-When main's push run fails, merge nothing else until main is green again, except the change that makes it green, an unrelated development change under the Windows exception below, or any change while only macOS jobs failed (below).
+When main's push run fails, merge nothing else until main is green again, except the change that makes it green, or any change while only macOS jobs or only Windows jobs failed (below).
 Revert the merge the failure points to in a pull request of its own (`git revert -m 1 <merge commit>`), then land the change again from the latest main in a new pull request; fix forward instead only when the fix is smaller than the revert and ready now.
 
-A main push run that fails only in macOS jobs does not stop merges.
-Pull requests run no macOS job unless they change a macOS path (operator decision 2026-11-01; [docs/TESTING.md](docs/TESTING.md#where-the-macos-runners-went) owns the paths and the measurement behind it), so main's push run and the nightly are where a macOS-only break first shows, and the operator accepted that it does.
-The failed jobs must all be macOS jobs (`desktop e2e`, `os contract (macOS)`, or a `(macos)` leg of `vt`, `omp SDK` or `package`) and checks that only aggregate their results; a Linux or Windows job failing in the same run keeps the freeze.
-Whoever merges records the failed run and opens a development issue for it, and the fix, a revert or a forward fix as above, lands before the next release, whose tagged commit's main `verify` must pass, macOS included.
+A main push run that fails only in macOS jobs, or only in Windows jobs, does not stop merges.
+Pull requests run no macOS job unless they change a macOS path (operator decision 2026-11-01), and a Windows job only for a Windows path that job proves (operator decision 2026-11-21); [docs/TESTING.md](docs/TESTING.md#where-the-macos-runners-went) and [Where the Windows runners went](docs/TESTING.md#where-the-windows-runners-went) own the paths and the measurements behind them.
+So main's push run and the nightly are where a macOS-only or a Windows-only break first shows, and the operator accepted that it does.
+The failed jobs must all be jobs of one of those systems and checks that only aggregate their results: for macOS, `desktop e2e`, `os contract (macOS)`, or a `(macos)` leg of `vt`, `omp SDK` or `package`; for Windows, `windows check`, `windows e2e`, `windows desktop`, `windows wsl`, `agy contract (windows)`, or a `(windows)` leg of `relay protocol`, `os contract`, `vt`, `holder restart`, `omp SDK`, `agent journey`, `agent CLIs` or `package`.
+A Linux job failing in the same run keeps the freeze, and so does a run where both macOS and Windows jobs failed.
+Whoever merges records the failed run and opens a development issue for it (`gh issue create --repo with-hide/hide --label development`), and the fix, a revert or a forward fix as above, lands before the next release.
+Windows and macOS checks keep running on main, and their failures remain failures for the owner to resolve.
 
-During development, an existing Windows-only failure need not stop unrelated pull requests when all of these hold:
-
-- All planned non-Windows checks passed; the failed jobs are Windows jobs and checks that only aggregate their results.
-- The reviewer records the failed run and its diagnosis owner, and checks that the pull request neither changes nor depends on the failing behavior; an unclassified failure or an unclear relationship keeps merges stopped.
-- The pull request's own latest `verify` passed, including every Windows lane its plan requires; the merge queue's check then runs on the group as for any other merge.
-
-Windows checks keep running, and their failures remain failures for the owner to resolve.
-Whoever merges still watches main's containing push run; a new failure must meet these same conditions for unrelated merges to continue.
 Before a stable or preview release, the exact tagged commit's full push/main `verify` must pass, Windows and macOS included, and all [release gates](#releases) must pass.
-Neither the Windows exception nor the macOS rule grants a release waiver; the existing release workflow enforces that boundary.
+Neither rule grants a release waiver: `.github/workflows/release.yml`'s `main-verified` job waits for the tagged commit's own `verify` push run on main, which plans every Windows and macOS job, and refuses the release unless it passed.
 
 A pull request already in the queue when main's push run fails still merges when its group passes; while merges are stopped, add none, and take one that should wait out with Remove from queue on its pull request page.
 
@@ -303,6 +298,7 @@ Run `bash scripts/verify-cargo.sh nextest --profile ci -p hide-relay` and `bash 
 Every required check exists because something once went wrong without it.
 The table says what each one protects, how to run it locally, and what to do when it blocks you.
 There is no label or bypass for any of them; when a gate is wrong, change the gate in the same pull request and say why in the description.
+A pull request runs a macOS gate only when it changes a macOS path, and a Windows gate (`windows check`, `windows e2e`, `windows desktop`, `windows wsl`, `agy contract` and the Windows legs of the others) only when it changes a path that gate proves; main's push run and the nightly run every gate on every system ([docs/TESTING.md](docs/TESTING.md#where-the-windows-runners-went), [When main's push run fails](#when-mains-push-run-fails)).
 
 | Gate | Protects | Local command | When it blocks you |
 | --- | --- | --- | --- |
