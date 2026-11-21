@@ -1,16 +1,18 @@
 //! Another machine's view of this core, and this machine's view of another
 //! (PRD D-53, D-67, B17, B20, B63).
 //!
-//! On the host, a guest the operator granted opens [`StreamKind::Screen`]
-//! streams on the one connection between the two machines. Each carries
-//! HTTP to this daemon's page (`/`), its assets (`/assets/*`) and its socket
-//! (`/ws`), and nothing else: no `/health`, no other route. The socket is a
-//! screen of the `remote` kind (`event_class::Client::Remote`): it attaches
-//! with the grant's id and generation in place of this machine's token,
-//! draws terminals under the hub's remote limits (D-84) and sends only what
-//! the class table admits. A [`StreamKind::ScreenBulk`] stream beside it
-//! carries the view's file bytes, written from their own task, so a file
-//! read never holds the socket's frames (D-67). A guest holds one view at a
+//! On the host, a guest the operator granted opens streams of two kinds on
+//! the one connection between the two machines, each carrying HTTP and
+//! nothing else: no `/health`, no other route (D-67). A
+//! [`StreamKind::Screen`] stream carries the view's socket (`/ws`), its
+//! control and terminal frames. A [`StreamKind::ScreenBulk`] stream, behind
+//! everything else, carries this daemon's page (`/`), its assets
+//! (`/assets/*`) and the view's file bytes (`/ws/bulk`, written from their
+//! own task), so neither a page load nor a file read holds the socket's
+//! frames. The socket is a screen of the `remote` kind
+//! (`event_class::Client::Remote`): it attaches with the grant's id and
+//! generation in place of this machine's token, draws terminals under the
+//! hub's remote limits (D-84) and sends only what the class table admits. A guest holds one view at a
 //! time: a new one takes the place of the one before, and the views of all
 //! guests are [`MAX_VIEWS`] at most, apart from this machine's own windows
 //! (`MAX_CLIENTS`). Every stream runs under the grant and ends when it
@@ -18,7 +20,8 @@
 //!
 //! On the guest, the desktop app reaches the host through this daemon:
 //! `/peer-screen/<device>/…` (this machine's token) answers the page and its
-//! assets from the host's streams, keeping each asset by the host's build,
+//! assets from the host's bulk streams, keeping each asset by the host's
+//! key and build,
 //! and `/peer-screen/<device>/ws` joins one socket to the host's two
 //! streams. The desktop opens that socket only while the tile shows.
 
@@ -54,8 +57,9 @@ const MAX_ASSET: usize = 32 * 1024 * 1024;
 /// The assets a guest keeps of hosts' builds, in bytes; past it the oldest
 /// go.
 const ASSET_CACHE: usize = 48 * 1024 * 1024;
-/// Asset requests a guest has open on a host at once; the view's socket
-/// takes another of the kind's streams.
+/// Page and asset requests a guest has open on a host at once; the view's
+/// bulk socket takes another of the kind's streams, and a second view's
+/// one more while it takes the first's place.
 const ASSET_STREAMS: usize = 6;
 /// The file reads one view runs at once; one more is answered `busy`.
 pub const VIEW_READS: usize = 4;
@@ -268,12 +272,14 @@ impl RemoteScreens {
             screens: Arc::clone(&self),
             viewer,
         };
+        // The socket's frames on the screen kind; the page, its assets and
+        // the file bytes behind them on the bulk kind (D-67).
         let router = match kind {
-            StreamKind::ScreenBulk => Router::new().route("/ws/bulk", get(bulk_upgrade)),
-            _ => Router::new()
+            StreamKind::ScreenBulk => Router::new()
                 .route("/", get(view_asset))
                 .route("/assets/{*path}", get(view_asset))
-                .route("/ws", get(view_upgrade)),
+                .route("/ws/bulk", get(bulk_upgrade)),
+            _ => Router::new().route("/ws", get(view_upgrade)),
         }
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(route);
@@ -475,7 +481,7 @@ async fn guest_file(state: AppState, device: String, path: String, headers: Head
     let Ok(_place) = Arc::clone(&screens.asset_streams).acquire_owned().await else {
         return unavailable("not_connected");
     };
-    let io = match open_stream(&link, StreamKind::Screen).await {
+    let io = match open_stream(&link, StreamKind::ScreenBulk).await {
         Ok(io) => io,
         Err(reason) => return unavailable(reason),
     };

@@ -3303,7 +3303,7 @@ The side that opens a stream writes nine bytes, the stream's kind and the genera
 Hello, pairing and revoke need no grant; every other kind is refused unless the direction it serves has an active grant at that generation.
 An accepted stream is bound to the generation it was accepted under (`gate::Guarded`): its next read or write after the generation moves fails, so a pause or a removal ends every stream it allowed without a list of them.
 A connection carries at most 72 streams, and each kind has its own cap inside that (`limits::max_streams_of`), so a flood of one kind never takes another's place.
-The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen (0), and files and pages last (-100).
+The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen's socket (0), and files, pages and the remote screen's page, assets and file bytes last (-100).
 
 **Grants are saved first.**
 The host keeps who may be its guest in `peers/grants.json` and the guest keeps the hosts it paired with in `peers/known.json`, private files of at most 64 KiB replaced atomically.
@@ -3374,11 +3374,11 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 ### Another machine's screen
 
 A guest's rail tile for its host shows the host's own Hide screen, the page and socket the host serves, drawn in the guest's window (PRD device-connect-iroh D-53, D-67, B17, B20, B63; with-hide/hide-private's `docs/device-connection-security.md` 8.3).
-It travels the one connection the two paired with, on two stream kinds of its own: `screen` (priority 0) carries the page, its assets and the socket's control and terminal frames, and `screen_bulk` (-100) carries file bytes, which the host writes from a task of their own so a large read never holds the screen's loop.
+It travels the one connection the two paired with, on two stream kinds of its own: `screen` (priority 0) carries the socket's control and terminal frames, and `screen_bulk` (-100) carries the page, its assets and file bytes, which the host writes from a task of their own, so neither a page load nor a large read holds the screen's loop.
 A third stream would take only 31 ms off the control's p95 and could reorder control and terminal frames, so there is none.
 
 **The host's side.**
-`hided/src/remote_screen.rs` registers both kinds at start, with the guest nodes, and each stream it is handed serves HTTP/1.1 over the stream's two halves: on `screen`, `/`, `/assets/*` and the upgrade to `/ws`, and nothing else, so `/health` and every route a token opens are not there; on `screen_bulk`, the upgrade to `/ws/bulk`.
+`hided/src/remote_screen.rs` registers both kinds at start, with the guest nodes, and each stream it is handed serves HTTP/1.1 over the stream's two halves: on `screen`, the upgrade to `/ws`; on `screen_bulk`, `/`, `/assets/*` and the upgrade to `/ws/bulk`; and nothing else, so `/health` and every route a token opens are not there. A connection holds two `screen` streams (a view, and the one taking its place) and eight `screen_bulk` (six page and asset requests at once and the two views' file sockets).
 The stream says which machine opened it and under which grant and generation, read from the host's grants at that moment, and the view's socket ends with that generation ([Streams](#the-peer-connection)), so a pause or a removal ends the view.
 A guest holds one view at a time: the second one it opens replaces the first, and the host holds four in all (`MAX_VIEWS`), apart from the eight seats of this machine's own windows (`MAX_CLIENTS`), so a view never takes a window's place and a window never takes a view's.
 The view's socket asks for no token: the stream already proved the machine, and the page it serves holds none.

@@ -25,11 +25,12 @@ pub enum StreamKind {
     Terminal,
     File,
     Page,
-    /// Another machine's view of this one: its page, its assets and its
-    /// socket's control and terminal frames (PRD D-67).
+    /// Another machine's view of this one: its socket's control and
+    /// terminal frames (PRD D-67).
     Screen,
-    /// The same view's file bytes, behind everything else, so a file read
-    /// never holds a key's echo (D-67).
+    /// The same view's page, its assets and its file bytes, behind
+    /// everything else, so neither a page load nor a file read holds a
+    /// key's echo (D-67).
     ScreenBulk,
 }
 
