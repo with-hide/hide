@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { DEVICE_KITS, DEVICE_BUNDLE_MANIFEST, DEVICE_BUNDLE_FORMAT, deviceAsset, deviceKitFiles } from "../desktop/scripts/device-helpers.mjs";
+import { DEVICE_KITS, DEVICE_BUNDLE_MANIFEST, DEVICE_BUNDLE_FORMAT, MAX_KIT, deviceAsset, deviceKitFiles } from "../desktop/scripts/device-helpers.mjs";
 
 /**
  * The tag is the one source of a release's kind: `vX.Y.Z` is a stable
@@ -142,7 +142,7 @@ async function verifyDeviceBundles(version, directory, assets, sourceSha) {
   const sameNames = (value, names) => value !== null && typeof value === "object" && !Array.isArray(value)
     && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...names].sort());
   const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-  const size = (value, minimum = 1) => Number.isSafeInteger(value) && value >= minimum && value <= 256 * 1024 * 1024;
+  const size = (value, minimum = 1) => Number.isSafeInteger(value) && value >= minimum && value <= MAX_KIT;
   if (!sameNames(manifest, ["format", "version", "commit", "order", "platforms"])
     || manifest.format !== DEVICE_BUNDLE_FORMAT || manifest.version !== version
     || typeof manifest.commit !== "string" || !/^[a-f0-9]{40}$/.test(manifest.commit)
@@ -169,7 +169,7 @@ async function verifyDeviceBundles(version, directory, assets, sourceSha) {
       }
       total += file.size;
     }
-    if (total > 256 * 1024 * 1024) throw new Error(`${platform} device kit exceeds 256 MiB`);
+    if (total > MAX_KIT) throw new Error(`${platform} device kit exceeds 512 MiB`);
   }
 }
 
@@ -195,7 +195,7 @@ export async function verifyAssets(tag, directory, { sourceSha } = {}) {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.size === 0) throw new Error(`${name} must be a nonempty ordinary file`);
     if (name === DEVICE_BUNDLE_MANIFEST && stat.size > 16 * 1024) throw new Error(`${name} exceeds 16 KiB`);
-    if (name.startsWith("hide-device-") && stat.size > 256 * 1024 * 1024) throw new Error(`${name} exceeds 256 MiB`);
+    if (name.startsWith("hide-device-") && stat.size > MAX_KIT) throw new Error(`${name} exceeds 512 MiB`);
     if (name.endsWith(".sha256") && stat.size > 512) throw new Error(`${name} exceeds the checksum size limit`);
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file)) hash.update(chunk);
