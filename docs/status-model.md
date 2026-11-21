@@ -1051,7 +1051,7 @@ A job captures its root lifetime and settled boundary, so an older transport can
 Revocation, phone inactivity expiry, pairing-scope changes and follower reset or end release the corresponding responsibility.
 Relay-only holds keep their eight-per-phone payload cap and sixty-second expiry, and recheck resting before transport on reconnect.
 The desktop app's agent notifications run the same transitions on their own ledger (`hided/src/desktop_notices.rs`, PRD first-run-onboarding D-09), so a desktop notification and a phone push agree on what is new without either one's seed or mode moving the other.
-Which of the two a new wait reaches is one place, the computer while someone uses it and the phones otherwise (`hide_core::notice_place`; `docs/ARCHITECTURE.md`, Whose work is whose between machines).
+Each of the two announces a new wait by its own switch, and only the phones rest while the computer is in use; in a build where two Hides can connect a new wait reaches one place of the two instead, the computer while someone uses it and the phones otherwise (`hide_core::notice_place`; `docs/ARCHITECTURE.md`, Whose work is whose between machines).
 A Hide AI row for a home is on the phone's list, and in these transitions, only while it is in Needs You, so the notification follows the group: one notice when it enters, none when the home's turn changes inside it, and none for its progress (PRD hide-ai-work-home B2, B10); the phone opens the agent's detail from it.
 
 ### Phone notices

@@ -1104,7 +1104,7 @@ mod tests {
 
     impl Pair {
         async fn new(resend_after: Duration) -> Self {
-            Self::with(resend_after, Arc::default()).await
+            Self::with(resend_after, Arc::new(DesktopNotices::new(true))).await
         }
 
         /// The pair with the Mac's seat and windows as `mac_desktop` has
@@ -1112,7 +1112,7 @@ mod tests {
         async fn with(resend_after: Duration, mac_desktop: Arc<DesktopNotices>) -> Self {
             let (mac, pc) = (Machine::new("macbook"), Machine::new("windows-pc"));
             let (mac_core, pc_core) = (Arc::new(Core::default()), Arc::new(Core::default()));
-            let pc_desktop = Arc::<DesktopNotices>::default();
+            let pc_desktop = Arc::new(DesktopNotices::new(true));
             let (pc_list, _) = watch::channel(Arc::<Projection>::default());
             let serve = |machine: &Machine,
                          core: &Arc<Core>,
@@ -1239,7 +1239,7 @@ mod tests {
     #[tokio::test]
     async fn the_machine_that_opens_another_gets_its_work_and_shows_its_notice_while_in_use() {
         // Someone is at the Mac, whose window shows notifications.
-        let mac_desktop = Arc::<DesktopNotices>::default();
+        let mac_desktop = Arc::new(DesktopNotices::new(true));
         mac_desktop.set(1, true);
         mac_desktop.set_waiting(1, true);
         mac_desktop.activity(1, true);

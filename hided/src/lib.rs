@@ -571,7 +571,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // The desktop windows' gateways, shared by `hide browser` and the phone's
     // screenshot of a page.
     let browser_control = Arc::new(browser_control::BrowserControl::default());
-    let desktop_notices = Arc::new(desktop_notices::DesktopNotices::default());
+    let desktop_notices = Arc::new(desktop_notices::DesktopNotices::new(env.device_connect));
     seat.starting("core.mobile");
     let mobile = mobile::Mobile::start(mobile::Config {
         state_dir: env.state_dir.clone(),

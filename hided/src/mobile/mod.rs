@@ -2955,6 +2955,17 @@ pub(super) fn test_mobile(
     directory: &std::path::Path,
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
 ) -> Arc<Mobile> {
+    test_mobile_with(directory, gate, Arc::default())
+}
+
+/// [`test_mobile`] with the computers' notices a test names, such as those of
+/// a build where two Hides connect.
+#[cfg(test)]
+pub(super) fn test_mobile_with(
+    directory: &std::path::Path,
+    gate: &Arc<hide_core::input_gate::PaneInputGate>,
+    desktop: Arc<crate::desktop_notices::DesktopNotices>,
+) -> Arc<Mobile> {
     let core = Arc::new(crate::core::CoreHandle::bare(directory));
     let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
     Mobile::start(Config {
@@ -2972,7 +2983,7 @@ pub(super) fn test_mobile(
         start_demand: Arc::default(),
         // These tests drive the phone boundary directly, never a network supervisor.
         open: tokio::sync::watch::channel(false).1,
-        desktop: Arc::default(),
+        desktop,
         boundary: Arc::clone(&boundary),
         roots: Arc::new(crate::RootFollower::new(
             Arc::clone(&core),
@@ -3112,7 +3123,7 @@ mod tests {
             }
         }
         let mut phone = push::PhoneNotices::default();
-        let desktop = DesktopNotices::default();
+        let desktop = DesktopNotices::new(true);
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
             "macbook",
@@ -3196,7 +3207,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
-        let mobile = test_mobile(directory.path(), &gate);
+        let mobile = test_mobile_with(directory.path(), &gate, Arc::new(DesktopNotices::new(true)));
         let desktop = &mobile.config.desktop;
         desktop.set_computers(Arc::new(Taking));
         desktop.peer_seat(
@@ -3256,13 +3267,11 @@ mod tests {
         );
     }
 
-    /// B38, B33, PRD device-connect-iroh B59: each side judges the shared
-    /// projection only while it is on, a new wait is announced in one place,
-    /// the computer while someone uses it and its window shows notices and
-    /// the phones otherwise, and a side turned on later is seeded by what
-    /// was already waiting.
+    /// PRD device-connect-iroh B59, where two Hides can connect: a new wait
+    /// is announced in one place, the computer while someone uses it and its
+    /// window shows notices, and the phones otherwise.
     #[test]
-    fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
+    fn where_hides_connect_a_new_wait_is_announced_in_one_place() {
         for (phone_on, desktop_on, in_use) in [
             (true, true, true),
             (true, true, false),
@@ -3273,7 +3282,7 @@ mod tests {
         ] {
             let label = format!("phone {phone_on}, desktop {desktop_on}, in use {in_use}");
             let mut phone = push::PhoneNotices::default();
-            let desktop = DesktopNotices::default();
+            let desktop = DesktopNotices::new(true);
             desktop.set(1, desktop_on);
             desktop.set_waiting(1, desktop_on);
             desktop.activity(1, in_use);
@@ -3300,6 +3309,58 @@ mod tests {
                     (usize::from(phone_on), false)
                 },
                 "{label}: a new wait is announced in one place"
+            );
+        }
+
+        // Only Done notices are on in the window of a computer in use: the
+        // phones do not rest for a wait the computer does not show, and the
+        // window itself leaves the frame's wait out.
+        let mut phone = push::PhoneNotices::default();
+        let desktop = DesktopNotices::new(true);
+        desktop.set(1, true);
+        desktop.activity(1, true);
+        pass(&mut phone, true, &desktop, &projected("working", "none"));
+        assert_eq!(
+            pass(
+                &mut phone,
+                true,
+                &desktop,
+                &projected("needs_you", "approval")
+            ),
+            (1, true)
+        );
+    }
+
+    /// B38, B33, in a build without connections between two Hides: each
+    /// side judges the shared projection only while it is on, a side turned
+    /// on later is seeded by what was already waiting, and the other side's
+    /// switch never changes what a side announces.
+    #[test]
+    fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
+        for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
+            let label = format!("phone {phone_on}, desktop {desktop_on}");
+            let mut phone = push::PhoneNotices::default();
+            let desktop = DesktopNotices::default();
+            desktop.set(1, desktop_on);
+            assert_eq!(
+                pass(
+                    &mut phone,
+                    phone_on,
+                    &desktop,
+                    &projected("working", "none")
+                ),
+                (0, false),
+                "{label}: the first read only seeds"
+            );
+            assert_eq!(
+                pass(
+                    &mut phone,
+                    phone_on,
+                    &desktop,
+                    &projected("needs_you", "approval")
+                ),
+                (usize::from(phone_on), desktop_on),
+                "{label}: a new wait is announced by each side that is on"
             );
         }
 
@@ -3339,7 +3400,6 @@ mod tests {
         let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
-        desktop.activity(1, true);
         assert_eq!(
             pass(&mut phone, false, &desktop, &projected("working", "none")),
             (0, false)
@@ -3362,9 +3422,6 @@ mod tests {
             pass(&mut phone, true, &desktop, &projected("working", "none")),
             (0, false)
         );
-        // Only Done notices are on in the window: the phones do not rest
-        // for a wait the computer does not show, and the window itself
-        // leaves the frame's wait out.
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, true));
     }
     fn tagged(tag: &str) -> Value {

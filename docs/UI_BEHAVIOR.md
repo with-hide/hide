@@ -2907,8 +2907,9 @@ An existing install whose old shared switch was on migrates to both on; an old o
 Each toggle sends one event and persists through the core's existing UI-state writer; a repeated choice publishes nothing and a stale generic UI save cannot replace either choice.
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
-A notice goes to one place (PRD device-connect-iroh D-60, B59): this computer's windows get a new one only while the computer is in use, by the rule the Phone group states below, and a computer that is on and not in use gets none, so the same question never rings here and on a phone.
-A wait that began while no one was at the computer is not announced when someone returns; its row stands in Needs You.
+This computer's windows get each new notice whether or not someone is at the computer; only the phones rest, by the rule the Phone group states below.
+Where two computers that each run Hide can connect (not offered yet, `docs/INSTALL.md`, Connect another computer that runs Hide), a notice goes to one place instead (PRD device-connect-iroh D-60, B59): this computer's windows get a new one only while the computer is in use, by the same rule, and a computer that is on and not in use gets none, so the same question never rings here and on a phone.
+There a wait that began while no one was at the computer is not announced when someone returns; its row stands in Needs You.
 Between paired computers the same rule picks one of them (B59, B71): work of a machine no one is at rings on the computer in use that may open that machine, the one used last when there are several, worded as that computer's own notices are, and a click selects that machine's tile.
 A computer that does not show it within 5 s is passed over for the next one, and the phone of the work's machine rings when no computer showed it; when the operator has seen the work, the notice is taken back wherever it was shown.
 A row that arrived from another machine never rings on its own.
@@ -2920,7 +2921,7 @@ A new authenticated, well-formed answer, approval or wake counts as phone use ev
 Reading or opening the app, authentication or format refusals and duplicate request IDs do not count.
 Computer input reported after a pause of at least five seconds, or a return to in use, rests phone pushes again; continuous typing adds no reports to the existing one-second poll.
 Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
-This memory is lost on daemon restart and does not change the switch's wording; while the phone is in charge, this computer's windows get no new notice.
+This memory is lost on daemon restart and does not change the switch's wording; where two computers that each run Hide can connect, this computer's windows get no new notice while the phone is in charge.
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
 A root with no eligible pending notice sends no phone notification for a wait that begins while phone pushes rest, even when resting ends before its settle window closes.
 It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.

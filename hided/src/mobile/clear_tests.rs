@@ -406,7 +406,11 @@ async fn placed_through_a_hold() {
                 "p256dh": registration["key"]["p256dh"], "auth": registration["key"]["auth"]},
         }]}),
     ));
-    let mobile = test_mobile(directory.path(), &Arc::default());
+    let mobile = test_mobile_with(
+        directory.path(),
+        &Arc::default(),
+        Arc::new(crate::desktop_notices::DesktopNotices::new(true)),
+    );
     let held = || -> Vec<String> {
         mobile
             .lock()
