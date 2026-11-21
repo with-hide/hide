@@ -488,6 +488,28 @@ class NightlyFailures(unittest.TestCase):
                     self.assertEqual(github.commented(), [5])
                     self.assertEqual(github.closed(), [])
 
+    def test_the_split_rust_lane_keeps_its_issues_under_the_one_lanes_key(self):
+        old = "verify / rust workspace"
+        for current, step in (("verify / rust workspace / tests 2/3", "Test this shard's slice"),
+                              ("verify / rust workspace / build tests", "Shell integration and agent start in real shells"),
+                              ("verify / rust workspace / lint", "Check formatting and lint the planned crates")):
+            with self.subTest(current=current):
+                issue = {"number": 5, "body": f"<!-- nightly-failure:{old}:step {step} -->"}
+                github = nightly(FakeGitHub([job(1, current, "failure", [(step, "failure")])],
+                                            issues=[issue], logs={1: "it failed"}))
+                self.assertEqual((github.opened(), github.commented()), ([], [5]))
+
+    def test_the_rust_lanes_old_issue_closes_only_when_build_lint_and_every_shard_pass(self):
+        lane = "verify / rust workspace"
+        issue = {"number": 5, "body": f"<!-- nightly-failure:{lane}:hide-core runtime::tests::x -->"}
+        names = [f"{lane} / build tests", f"{lane} / lint", *(f"{lane} / tests {n}/3" for n in (1, 2, 3))]
+        for index in range(len(names)):
+            for conclusion in ("success", "failure", "cancelled", "skipped"):
+                with self.subTest(job=names[index], conclusion=conclusion):
+                    jobs = [job(n + 1, name, conclusion if n == index else "success") for n, name in enumerate(names)]
+                    github = nightly(FakeGitHub(jobs, issues=[issue], logs={index + 1: "a job failed"}))
+                    self.assertEqual(github.closed(), [5] if conclusion == "success" else [])
+
     def test_a_moved_suites_old_issue_closes_only_after_every_shard_passes(self):
         old = "desktop e2e (macos full) / desktop e2e nightly-macos"
         new = "verify / desktop e2e / desktop e2e macos"
