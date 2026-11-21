@@ -530,7 +530,12 @@ impl Runtime {
                 // their permit or the pane's admission: ask once more, last.
                 still()?;
                 engine
-                    .prompt_agent(crate::engine::Wait::Each(SEND_TIMEOUT), &raw_pane, &text)
+                    .prompt_agent(
+                        crate::engine::Wait::Each(SEND_TIMEOUT),
+                        &raw_pane,
+                        &text,
+                        crate::engine::PromptBy::Operator,
+                    )
                     .map_err(|error| match error {
                         crate::engine::EngineError::Refused { code, .. }
                             if code.contains("not_found") =>
@@ -1524,6 +1529,9 @@ mod tests {
         let params = &sent[0];
         assert_eq!(params["target"], "w1:p1");
         assert_eq!(params["text"], format!("\"{file}\" 이거 봐줘"));
+        // The operator's words may answer a question on screen, so a blocked
+        // agent does not refuse them as it refuses a letter.
+        assert_eq!(params["by"], "Operator");
         assert_eq!(
             terminals.permits.lock().unwrap().as_slice(),
             &[(

@@ -125,9 +125,10 @@ pub fn wait_for_input(
 }
 
 /// A reply is typed as a letter's bell is (`EngineHandle::prompt_agent`), so
-/// an agent reads a slash command from the phone as the command (#2354). The
-/// engine refuses it, typing nothing, while the agent sits at its blocked
-/// prompt or is still starting: the quick keys answer a menu.
+/// an agent reads a slash command from the phone as the command (#2354). It
+/// is the operator's own words, typed in any state the agent is in, so it
+/// also answers a question or form waiting for text; an engine refusal typed
+/// nothing.
 pub fn send(engine: &EngineHandle, pane_id: &str, input: Input<'_>) -> Result<(), PaneError> {
     match input {
         Input::Reply(text) => engine.prompt_agent(pane_id, text, TIMEOUT),

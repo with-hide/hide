@@ -292,7 +292,12 @@ fn spawn_stray_prompt(
                 .admit(&core_pane_id)
                 .map_err(|_| "The agent is asleep".to_owned())?;
             engine
-                .prompt_agent(crate::live::CONTROL_WAIT, engine_pane_id, &text)
+                .prompt_agent(
+                    crate::live::CONTROL_WAIT,
+                    engine_pane_id,
+                    &text,
+                    crate::engine::PromptBy::Letter,
+                )
                 .map_err(crate::live::failed("agent.prompt"))
         },
         move |runtime, pane_id, result| runtime.ingest_stray_prompt(pane_id, &request_id, result),

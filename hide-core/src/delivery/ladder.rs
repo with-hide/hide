@@ -143,7 +143,12 @@ pub(crate) fn deliver(engine: &dyn Engine, target: &InputTarget, text: &str) -> 
     answered(
         target,
         TYPED,
-        engine.prompt_agent(Wait::Small(PROMPT_TIMEOUT), &target.raw_pane_id, &text),
+        engine.prompt_agent(
+            Wait::Small(PROMPT_TIMEOUT),
+            &target.raw_pane_id,
+            &text,
+            crate::engine::PromptBy::Letter,
+        ),
     )
 }
 
