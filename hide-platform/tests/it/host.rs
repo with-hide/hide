@@ -759,18 +759,17 @@ fn a_terminal_gives_utf8_only_to_a_program_whose_environment_names_no_locale() {
         assert_eq!(none, Some(("LC_CTYPE", "UTF-8")));
     } else if cfg!(windows) {
         assert_eq!(none, None);
-    } else if let Some(locale) = none {
-        assert_eq!(locale, ("LC_CTYPE", "C.UTF-8"));
-        assert!(
-            std::process::Command::new("locale")
-                .arg("-a")
-                .output()
-                .is_ok_and(|listed| String::from_utf8_lossy(&listed.stdout)
-                    .lines()
-                    .any(|name| name.eq_ignore_ascii_case("C.utf8")
-                        || name.eq_ignore_ascii_case("C.UTF-8"))),
-            "the system lists the locale it is given"
-        );
+    } else {
+        // Whether the system has C.UTF-8, as its own `locale -a` lists it,
+        // from glibc's archive or a folder alike.
+        let listed = std::process::Command::new("locale")
+            .arg("-a")
+            .output()
+            .expect("locale -a runs");
+        let has = String::from_utf8_lossy(&listed.stdout).lines().any(|name| {
+            name.eq_ignore_ascii_case("C.utf8") || name.eq_ignore_ascii_case("C.UTF-8")
+        });
+        assert_eq!(none, has.then_some(("LC_CTYPE", "C.UTF-8")));
     }
 }
 

@@ -489,8 +489,12 @@ pub fn primary_language_from(variables: Variables) -> io::Result<String> {
 /// | System | Given |
 /// | --- | --- |
 /// | macOS | `LC_CTYPE=UTF-8`, as Terminal.app and iTerm2 give |
-/// | Linux | `LC_CTYPE=C.UTF-8` where that locale is installed (`/usr/lib/locale/C.utf8`, which glibc installs only on request), none elsewhere, since bash warns at every start about a locale the system lacks |
+/// | Linux | `LC_CTYPE=C.UTF-8` where the C library can load it (glibc keeps it in its locale archive or a folder of its own, and installs it only on request), none elsewhere, since bash warns at every start about a locale the system lacks |
 /// | Windows | none: a console hands its program characters, not bytes |
+///
+/// Whether the locale exists is asked of the C library itself
+/// (`newlocale`), so the answer is the one the pane's shell will get; this
+/// process's own locale is not changed.
 pub fn terminal_locale_from(variables: Variables) -> Option<(&'static str, &'static str)> {
     if ["LC_ALL", "LC_CTYPE", "LANG"]
         .into_iter()
@@ -498,17 +502,7 @@ pub fn terminal_locale_from(variables: Variables) -> Option<(&'static str, &'sta
     {
         return None;
     }
-    if cfg!(target_os = "macos") {
-        Some(("LC_CTYPE", "UTF-8"))
-    } else if cfg!(target_os = "linux")
-        && ["C.utf8", "C.UTF-8"]
-            .into_iter()
-            .any(|name| Path::new("/usr/lib/locale").join(name).is_dir())
-    {
-        Some(("LC_CTYPE", "C.UTF-8"))
-    } else {
-        None
-    }
+    sys::utf8_character_set().map(|name| ("LC_CTYPE", name))
 }
 
 /// Where this machine shows the drives of the Windows PC it runs on, when it
@@ -610,6 +604,27 @@ fn absolute_variable(variables: Variables, name: &str) -> io::Result<PathBuf> {
 #[cfg(unix)]
 mod sys {
     use std::io;
+
+    /// The system's UTF-8 character set when the C library can load it,
+    /// from wherever the system keeps it (glibc's archive or folders).
+    pub(super) fn utf8_character_set() -> Option<&'static str> {
+        let (name, c_name) = if cfg!(target_os = "macos") {
+            ("UTF-8", c"UTF-8")
+        } else {
+            ("C.UTF-8", c"C.UTF-8")
+        };
+        // SAFETY: `c_name` is a static NUL-terminated string, and a null
+        // base asks for a new locale object, freed below; this process's
+        // own locale is untouched.
+        let locale =
+            unsafe { libc::newlocale(libc::LC_CTYPE_MASK, c_name.as_ptr(), std::ptr::null_mut()) };
+        if locale.is_null() {
+            return None;
+        }
+        // SAFETY: `locale` came from `newlocale` above and is freed once.
+        unsafe { libc::freelocale(locale) };
+        Some(name)
+    }
 
     pub(super) fn account_environment() -> io::Result<Vec<(std::ffi::OsString, std::ffi::OsString)>>
     {
@@ -839,6 +854,11 @@ mod sys {
     use std::io;
     use std::os::windows::ffi::OsStringExt;
     use std::ptr::null_mut;
+
+    /// None: a console hands its program characters, not bytes.
+    pub(super) fn utf8_character_set() -> Option<&'static str> {
+        None
+    }
 
     pub(super) fn network_addresses() -> io::Result<std::collections::BTreeSet<std::net::IpAddr>> {
         Err(io::Error::new(
