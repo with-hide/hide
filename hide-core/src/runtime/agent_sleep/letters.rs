@@ -542,7 +542,7 @@ impl Runtime {
                 tries.started = tries.started.saturating_add(1);
                 self.begin_agent_wake(pane, WakeMode::Resume, "letter")
             }
-            Route::Dormant(id) => match self.begin_dormant_wake(id) {
+            Route::Dormant(id) => match self.begin_dormant_wake(id, "letter") {
                 Ok(started) => started,
                 // A busy checkout, a spent transition budget or a close not
                 // yet confirmed passes: the wake waits its turn.
