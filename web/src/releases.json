@@ -7,7 +7,7 @@
       "highlights": [
         {
           "drawing": "automation",
-          "chapter": null,
+          "chapter": "automation",
           "text": {
             "en": {
               "title": "Hand your everyday tasks to automations",
