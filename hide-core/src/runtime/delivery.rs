@@ -168,6 +168,33 @@ pub(crate) fn delivery_turns(
         .collect()
 }
 
+/// What a target key names for a delivery or pane command, read once by
+/// [`Runtime::resolve_target`] and carried to what the command runs on.
+pub(crate) enum Target {
+    Agent(Box<crate::coordination::AgentRecord>),
+    /// A spawn with no registration yet.
+    Spawn(Box<crate::coordination::SpawnRecord>),
+    /// An agent the engine shows in a pane before it registers.
+    Observed(Box<Observation>),
+}
+
+impl Target {
+    /// The identity a letter or a watch reaches, if any.
+    pub(crate) fn actor(&self) -> Option<&Actor> {
+        match self {
+            Target::Agent(record) => Some(&record.actor),
+            Target::Observed(observation) => Some(&observation.actor),
+            Target::Spawn(_) => None,
+        }
+    }
+}
+
+/// Whether a command's target may be an agent asleep or closed for Reopen
+/// closed: a letter waits for it, a watch does not.
+fn repeated_kind(command: &Command) -> bool {
+    matches!(command, Command::Send { .. })
+}
+
 impl Observation {
     /// The core's turn for the pass the pane was last observed in: none
     /// while the read is stale, and none when that pass laid no turn for
@@ -1685,6 +1712,78 @@ impl Runtime {
             .map(|prepared| prepared.listing_only(listed))
     }
 
+    /// What `key` names for `caller` on `device`: the one reading of a key
+    /// every command that names an agent shares (`coordination::
+    /// resolve_key`), or else an agent the engine shows in that pane, or by
+    /// the name it gave, before it registered. A name or pane whose only
+    /// registration ended stands for the agent the pane shows now, if one.
+    pub(crate) fn resolve_target(
+        &self,
+        caller: Option<&Actor>,
+        device: &str,
+        key: &str,
+    ) -> Result<Option<Target>, String> {
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
+        let named = match self.delivery_ledger.as_ref() {
+            Ok(ledger) => match crate::coordination::resolve_key(ledger, caller, &pane, key)? {
+                Some(crate::coordination::Named::Agent(record)) => {
+                    Some(Target::Agent(Box::new(record.clone())))
+                }
+                Some(crate::coordination::Named::Spawn(spawn)) => {
+                    Some(Target::Spawn(Box::new(spawn.clone())))
+                }
+                None => None,
+            },
+            Err(_) => None,
+        };
+        if let Some(Target::Agent(record)) = &named
+            && (!record.ended || record.id == key)
+        {
+            return Ok(named);
+        }
+        if let Some(Target::Spawn(_)) = &named {
+            return Ok(named);
+        }
+        let mut seen = self.delivery_observations.values().filter(|observation| {
+            observation.actor.pane_id == pane || observation.given_name() == Some(key)
+        });
+        match (seen.next(), seen.next()) {
+            (Some(_), Some(_)) => Err("target_ambiguous".into()),
+            (Some(observation), None) => Ok(Some(Target::Observed(Box::new(observation.clone())))),
+            (None, _) => Ok(named),
+        }
+    }
+
+    /// The agent `target` reaches now: the one its registration's identity
+    /// runs as, and for a letter (`asleep`) one Hide put to sleep, which
+    /// takes letters that wait for its wake (PRD mission-worker-sleep B1),
+    /// or one closed for Reopen closed, whose letters the store's next pass
+    /// ends with no recipient (`Runtime::delivery_closed`). Never another
+    /// agent in the same pane.
+    fn delivery_target(&self, target: &Target, asleep: bool) -> Option<Observation> {
+        let record = match target {
+            Target::Observed(observation) => return Some((**observation).clone()),
+            Target::Spawn(_) => return None,
+            Target::Agent(record) if record.ended => return None,
+            Target::Agent(record) => record,
+        };
+        let actor = &record.actor;
+        self.delivery_observations
+            .values()
+            .find(|observation| observation.actor.same_identity(actor))
+            .cloned()
+            .or_else(|| {
+                let ledger = self.delivery_ledger.as_ref().ok()?;
+                asleep
+                    .then(|| {
+                        self.sleeping_target(ledger, Some(actor), &actor.pane_id)
+                            .or_else(|| self.closed_target(ledger, Some(actor), &actor.pane_id))
+                    })
+                    .flatten()
+            })
+            .filter(|observation| observation.actor.same_identity(actor))
+    }
+
     /// Holds an own-mode bot's delivery command to its own work (mission
     /// -87): the agent it shows, ends, writes to or watches is one it
     /// started or one started under those; a spawn, in any project on any
@@ -1698,31 +1797,23 @@ impl Runtime {
         command: &mut Command,
     ) -> Result<Option<std::collections::HashSet<String>>, String> {
         use crate::coordination::Command as Agents;
-        // Each agent the command names is read once, held, and named again
-        // by the exact id that was held (`Runtime::own_target`).
+        // `show` reads its key as `resolve_target` does and takes the exact
+        // id it held as that one registration; `end` takes only an id. A
+        // letter's and a watch's target is held in `prepare_as`, on what it
+        // resolved once.
         match command {
             Command::Agents {
                 command: Agents::List { .. },
             } => return Ok(Some(own.agents.clone())),
             Command::Agents {
-                command: Agents::Show { id } | Agents::End { id, .. },
-            }
-            | Command::Send { target: id, .. } => {
+                command: Agents::Show { id },
+            } => {
                 *id = self.own_target(own, device, id)?;
             }
-            Command::WatchStart {
-                target, observer, ..
+            Command::Agents {
+                command: Agents::End { id, .. },
             } => {
-                *target = self.own_target(own, device, target)?;
-                if let Some(observer) = observer {
-                    *observer = self.own_target(own, device, observer)?;
-                }
-            }
-            // A watch it keeps is on its own work (`coordination::
-            // end_unowned_watches`); the agent it hands the watch to must be
-            // its own too.
-            Command::WatchAssign { observer, .. } => {
-                *observer = self.own_target(own, device, observer)?;
+                super::access::hold(own.agents.contains(id))?;
             }
             // A reply goes to the letter's sender, who must be its own work
             // now, whatever the bot could reach when the letter came.
@@ -1990,10 +2081,13 @@ impl Runtime {
         let resolves_to_caller = |key: &str| {
             qualify(key) == actor.pane_id
                 || key == actor.name
-                || self.delivery_ledger.as_ref().is_ok_and(|ledger| {
-                    crate::coordination::resolve_actor(ledger, key)
-                        .is_some_and(|registered| registered.same_identity(&actor))
-                })
+                || self
+                    .resolve_target(Some(&actor), device, key)
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    .and_then(Target::actor)
+                    .is_some_and(|named| named.same_identity(&actor))
         };
         match &command {
             Command::WatchStart {
@@ -2041,31 +2135,43 @@ impl Runtime {
         // recipient as the target, so it finds the same letter again whoever
         // else got one under the intent. Another recipient, kind or body is
         // a new letter, sent to a target as any other.
+        // The one agent the command names, read once (`resolve_target`):
+        // an own-mode bot's must be its own work, and the letter, its retry
+        // and the watch run on it, never on the key read again.
+        let named = match &command {
+            Command::Send { target, .. }
+            | Command::WatchStart { target, .. }
+            | Command::WatchAssign {
+                observer: target, ..
+            } => self.resolve_target(Some(&actor), device, target)?,
+            _ => None,
+        };
+        if matches!(
+            command,
+            Command::Send { .. } | Command::WatchStart { .. } | Command::WatchAssign { .. }
+        ) && let Some(own) = self.own_work(caller)
+        {
+            super::access::hold(
+                matches!(&named, Some(Target::Agent(record)) if own.agents.contains(&record.id)),
+            )?;
+        }
+        let named_actor = named.as_ref().and_then(Target::actor).cloned();
         let retry = match &command {
             Command::Send {
-                target,
-                intent,
-                kind,
-                body,
-                ..
-            } => match self.delivery_ledger.as_ref() {
-                Ok(ledger) => crate::delivery::mailbox::retried_send(
+                intent, kind, body, ..
+            } => match (self.delivery_ledger.as_ref(), &named_actor) {
+                (Ok(ledger), Some(named)) => crate::delivery::mailbox::retried_send(
                     ledger,
                     &actor,
                     intent,
                     kind,
                     body,
                     None,
-                    |stored| {
-                        qualify(target) == stored.pane_id
-                            || *target == stored.name
-                            || crate::coordination::resolve_registered(ledger, target)
-                                .is_some_and(|registered| registered.same_identity(stored))
-                    },
+                    |stored| named.same_identity(stored),
                     unix_milliseconds(),
                 )
                 .map(|letter| letter.recipient.clone()),
-                Err(_) => None,
+                _ => None,
             },
             _ => None,
         };
@@ -2082,40 +2188,10 @@ impl Runtime {
                     hide_node_link::panes::PullPoint::Tool | hide_node_link::panes::PullPoint::TurnEnd,
                 ..
             } => self.delivery_observations.get(actor_pane).cloned(),
-            Command::Send { target, .. }
-            | Command::WatchStart { target, .. }
-            | Command::WatchAssign {
-                observer: target, ..
-            } => {
-                let registered = self
-                    .delivery_ledger
+            Command::Send { .. } | Command::WatchStart { .. } | Command::WatchAssign { .. } => {
+                let first = named
                     .as_ref()
-                    .ok()
-                    .and_then(|ledger| crate::coordination::resolve_registered(ledger, target));
-                let pane = qualify(target);
-                let mut matches = self.delivery_observations.values().filter(|observation| {
-                    observation.actor.pane_id == pane
-                        || observation.given_name() == Some(target.as_str())
-                        || registered
-                            .is_some_and(|registered| registered.same_identity(&observation.actor))
-                });
-                let first = matches.next().cloned();
-                if matches.next().is_some() {
-                    return Err("target_ambiguous".into());
-                }
-                // An agent Hide put to sleep takes letters, which wait for
-                // its wake (PRD mission-worker-sleep B1), and so does one
-                // closed for Reopen closed, whose letters the store's next
-                // pass ends with no recipient (`Runtime::delivery_closed`).
-                let first = match (&command, first) {
-                    (Command::Send { .. }, None) => {
-                        self.delivery_ledger.as_ref().ok().and_then(|ledger| {
-                            self.sleeping_target(ledger, registered, &pane)
-                                .or_else(|| self.closed_target(ledger, registered, &pane))
-                        })
-                    }
-                    (_, first) => first,
-                };
+                    .and_then(|named| self.delivery_target(named, repeated_kind(&command)));
                 // A letter that wakes a sleeping plan child waits for a place
                 // under its main's cap, and is not kept without one (PRD
                 // hide-plan-delegate B6).

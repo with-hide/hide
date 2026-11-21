@@ -249,7 +249,7 @@ fn device_engine(
             }
             reply(fake::delivery_agent(&row))
         }
-        "prompt_agent" => reply(()),
+        "prompt_agent" | "send_text" | "press_pane_keys" => reply(()),
         "delivery_agent" if !held.load(Ordering::SeqCst) => {
             self::refused("agent_not_found", "agent target worker not found")
         }
@@ -2720,9 +2720,101 @@ fn an_own_mode_bots_spawn_on_a_device_is_its_own_work() {
     assert_eq!(started["origin_tool"], "nightly");
     let ledger = spawner.published();
     let own = crate::coordination::started::hide_started(&ledger).tool_work;
+    let child = started["id"].as_str().unwrap().to_owned();
     assert!(
-        own.iter().any(|work| work.connection == connection
-            && Some(work.agent_id.as_str()) == started["id"].as_str()),
+        own.iter()
+            .any(|work| work.connection == connection && work.agent_id == child),
         "the agent it started on the device is its work"
+    );
+
+    // Review F6: what it may do there reaches that pane on the device, and
+    // another pane of the device is refused. A letter to its agent goes to
+    // the agent's pane; a read shows the device pane's text, and a send
+    // types into it.
+    let caller = crate::workspace_control::access_caller_id(&connection, None);
+    let context = crate::access::access_context(crate::node::TEST_NODE, &connection);
+    let pane = "remote:mini:pane:w2:p1";
+    // The device's next pass shows its agent at work in that pane.
+    {
+        let record = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == child)
+            .unwrap();
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents":[
+                {"id":"worker","pane_id":"w2:p1","agent":"codex","agent_status":"working",
+                    "state_change_seq":1,"lineage_session":record.actor.session},
+            ]}))
+            .unwrap();
+        spawner.runtime.lock().unwrap().observe_delivery_laid(
+            DEVICE,
+            &payload,
+            Some(record.host_scope.as_str()),
+            None,
+        );
+    }
+    // The guard ends with this statement, before the run.
+    let prepared = spawner.runtime.lock().unwrap().prepare_delivery(
+        crate::node::TEST_NODE,
+        &caller,
+        &context,
+        None,
+        crate::delivery::Command::Send {
+            target: child.clone(),
+            intent: "look".into(),
+            body: "look at the tests".into(),
+            kind: "request".into(),
+            now: false,
+            force: false,
+        },
+    );
+    let letter = prepared
+        .and_then(|prepared| prepared.run(Duration::from_secs(30)))
+        .unwrap();
+    assert_eq!(letter["recipient"]["pane_id"], pane, "{letter}");
+    let pane_command = |command| {
+        spawner.runtime.lock().unwrap().prepare_pane_command(
+            crate::node::TEST_NODE,
+            &caller,
+            &context,
+            command,
+        )
+    };
+    let read = |pane: &str| crate::pane_command::PaneCommand::Read {
+        pane: pane.into(),
+        lines: 10,
+    };
+    let send = |pane: &str| crate::pane_command::PaneCommand::Send {
+        pane: pane.into(),
+        text: Some("y".into()),
+        keys: Vec::new(),
+        enter: false,
+        paste: false,
+    };
+    let shown = pane_command(read(pane))
+        .and_then(|prepared| prepared.run())
+        .unwrap();
+    assert_eq!(shown["pane"], pane, "{shown}");
+    assert_eq!(shown["text"], "Last login: today\n", "{shown}");
+    let typed = pane_command(send(pane))
+        .and_then(|prepared| prepared.run())
+        .unwrap();
+    assert_eq!(typed["pane"], pane, "{typed}");
+    assert_eq!(typed["text_sent"], true, "{typed}");
+    assert_eq!(spawner.count("send_text"), 1);
+    for command in [
+        read("remote:mini:pane:w2:p9"),
+        send("remote:mini:pane:w2:p9"),
+    ] {
+        assert_eq!(
+            pane_command(command).err().as_deref(),
+            Some(crate::access::NOT_OWN_WORK)
+        );
+    }
+    assert_eq!(
+        spawner.count("send_text"),
+        1,
+        "nothing typed into another pane"
     );
 }

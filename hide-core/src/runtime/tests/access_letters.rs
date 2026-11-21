@@ -954,13 +954,14 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
         true,
     );
     let a2 = a2.unwrap();
+    // The other bot's root is named as this bot's root's id is.
     let (_, b1) = start(
         &fixture,
         Starter::Bot {
             connection: &b,
             origin: &origin_b,
         },
-        "b1",
+        &a1,
         None,
         "b1",
         "terminal-b1",
@@ -1071,8 +1072,12 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
         not_own(fixture.tool(&a, end(target)), target);
         not_own(fixture.tool(&a, watch(target, None)), target);
     }
-    // A watch on its own agent goes to no one else's agent (F2).
-    not_own(fixture.tool(&a, watch(&a1, Some(&other))), "observer");
+    // A watch on its own agent goes to no one else's agent (F2): a watch
+    // starts with its caller as observer, and is handed on only to its own.
+    assert_eq!(
+        fixture.tool(&a, watch(&a1, Some(&other))).err().as_deref(),
+        Some("caller_identity_conflict")
+    );
     let watched = fixture.tool(&a, watch(&a1, None)).unwrap();
     not_own(
         fixture.tool(
@@ -1129,6 +1134,49 @@ fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
             Some(crate::access::NOT_OWN_WORK),
             "the operator's agent, whose id its own root is named"
         );
+    }
+
+    // Review round 2: the other bot's root is named as this bot's root's
+    // id. A letter, a watch and a watch handed on reach the registration
+    // that was held, never the one that name reads as.
+    let letter = fixture.tool(&a, send(&a1, "exact")).unwrap();
+    assert_eq!(letter["recipient"]["pane_id"], "a1", "{letter}");
+    let again = fixture.tool(&a, send(&a1, "exact")).unwrap();
+    assert_eq!(again["id"], letter["id"], "its retry is the same letter");
+    assert_eq!(again["recipient"]["pane_id"], "a1", "{again}");
+    // An operator's agent reads the same keys the same way, in both
+    // directions: the id `other` is that agent, though this bot's root is
+    // named it, and the id `a1` is this bot's root, though the other bot's
+    // is named it; a retry finds the letter it sent.
+    for (key, pane) in [(other.as_str(), "other"), (a1.as_str(), "a1")] {
+        let letter = fixture.agent("worker", send(key, "from-worker")).unwrap();
+        assert_eq!(letter["recipient"]["pane_id"], pane, "{key}: {letter}");
+        let again = fixture.agent("worker", send(key, "from-worker")).unwrap();
+        assert_eq!(again["id"], letter["id"], "{key}: {again}");
+        let watched = fixture.agent("worker", watch(key, None)).unwrap();
+        assert_eq!(watched["target"]["pane_id"], pane, "{key}: {watched}");
+    }
+    let watch_a1 = fixture.tool(&a, watch(&a1, None)).unwrap();
+    assert_eq!(watch_a1["target"]["pane_id"], "a1", "{watch_a1}");
+    let handed = fixture
+        .tool(
+            &a,
+            Command::WatchAssign {
+                id: watch_a1["id"].as_str().unwrap().into(),
+                observer: a2.clone(),
+                actor: None,
+                expected_generation: None,
+                approval: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(handed["parent"]["pane_id"], "a2", "{handed}");
+    // The other bot's own root goes by that name, but the id is this bot's.
+    not_own(fixture.tool(&b, send(&a1, "mine")), "bot b by name");
+    // Once its root ended, a letter to its id reaches no one else.
+    fixture.tool(&a, end(&a1)).unwrap();
+    if let Ok(letter) = fixture.tool(&a, send(&a1, "after")) {
+        assert_eq!(letter["recipient"]["pane_id"], "a1", "{letter}");
     }
 }
 

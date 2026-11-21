@@ -22,11 +22,9 @@ impl Runtime {
         command.check()?;
         // A bot reads panes and types into them as the operator does (PRD
         // hide-external-control B20, B21, B28), an own-mode bot those of its
-        // own work (mission-87); it has no pane to open another beside or a
-        // checkout to name.
-        // The agent an own-mode bot's `agent read` names, read once and held
-        // (`Runtime::own_target`): its read is of that identity's pane.
-        let mut held_agent = None;
+        // own work (mission-87), which `own` holds; it has no pane to open
+        // another beside or a checkout to name.
+        let mut own = None;
         let (caller_pane, context) = match Caller::parse(caller) {
             Caller::Pane(caller_pane) => {
                 let context = self
@@ -39,25 +37,16 @@ impl Runtime {
             }
             Caller::Access { connection, .. } => {
                 self.access_authority(device, connection, crate::access::pane_need(&command))?;
-                if let Some(own) = self.own_work(caller) {
+                own = self.own_work(caller);
+                if let Some(own) = &own {
                     match &command {
                         PaneCommand::Read { pane, .. }
                         | PaneCommand::ReadScreen { pane }
                         | PaneCommand::Send { pane, .. } => {
-                            super::access::hold(self.own_pane(&own, device, pane))?;
+                            super::access::hold(self.own_pane(own, device, pane))?;
                         }
-                        PaneCommand::AgentRead { agent, .. } => {
-                            let id = self.own_target(&own, device, agent)?;
-                            let ledger = self.delivery_ledger.as_ref().map_err(Clone::clone)?;
-                            held_agent = ledger
-                                .agents
-                                .iter()
-                                .find(|record| record.id == id)
-                                .map(|record| record.actor.clone());
-                            // A spawn with no registration yet is read by
-                            // its pane, as its refusal named it.
-                            super::access::hold(held_agent.is_some())?;
-                        }
+                        // Held on what it resolves to, below.
+                        PaneCommand::AgentRead { .. } => {}
                         PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => {
                             return Err(crate::access::NEEDS_AGENT.into());
                         }
@@ -126,14 +115,7 @@ impl Runtime {
                 )
             }
             PaneCommand::AgentRead { agent, lines } => {
-                let observation = match &held_agent {
-                    Some(actor) => self
-                        .delivery_observations
-                        .values()
-                        .find(|observation| observation.actor.same_identity(actor))
-                        .ok_or("agent_unavailable")?,
-                    None => self.agent_named(device, &agent)?,
-                };
+                let observation = self.agent_read_target(device, &agent, own.as_ref())?;
                 (
                     observation.actor.device_id.clone(),
                     // The answer names the agent's pane as `hide pane send`
@@ -254,30 +236,30 @@ impl Runtime {
             .is_some_and(|(row, windows)| row.key.takes_one_paste(windows))
     }
 
-    /// The live agent `key` names for a caller on `device`, as a letter's
-    /// target is named: its registered name or id, the name the engine gave it,
-    /// or its pane.
-    fn agent_named(
+    /// The agent `hide agent read` reads: the one `key` names (`Runtime::
+    /// resolve_target`), as the engine shows it now, held to an own-mode
+    /// bot's work (`own`).
+    fn agent_read_target(
         &self,
         device: &str,
         key: &str,
+        own: Option<&super::access::OwnWork>,
     ) -> Result<&super::delivery::Observation, String> {
-        let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
-        let registered = self
-            .delivery_ledger
-            .as_ref()
-            .ok()
-            .and_then(|ledger| crate::coordination::resolve_registered(ledger, key));
-        let mut matches = self.delivery_observations.values().filter(|observation| {
-            observation.actor.pane_id == pane
-                || observation.given_name() == Some(key)
-                || registered.is_some_and(|registered| registered.same_identity(&observation.actor))
-        });
-        let first = matches.next().ok_or("agent_unavailable")?;
-        if matches.next().is_some() {
-            return Err("target_ambiguous".into());
+        let target = self.resolve_target(None, device, key)?;
+        if let Some(own) = own {
+            super::access::hold(matches!(
+                &target,
+                Some(super::delivery::Target::Agent(record)) if own.agents.contains(&record.id)
+            ))?;
         }
-        Ok(first)
+        let actor = target
+            .as_ref()
+            .and_then(super::delivery::Target::actor)
+            .ok_or("agent_unavailable")?;
+        self.delivery_observations
+            .values()
+            .find(|observation| observation.actor.same_identity(actor))
+            .ok_or_else(|| "agent_unavailable".to_owned())
     }
 
     /// The checkout row's Set purpose for the checkout the command ran in:
