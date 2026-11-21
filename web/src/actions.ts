@@ -634,12 +634,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /**
    * Focus mode's desk beside the pane, shown or folded (D-57): one event, the
    * core's to decide, and a desk shown takes the keyboard into its active
-   * area. A desk with nothing on it stands for nobody, so only the log says so.
+   * area. A desk with no tab the strip shows stands for nobody: the core's
+   * `shown` count says so, and only the log records the ask (D-60, D-63).
    */
   const showPairDesk = (shown: boolean) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    if (shown && (view.layout?.display_count ?? 0) === 0) return diagnostic("pair_view_desk: no View to stand beside the pane");
+    if (shown && (drawnPair(view)?.shown ?? 0) === 0) return diagnostic("pair_view_desk: no tab the strip shows to stand beside the pane");
     dispatch({ schema_version: 2, kind: "pair_view_desk", payload: { shown } });
     if (shown && view.layout) followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
   };
@@ -3275,6 +3276,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /** Zooms or unzooms `target`, a pane the operator pointed at, else the focused pane. */
     toggleZoom(target?: string) {
+      // Focus mode leaves the tab's layout and zoom as they are, a device pane's too; the pane is alone already (D-16, D-65).
+      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.zoomPane");
         if (!host) return;
@@ -3283,8 +3286,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
         return;
       }
-      // Focus mode leaves the tab's layout and zoom as they are; the pane is alone already (D-16, D-65).
-      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("toggle_zoom: no focused pane");
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
@@ -4060,11 +4061,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     keepViewOpen,
 
     focusView,
-    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward; in focus mode a folded desk stands again for it (D-63). */
+    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward; in focus mode the one focus event also stands a folded desk (D-63). */
     revealView(displayId: string) {
-      const view = workspaceViewOf(rest());
-      if (drawnPair(view) && !pairBesideDesk(view)) showPairDesk(true);
-      else showDocuments();
+      if (!drawnPair(workspaceViewOf(rest()))) showDocuments();
       focusView(displayId, true);
     },
     focusViewArea,

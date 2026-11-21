@@ -152,15 +152,15 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // from a desk expanded over the body, brings back the lane as it was
   // (PRD lane-desk-pair-view D-51, D-59).
   const pairOn = pair !== null;
-  const expandedBeforePair = useRef<boolean | null>(null);
   useLayoutEffect(() => {
     const store = useUiStore.getState();
-    if (pairOn && expandedBeforePair.current === null) {
-      expandedBeforePair.current = store.laneExpanded;
+    const before = store.laneExpandedBeforePair;
+    if (pairOn && before === null) {
+      useUiStore.setState({ laneExpandedBeforePair: store.laneExpanded });
       store.setLaneExpanded(false);
-    } else if (!pairOn && expandedBeforePair.current !== null) {
-      store.setLaneExpanded(expandedBeforePair.current);
-      expandedBeforePair.current = null;
+    } else if (!pairOn && before !== null) {
+      useUiStore.setState({ laneExpandedBeforePair: null });
+      store.setLaneExpanded(before);
     }
   }, [pairOn]);
   // A closed lane is not expanded when it opens again.
@@ -293,7 +293,7 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
   // in the tab row's place (PRD lane-desk-pair-view B17, D-16, D-61); it is the same
   // element in every mode, so entering pair view mounts no desk again.
   // A tool floating over a pane focus mode draws alone stands under the band too, so the way back stays in sight (D-61).
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" || pair !== null ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : pair !== null ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
   const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
   // A press outside a floating tool closes it once the press ends, so what
@@ -306,8 +306,9 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
           divider) draws over the lane; out of reach of the pointer and the
-          keyboard while an expanded lane covers it. */}
-      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded"} onPointerDownCapture={pressOutside} data-agent-area="true">
+          keyboard while an expanded lane or focus mode covers it, the tab
+          row with its group selector and + included (D-61). */}
+      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded" || pair !== null} onPointerDownCapture={pressOutside} data-agent-area="true">
         {/* The terminals attach once the body is measured, so a standing desk's reserve is in their first grid (D-50). */}
         {width > 0 ? <AgentArea checkout={checkout} actions={actions} /> : null}
       </div>

@@ -2886,12 +2886,27 @@ fn e_folds_and_shows_the_desk_in_focus_mode() {
     assert!(pair_desk_event(&mut runtime, true));
     runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(front_pair(&runtime).shown, 1, "the web reads what can stand");
 
-    // The shell's desk holds only the agent's View, which the shell's strip
+    // The left agent's open onto the folded desk stands it again (D-21).
+    assert!(pair_desk_event(&mut runtime, false));
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The fold is the left pane's: another pane taking the left drops it.
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The shell's desk holds only the agent's Views, which the shell's strip
     // folds, so ⌘E has nothing to stand beside it (D-60, D-64).
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
     assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_pair(&runtime).shown, 0);
     assert!(!pair_desk_event(&mut runtime, true));
     runtime.sync_workspace_view();
     assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));

@@ -19,6 +19,7 @@ import { catalogWorkspaces, frontCheckout, type Checkout } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
+import { usePaneViewRows } from "./ViewComments";
 import { workspaceKey } from "./viewLayout";
 import { TOOLS, TOOL_SCOPES, agentEntries, workspaceViewOf, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
 import { drawnPair } from "./pairView";
@@ -97,26 +98,29 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const up = laneUp(drawn.mode);
   const documentsChord = commandLabel("toggle_lane_documents", uiState);
   // In focus mode the button is the desk beside the pane, which it folds and stands as ⌘E does: pressed while the desk
-  // stands, and while folded it counts the left pane's Views, none for a pane with nothing to show (D-63).
+  // stands, and while folded it counts the left pane's Views, the pane head's `뷰 N개` (D-63). It does nothing while the
+  // desk holds no tab the strip shows, the core's `shown` count (D-60).
   const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
-  const pairViews = useShellStore((s) => (pair ? (workspaceViewOf(s.rest)?.feedback?.opened ?? []).filter((row) => row.pane_id === pair.pane_id).length : 0));
+  const pairViews = usePaneViewRows(pair?.pane_id ?? "").length;
   const documentsShown = pair ? pair.alone !== true : up && drawn.view === "documents";
   const count = pair ? (documentsShown ? 0 : pairViews) : views;
+  const listed = pair ? pairViews : views;
+  const available = pair ? (pair.shown ?? 0) > 0 : views > 0;
   // The rail is always drawn, so the Hide AI tool's count reads its Project whichever tool shows.
   useMemoryProject(actions);
   return (
     <nav className="flex w-(--size-tool-rail) shrink-0 flex-col items-center gap-xxs border-l border-border bg-sidebar py-xs" aria-label={t("panes.lane.rail")} data-tool-rail="true">
-      <Hint label={views > 0 ? [t("panes.lane.documents"), deskTab, t("panes.workspace.viewsOpen", { count: views })].filter(Boolean).join(" · ") : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
+      <Hint label={available ? [t("panes.lane.documents"), deskTab, listed > 0 ? t("panes.workspace.viewsOpen", { count: listed }) : ""].filter(Boolean).join(" · ") : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
         <button
           type="button"
           aria-pressed={documentsShown}
           aria-label={t("panes.lane.documents")}
-          aria-description={views > 0 ? t("panes.workspace.viewsOpen", { count: views }) : t("panes.lane.noDocuments")}
+          aria-description={!available ? t("panes.lane.noDocuments") : listed > 0 ? t("panes.workspace.viewsOpen", { count: listed }) : undefined}
           // `aria-disabled`, not `disabled`: a disabled button takes no pointer events, so its hint could never open (B2).
-          aria-disabled={views === 0}
+          aria-disabled={!available}
           className={cn(RAIL_BUTTON, "aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground", documentsShown ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
           data-lane-tool="documents"
-          onClick={() => views > 0 && actions.toggleDocuments()}
+          onClick={() => available && actions.toggleDocuments()}
         >
           {documentsShown ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
           <FilesIcon aria-hidden="true" className="size-(--size-icon-lg)" />

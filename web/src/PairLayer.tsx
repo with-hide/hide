@@ -16,7 +16,8 @@ import { useShellStore } from "./store";
 // the body's full width (D-53, D-57). The band takes the tab row's height, so
 // the body is as tall as it is outside the mode, and the tab row with its
 // group selector and + is hidden under it; ⌃⇥ and the sidebar move between
-// panes. The tab's own canvas stays under it with its layout as it was.
+// panes. The tab's own canvas stays under it with its layout and zoom as
+// they were.
 
 /** The band and the pane: the left half, `paneWidth` wide (0 until the body is measured), or the whole width while `alone`. */
 export function PairLayer({ checkout, paneId, alone, paneWidth, covered, actions }: { checkout: Checkout; paneId: string; alone: boolean; paneWidth: number; covered: boolean; actions: Actions }) {

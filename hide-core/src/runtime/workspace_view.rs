@@ -1465,9 +1465,11 @@ impl Runtime {
             let reads = self.pair_reads(key);
             let panes_with_views = self.panes_with_views(key, &reads);
             let pair = self.pair_left_of(key, tab).map(|pane| {
+                let shown = self.pair_shown_count(key, tab, &pane, &reads);
                 let mut pair = crate::model::PairViewSnapshot {
                     tab_id: tab.clone(),
                     alone: !self.pair_desk_beside(key, tab, &pane, &reads),
+                    shown,
                     pane_id: pane,
                     folded: Vec::new(),
                 };

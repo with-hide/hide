@@ -7,7 +7,7 @@
 //! no View to show (a shell, an agent that opened none), and beside the
 //! desk once its agent opens one (D-53). Going to another pane by any way (a
 //! pane chord, the sidebar, a tab switch) takes the mode with it
-//! (`follow_pair_focus`, `follow_pair_look`). The engine's layout and
+//! (`follow_pair_focus`, `follow_pair_look`). The engine's layout, zoom and
 //! focus are not touched, and the shell draws the pane's terminal over them
 //! (D-26). It ends only on ⌘., the pressed ◧ or the band's way back
 //! (`PairEnd::Left`) and when the drawn pane closes (`end_pairs_of_gone_panes`);

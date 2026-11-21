@@ -331,6 +331,8 @@ type UiStore = {
   viewFocusRequest: ViewFocusRequest | null;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
+  /** `laneExpanded` as it was when focus mode came on, given back when it ends, null outside the mode (PRD lane-desk-pair-view D-51, D-59). Kept here, not on the Workspace screen, so leaving that screen in focus mode forgets nothing. */
+  laneExpandedBeforePair: boolean | null;
   /**
    * The Hide AI tool's tab and the 제안 row shown in full, by its id (`s12`,
    * `m72`); a Needs You row opens the tool on its row (PRD hide-ai-suggestions
@@ -552,6 +554,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   agentFindRequest: null,
   viewFocusRequest: null,
   laneExpanded: false,
+  laneExpandedBeforePair: null,
   hideAiTab: "suggestions",
   openSuggestion: null,
   missions: MISSION_ENTRY,

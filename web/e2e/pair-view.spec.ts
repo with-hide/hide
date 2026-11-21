@@ -114,7 +114,6 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(paneView(page, shell)).toHaveCount(0);
     await expect(pairButton(page, left!)).toHaveAttribute("aria-pressed", "true");
     await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
-    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`)).toBeVisible();
     await expect(page.locator(`[data-pair-row="${left}"]`).first()).toBeVisible();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     // D-41: the other agent's tab folds into one menu at the strip's end.
@@ -166,7 +165,6 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     expect(resizes.get(shell) ?? 0).toBe(beforeLeave.get(shell) ?? 0);
     expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(1);
     expect((await live(page)).sort()).toEqual(liveBefore);
-    await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
     await screenshot(page, "pair-left");
   } finally {
     daemon?.stop();
@@ -288,8 +286,6 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await page.locator(`nav[data-sidebar] [data-agent-open="${second.pane}"]`).first().click();
     await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible();
     await expect(band(page)).toBeVisible();
-    await expect(page.locator(`[data-pair-tab="${second.tab}"]`)).toBeVisible();
-    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`), "one mode, one mark").toHaveCount(0);
     await expect(deskTabs(page)).toHaveCount(1);
     await screenshot(page, "pair-tab-switch");
 
@@ -340,7 +336,6 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await withControl(daemon, (control) => closePane(control, left!));
     await expect(band(page)).toHaveCount(0);
     await expect(paneView(page, other!)).toBeVisible();
-    await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
     await expect(page.locator('[role="alert"]')).toHaveCount(0);
   } finally {
     daemon?.stop();
@@ -379,7 +374,6 @@ test("⌘. on a shell in a two-pane tab draws it alone at the full width and tak
     await expect(page.locator(`[data-pair-layer="${shell}"]`)).toHaveAttribute("data-pair-alone", "true");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await expect(paneView(page, left!)).toHaveCount(0);
-    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`)).toBeVisible();
     await expect(pairButton(page, shell)).toHaveAttribute("aria-pressed", "true");
     const row = (await page.locator("[data-lane-row]").boundingBox())!;
     await expect.poll(async () => Math.abs((await alonePane.boundingBox())!.width - row.width)).toBeLessThanOrEqual(1);
@@ -403,7 +397,6 @@ test("⌘. on a shell in a two-pane tab draws it alone at the full width and tak
     await expect(page.locator(`[data-pair-layer="${second.pane}"]`)).toHaveAttribute("data-pair-alone", "true");
     await expect(band(page)).toBeVisible();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
-    await expect(page.locator(`[data-pair-tab="${second.tab}"]`)).toBeVisible();
     await expect.poll(async () => Math.abs((await page.locator(`[data-pair-pane="${second.pane}"]`).boundingBox())!.width - row.width)).toBeLessThanOrEqual(1);
     await page.keyboard.press(chord("pair_view"));
     await expect(band(page)).toHaveCount(0);
