@@ -544,13 +544,13 @@ The rule grammar, its limits and the evaluator have their own cases in `hide-scr
 ## Which lanes a pull request runs
 
 `pr.yml`'s `plan` job reads the paths a pull request changes against the base it merges into and plans the lanes they need; `scripts/ci-plan.py` is the one place the rules live, and `scripts/tests/test_ci_plan.py` checks them against real paths.
-`MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier.
+`MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier, and on a pull request the Windows jobs it picks run only for the Windows paths they prove ([Where the Windows runners went](#where-the-windows-runners-went)).
 `remote-mailbox` (the remote mailbox lane, its own Linux job) is planned for a change to any crate it builds and tests (`MAILBOX_CRATES` in the script: `hide-core`, `hided`, `hide-agent-hooks`, `hide-host`, and so every crate they depend on, the device link's `hide-node` and `hide-node-link` among them); web code and web specs do not reach it.
 `remote-mailbox-arm` runs the same lane on a Linux ARM64 runner (`ubuntu-24.04-arm`), where the device is an ARM64 Linux machine (with-hide/hide-private#501): it is planned for the device link's own crates (`ARM_DEVICE_CRATES`: `hide-node`, `hide-node-link`), `hided/tests/it/device_own_engine.rs` and `contracts/device-kits.json`, which `hide-node` compiles in; main's push run and the nightly run it with every lane, and it builds cold, since no job saves a dependency cache for that processor.
 `windows-wsl` (the [WSL device lane](#wsl-device-lane)) is planned for a change to a crate the WSL link and a Windows core's ssh cross (`WSL_CRATES`: `hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), to the node command or to its tests, and not for a crate that only consumes them: the core's decisions about a WSL device are unit tests in `hide-core/src/runtime/tests/wsl_devices.rs`.
 Every lane is a job whose `if:` asks the plan, and `verify` passes only when every planned lane succeeded and every other lane was skipped.
 A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong `if:` shows up as a red check rather than a lane quietly left out.
-The table names the lanes a path reaches; on a pull request the macOS jobs among them run only when it changes a macOS path, which [Where the macOS runners went](#where-the-macos-runners-went) owns.
+The table names the lanes a path reaches; on a pull request the macOS jobs among them run only when it changes a macOS path, which [Where the macOS runners went](#where-the-macos-runners-went) owns, and the Windows jobs among them only for a path that job proves, which [Where the Windows runners went](#where-the-windows-runners-went) owns.
 
 | Change | Lanes |
 | --- | --- |
@@ -597,6 +597,8 @@ A new PR push (`synchronize`) cancels the older run in the same concurrency grou
 
 Every plan includes `policy`, whatever else it names, except a draft pull request's: it plans no lane, and `verify` fails with "draft: lanes not run, mark ready for review".
 A body edit (`edited`) starts a run too, for the checks that read the body (`check-pr-screenshots.py`); it waits for a run in progress rather than cancelling it, and with the last green run standing it plans `policy` alone.
+When that green run checked this same head, `policy` runs only the checks that read the body: the script suite and the structural checks passed on this head in that run, and a body edit changes no file they read (`plan`'s `body-only`).
+With no green run, a green run of another head or a lookup that fails, a body edit runs the whole `policy` as before; `BodyEdit` in `scripts/tests/test_ci_plan.py` checks both and the steps `pr.yml` skips.
 Marking the pull request ready (`ready_for_review`) starts the run that plans and runs the lanes, and that run's `verify` replaces the failed one.
 `verify` fails on a draft instead of being skipped because a skipped required check counts as passed, and `verify` is not started until its lanes finish: a skipped `verify` from the draft run would otherwise be the only check on the commit for the minutes after it is marked ready.
 Keep `ready_for_review` in `pr.yml`'s `types`, and keep `verify` running on a draft; `scripts/tests/test_ci_plan.py` reads the workflow for both.
@@ -680,12 +682,45 @@ The accepted risk is a pull request that breaks only macOS merging green, with m
 It happened before, when a web shell or crate change left `desktop e2e` out until issue #1288: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15, and of 400 failed runs from 2026-10-05 to 2026-10-27, 33 failed only in the macOS desktop suite.
 So a main push run that fails only in macOS jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, macOS included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
 A pull request that wants its desktop specs run on macOS before it merges can run `gh workflow run nightly.yml --ref <branch> -f lane=macos`.
-The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes) and on Linux only in the nightly.
+The desktop `@platform` tests run on Windows in a pull request only when it changes a Windows path `windows desktop` proves ([Where the Windows runners went](#where-the-windows-runners-went)), and on Linux only in the nightly.
 
 The remote mailbox lane runs `hided/tests/it/device_own_engine.rs`, a device of the core's own engine (PRD engine-bundle-3-core-owns B35): it stages the built `hide-holder` (the lane restores the vt lane's Zig inputs for it) beside the shipped `hided`, starts a pane by the node link's pane requests, proves a caller in another pane by that pane's holder record, ends the link and its node, and checks the next link's node finds the pane with the same process and that no file of Herdr's reached the account.
 Its asker program waits for the test before it asks the node's pane socket, and the test releases it once the node's proof of the pane says it runs: the holder writes a pane's record as running after its program started, and a program that asks in between is refused as a pane the node does not know yet, once, with no retry (with-hide/hide-private#503).
 Each test's loopback `sshd` (`hided/tests/it/support/sshd.rs`) chooses its port by binding port 0 and letting it go, so another test's server can take the port before this one binds; the server is ready only when its own log says `Server listening on 127.0.0.1 port N.`, never when a connection to the port succeeds, because that reaches whichever server holds it, and a server that lost the bind (`Address already in use`) is started again on another port (with-hide/hide-private#210); a restart on the same port reads only the log lines its own server wrote, since the log is appended to, and names a port another server took while it was down.
 Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine|stress_gate_canary)::/) & !test(protocol24)' --run-ignored only`.
+
+### Where the Windows runners went
+
+A pull request runs a Windows job only when it changes a path that job proves, and main's push run and the nightly run every Windows job (operator decision 2026-11-21, the macOS rule above applied to Windows).
+Measured over 28 hours (191 pull request `verify` runs), a run that ran lanes took a median 27.1 minutes, and `windows check` (about 24 minutes) and the Windows e2e shards were its longest jobs and held the most runner slots; over two weeks, 39 of 285 failed pull request runs failed in Windows jobs only.
+`scripts/ci-plan.py` decides it per lane, as `MACOS_LANE_INPUTS` does for macOS: `windows_lanes` names, for each changed path, the Windows jobs that prove it, and the plan keeps those and drops the rest.
+The Windows-only lanes (`WINDOWS_ONLY_LANES`: `windows-check`, `windows-e2e`, `windows-desktop`, `windows-wsl`, and `agy-contract`, whose pull request call runs Windows alone) are planned or left out; the Windows legs of `relay-protocol`, `os-contract`, `vt`, `holder-restart`, `omp-contract`, `agent-journey` and `agent-clis` (`WINDOWS_LEG_LANES`) follow `plan`'s `windows-legs` output.
+
+| Windows path | The Windows jobs that prove it |
+| --- | --- |
+| A CI definition that defines a Windows job (`pr.yml` and the workflows it calls with a Windows runner, `.github/actions/`, `scripts/ci-plan.py`), a path no rule narrows, a change that is not an add, modify or delete | Every Windows job its plan has |
+| Rust code that holds Windows code (a `cfg` or target naming Windows, over several lines or nested in `any`, `all` or `not`, `std::os::windows`, `win32`), a Rust file whose module is declared under a Windows `cfg` or inside a module that is, a crate's `Cargo.toml` or `build.rs`, `Cargo.lock`, a deleted Rust file in the Windows layer | `windows check` and the Windows legs of the crate's own lanes (the OS contract, vt and the holder, agy, WSL, the relay); not the Windows e2e suites, which drive the app, nor the journey's Windows forms, which run its Python scripts |
+| A path outside a crate named for Windows (`windows`, `win`, `win32`, `powershell`, `conpty`, `wsl` in its name) or a PowerShell, batch or NSIS script | The Windows jobs of the lanes the path reaches; inside a crate, the Rust row's |
+| The web files whose Windows form differs (the host bridge, `revealExternal.ts`, the chords and their labels, the keyboard and keys, terminal links) | `windows e2e` and `windows desktop` |
+| Desktop, web or script code with a `win32` branch, a Python `os.name` or `platform.system()` branch, a C `_WIN32` branch or a shell's `MINGW*\|MSYS*\|CYGWIN*` case | The Windows jobs of the lanes the path reaches: `windows desktop` and, for `desktop/src/main`, `windows check`, whose Vitest step runs the host's unit suite; `windows e2e` for a web e2e helper; the journey's Windows forms for its scripts |
+| The pins a Windows leg installs or runs from: `contracts/agent-clis.json`, `contracts/agent-journey.json`, `contracts/device-kits.json`, `hide-vt/build-inputs.json` | The Windows jobs of the lanes that read them (agy's contract and the Windows legs of the agent CLIs, the journey and the holder restart for the agent pins) |
+| A package input with no Windows code | `package`, which builds and installs the Windows installer and makes the Windows device kit on every run of its lane |
+
+A Rust file outside the Windows layer (`WINDOWS_LAYER`: `hide-platform`, `hide-shell`, `hide-holder`, `vendor/portable-pty` and the WSL lane's files) is read change by change, not whole: it plans `windows check` only when a changed line holds a Windows marker or a changed hunk lies inside an item that carries one.
+`windows_items` finds each item from its marker, or the attribute the marker sits in, to the end of the item, statement or block it is on, by matching brackets with strings, characters and comments skipped; an `if cfg!(windows)` keeps its `else` with it.
+A file it cannot read with certainty (brackets that do not balance, a string or comment left open, a marker inside a macro's body, an inner `#![cfg(windows)]`, a side git cannot read) counts as touched, never as untouched.
+Before any of that, `windows_module` finds where the file's module is declared in its crate (`git grep` at the pull request's head, or its base for a delete: a `mod` of its name above its folder, or a `path` attribute naming it) and follows the declarations up to the crate root; a declaration inside a Windows item makes the whole file Windows, and a file no module declares counts as Windows.
+So a change outside the Windows block of a shared file meets Windows on main, not on the pull request.
+A file in the Windows layer, where each system's form is written, runs Windows whatever line changed, as does any file the plan cannot read as a diff.
+A test tagged `@platform` is no Windows path by its tag: the Linux suite runs it, and its Windows leg runs on main and in the nightly, as its macOS leg does.
+
+On the 70 pull requests merged before 2026-11-21 (#2503 to #2794), read with each one's own diff, 39 plan neither `windows check` nor `windows e2e`.
+The others change CI, the Windows layer, a line of Windows code or a hunk inside a Windows item, a web file with a Windows form, or a path no rule narrows yet (`Cargo.lock`, a lockfile, `.config/nextest.toml`).
+
+The accepted risk is the macOS one: a pull request that breaks only Windows merges green, and main's push run, or the next nightly, is the first to show it.
+A main push run that fails only in Windows jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, Windows included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
+The plan has no way for a pull request to ask for lanes by name, since every lane follows from its paths; a pull request that its author knows is risky on Windows runs the Windows web and desktop `@platform` suites and agy before it merges with `gh workflow run nightly.yml --ref <branch> -f lane=windows`, and one Windows test file with `gh workflow run repeat.yml --ref <branch> -f runner=windows`.
+`WindowsOnPullRequests` and `RustChange` in `scripts/tests/test_ci_plan.py` check the rule with the paths of real merged pull requests, the item reader with items cut from the files whose Windows code most often met a pull request, and the legs `pr.yml` passes.
 
 ### WSL device lane
 
