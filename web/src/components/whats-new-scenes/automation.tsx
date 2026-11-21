@@ -10,7 +10,7 @@
 // `sidebar-header.tsx`, the Needs You row), so it reads as the screen the
 // operator will open, and plays example work, never theirs.
 
-import { CheckIcon, FileTextIcon, MoonIcon, RepeatIcon, SunIcon, WaypointsIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, GlobeIcon, MoonIcon, RepeatIcon, RotateCwIcon, SunIcon, WaypointsIcon } from "lucide-react";
 import { agentProductName } from "../../agentAdapters";
 import { scheduleText } from "../../automationWords";
 import type { AutomationSchedule } from "../../snapshot";
@@ -168,64 +168,79 @@ export function AutomationScene({ at }: SceneProps) {
   );
 }
 
-/** What the run wrote, opened beside the list as the View it opened: a briefing laid out as a document, the one thing to look at first, the news, the day's calendar and the to-dos. */
+/** The week's mentions the trend line draws, oldest first, as a share of the chart's height. */
+const TREND = [22, 30, 26, 38, 34, 52, 70];
+/** The price bars, as a share of the longest. */
+const PRICES = [["us", 100, false], ["rival", 90, true], ["rival2", 96, false]] as const;
+/** The news by kind, as shares of a hundred, for the donut. */
+const MIX = [["mix1", 45, "stroke-primary", "bg-primary"], ["mix2", 30, "stroke-warning", "bg-warning"], ["mix3", 25, "stroke-agent-working", "bg-agent-working"]] as const;
+
+/** What the run made, opened beside the list in the browser View it opened: an HTML report of the morning, the one thing to look at first, then its charts drawing in. */
 function Report() {
   const { t } = useInterfaceTranslation();
-  const rise = (order: number) => ({ animationDelay: `${120 + order * 110}ms` });
-  const news = [["news1", "source1"], ["news2", "source2"], ["news3", "source3"]] as const;
-  const day = [["10:00", "s1", false], ["15:00", "s2", true], ["19:00", "s3", false]] as const;
+  const rise = (order: number) => ({ animationDelay: `${150 + order * 140}ms` });
+  const points = TREND.map((value, index) => `${(index / (TREND.length - 1)) * 100},${40 - value * 0.5}`).join(" ");
+  let mixAt = 25;
   return (
     <div className="wns-rise absolute inset-y-sm right-sm left-md flex flex-col overflow-hidden rounded-md border border-border bg-popover shadow-overlay">
-      <div className="flex items-center gap-xs border-b border-border px-md py-xxs text-micro text-subtle-foreground">
-        <FileTextIcon className="size-(--size-icon-sm) shrink-0" />
-        <span className="truncate font-mono">{t("whatsNewScene.automation.reportFile")}</span>
+      <div className="flex items-center gap-xs border-b border-border px-sm py-xxs text-micro text-subtle-foreground">
+        <GlobeIcon className="size-(--size-icon-sm) shrink-0" />
+        <span className="truncate">{t("whatsNewScene.automation.reportTitle")}</span>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-xs px-md py-sm">
-        <div className="wns-rise flex items-baseline gap-sm" style={rise(0)}>
-          <span className="text-body font-semibold">{t("whatsNewScene.automation.reportTitle")}</span>
-          <span className="text-micro text-muted-foreground">{t("whatsNewScene.automation.report.date")}</span>
+      <div className="flex items-center gap-xs border-b border-border px-sm py-xxs text-muted-foreground">
+        <ArrowLeftIcon className="size-(--size-icon-sm) shrink-0" />
+        <ArrowRightIcon className="size-(--size-icon-sm) shrink-0" />
+        <RotateCwIcon className="size-(--size-icon-sm) shrink-0" />
+        <span className="min-w-0 flex-1 truncate rounded-full bg-muted px-sm font-mono text-micro text-subtle-foreground">{t("whatsNewScene.automation.reportFile")}</span>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-xs bg-background px-md py-sm">
+        <div className="wns-rise flex items-center gap-sm" style={rise(0)}>
+          <span className="shrink-0 whitespace-nowrap text-body font-semibold">{t("whatsNewScene.automation.reportTitle")}</span>
+          <span className="shrink-0 whitespace-nowrap text-micro text-muted-foreground">{t("whatsNewScene.automation.report.date")}</span>
+          <span className="min-w-0 flex-1" />
+          <span className="truncate rounded-md border-l-2 border-warning bg-warning/10 px-xs text-micro text-foreground">{t("whatsNewScene.automation.report.must")}</span>
         </div>
-        <div className="wns-rise flex items-center gap-sm rounded-md border-l-2 border-warning bg-warning/10 px-sm py-xs" style={rise(1)}>
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="text-micro font-medium text-warning">{t("whatsNewScene.automation.report.mustTitle")}</span>
-            <span className="truncate text-caption font-medium">{t("whatsNewScene.automation.report.must")}</span>
-          </span>
-          <span className="shrink-0 text-micro text-primary">{t("whatsNewScene.automation.report.mustAction")}</span>
-        </div>
-        <div className="flex min-h-0 flex-1 gap-md">
-          <div className="flex min-w-0 flex-1 flex-col gap-xxs">
-            <span className="wns-rise text-micro font-semibold text-muted-foreground" style={rise(2)}>{t("whatsNewScene.automation.report.newsTitle")}</span>
-            {news.map(([line, source], index) => (
-              <span key={line} className="wns-rise flex min-w-0 items-center gap-xs text-micro" style={rise(3 + index)}>
-                <span className="shrink-0 rounded-sm bg-muted px-xs text-muted-foreground">{t(`whatsNewScene.automation.report.${source}`)}</span>
-                <span className="truncate text-foreground">{t(`whatsNewScene.automation.report.${line}`)}</span>
-              </span>
-            ))}
-            <span className="wns-rise mt-xs text-micro font-semibold text-muted-foreground" style={rise(6)}>{t("whatsNewScene.automation.report.priceTitle")}</span>
-            {([["us", 100, false], ["rival", 90, true]] as const).map(([who, width, cut], index) => (
-              <span key={who} className="wns-rise flex items-center gap-xs text-micro" style={rise(7 + index)}>
-                <span className="w-1/5 shrink-0 truncate text-subtle-foreground">{t(`whatsNewScene.automation.report.${who}`)}</span>
-                <span className="flex min-w-0 flex-1 items-center gap-xs">
-                  <span className={cn("h-(--spacing-sm) rounded-sm", cut ? "bg-warning" : "bg-primary")} style={{ width: `${width * 0.8}%` }} />
-                  {cut ? <span className="shrink-0 font-medium text-warning">-10%</span> : null}
-                </span>
-              </span>
-            ))}
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,4fr)_minmax(0,3fr)] gap-sm">
+          <div className="wns-rise flex min-h-0 flex-col gap-xxs rounded-md border border-border p-sm" style={rise(1)}>
+            <span className="flex items-baseline gap-xs text-micro">
+              <span className="font-semibold text-muted-foreground">{t("whatsNewScene.automation.report.trendTitle")}</span>
+              <span className="font-semibold text-primary">+38%</span>
+            </span>
+            <svg className="min-h-0 w-full flex-1" viewBox="0 0 100 40" preserveAspectRatio="none">
+              <polygon points={`0,40 ${points} 100,40`} className="wns-fade fill-primary/15" style={{ animationDelay: "900ms" }} />
+              <polyline points={points} pathLength={1} className="wns-draw fill-none stroke-primary" strokeWidth={1.5} strokeLinejoin="round" style={rise(2)} />
+            </svg>
           </div>
-          <div className="flex w-2/5 shrink-0 flex-col gap-xxs">
-            <span className="wns-rise text-micro font-semibold text-muted-foreground" style={rise(2)}>{t("whatsNewScene.automation.report.dayTitle")}</span>
-            {day.map(([time, line, key], index) => (
-              <span key={line} className={cn("wns-rise flex min-w-0 items-center gap-xs text-micro", key ? "font-medium text-foreground" : "text-subtle-foreground")} style={rise(3 + index)}>
-                <span className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full", key ? "bg-warning" : "bg-border")} />
-                <span className="shrink-0 font-mono tabular-nums">{time}</span>
-                <span className="truncate">{t(`whatsNewScene.automation.report.${line}`)}</span>
-              </span>
-            ))}
-            <span className="wns-rise mt-xxs text-micro font-semibold text-muted-foreground" style={rise(6)}>{t("whatsNewScene.automation.report.todoTitle")}</span>
-            {(["todo1", "todo2"] as const).map((line, index) => (
-              <span key={line} className="wns-rise flex min-w-0 items-center gap-xs text-micro text-foreground" style={rise(7 + index)}>
-                <span className="size-(--size-icon-sm) shrink-0 rounded-sm border border-border" />
-                <span className="truncate">{t(`whatsNewScene.automation.report.${line}`)}</span>
+          <div className="wns-rise flex min-h-0 flex-col gap-xxs rounded-md border border-border p-sm" style={rise(2)}>
+            <span className="text-micro font-semibold text-muted-foreground">{t("whatsNewScene.automation.report.mixTitle")}</span>
+            <div className="flex min-h-0 flex-1 items-center gap-sm">
+              <svg className="aspect-square h-4/5 shrink-0" viewBox="0 0 42 42">
+                {MIX.map(([key, share, stroke], index) => {
+                  const offset = mixAt;
+                  mixAt -= share;
+                  return <circle key={key} cx={21} cy={21} r={15.915} className={cn("wns-fade fill-none", stroke)} strokeWidth={6} strokeDasharray={`${share} ${100 - share}`} strokeDashoffset={offset} style={rise(3 + index)} />;
+                })}
+              </svg>
+              <div className="flex min-w-0 flex-col gap-xxs text-micro">
+                {MIX.map(([key, share, , fill], index) => (
+                  <span key={key} className="wns-rise flex min-w-0 items-center gap-xs" style={rise(3 + index)}>
+                    <span className={cn("size-(--size-tab-status-dot) shrink-0 rounded-full", fill)} />
+                    <span className="truncate text-subtle-foreground">{t(`whatsNewScene.automation.report.${key}`)}</span>
+                    <span className="shrink-0 tabular-nums text-foreground">{share}%</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="wns-rise col-span-2 flex flex-col gap-xxs rounded-md border border-border p-sm" style={rise(3)}>
+            <span className="text-micro font-semibold text-muted-foreground">{t("whatsNewScene.automation.report.priceTitle")}</span>
+            {PRICES.map(([who, width, cut], index) => (
+              <span key={who} className="flex items-center gap-xs text-micro">
+                <span className="w-1/6 shrink-0 truncate text-subtle-foreground">{t(`whatsNewScene.automation.report.${who}`)}</span>
+                <span className="flex min-w-0 flex-1 items-center gap-xs">
+                  <span className={cn("wns-grow h-(--spacing-sm) rounded-sm", cut ? "bg-warning" : "bg-primary/60")} style={{ width: `${width * 0.85}%`, ...rise(4 + index) }} />
+                  {cut ? <span className="wns-pop shrink-0 font-medium text-warning" style={rise(6)}>-10%</span> : null}
+                </span>
               </span>
             ))}
           </div>
