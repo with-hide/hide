@@ -801,7 +801,7 @@ mod tests {
             // The next pane is past the one closed before the save (w1:p3).
             assert_eq!((first.tab_numbers, first.pane_numbers), (2, 4));
             let tab = &first.tabs[0];
-            assert!(!tab.zoomed, "a Herdr tab's zoom is not carried");
+            assert!(!tab.zoomed, "an imported tab's zoom is not carried");
             assert_eq!(tab.focused, "w1:p1");
             assert!(matches!(
                 &tab.root,
