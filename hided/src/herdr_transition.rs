@@ -324,7 +324,7 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        hide_core::delivery::ledger::save(&hide_kit::layout::delivery_ledger(state), &ledger)
+        hide_core::delivery::store::save(&hide_kit::layout::delivery_store(state), &ledger)
             .unwrap();
     }
 
@@ -378,7 +378,7 @@ mod tests {
         );
         assert_eq!(herdr_import::kept_save(&engine_dir).unwrap(), None);
         let ledger =
-            hide_core::delivery::ledger::load(&hide_kit::layout::delivery_ledger(&state)).unwrap();
+            hide_core::delivery::store::load(&hide_kit::layout::delivery_store(&state)).unwrap();
         assert_eq!(
             (
                 ledger.agents[0].host_scope.as_str(),

@@ -4,7 +4,8 @@ import type { AgentNotice } from "./generated/hided-ws";
 import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./connection";
 import { moveUnderWay, type MoveView } from "./coreMove";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
-import { isOperatorFocus, numbered } from "./operatorFocus";
+import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
+import { movesOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
@@ -93,10 +94,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       useShellStore.getState().noteDiagnostic(`dispatch dropped: ${event.kind} while socket not open`);
       return false;
     }
-    // Each operator focus carries this page's next number, so the snapshot
+    // Each operator focus and card open carries this page's next number, so the snapshot
     // can say whether it includes the last one sent (`operatorFocus.ts`).
     // The number counts only once the frame has left.
-    if (isOperatorFocus(event)) {
+    if (movesOperatorFocus(event)) {
       const sequence = operatorFocusSequence + 1;
       socket.send(JSON.stringify(numbered(event, sequence)));
       operatorFocusSequence = sequence;
@@ -134,6 +135,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
 
   const clearSocketState = () => {
     clearPending("socket_closed");
+    refuseWaitingAutomationCalls();
     resetBrowserComments();
   };
 
@@ -221,6 +223,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       }
       if (frame.type === "agent_notice") {
         receiveAgentNotice(frame.payload as unknown as AgentNotice);
+        return;
+      }
+      if (frame.type === "automation_result") {
+        receiveAutomationResult(frame.payload as unknown as { request_id: string; ok: boolean; value?: unknown; code?: string });
         return;
       }
       if (frame.type === "file_bytes_error") {

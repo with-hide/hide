@@ -16,7 +16,7 @@ import { toolProjectChoice, toolSidebarProjects } from "./toolCells";
 // The sidebar's PR list (PRD lane-two-columns D-20, B41; PRD
 // sidebar-task-lens D-17, D-45): every pull request of the rail's device in
 // the core's groups, rows, order and folds, narrowed to one project by the
-// project chip the 태스크 list shares. A row opens its card in the lane's 보기 slot.
+// project chip the 태스크 list shares. A row opens its card as a card tab on a desk.
 // In a tool's cell it lists the pull requests of the checkouts the tool's
 // sessions work in, on every device it reached, narrowed by the same chip
 // read for the tool (`ToolProjectFilter`; operator decision 2026-11-15).

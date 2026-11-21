@@ -36,6 +36,8 @@ mod agent_update;
 mod agents_settings_remote;
 #[path = "tests/appearance.rs"]
 mod appearance;
+#[path = "tests/automations.rs"]
+mod automations;
 #[path = "tests/backlog.rs"]
 mod backlog;
 #[path = "tests/beside_spawn.rs"]
@@ -50,6 +52,7 @@ mod closed_registrations;
 mod control_order;
 mod core_letters;
 mod desk_group;
+mod desk_views;
 #[path = "tests/detail.rs"]
 mod detail;
 #[path = "tests/device_catalog.rs"]
@@ -87,6 +90,7 @@ mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
+mod heal;
 #[path = "tests/herdr_import.rs"]
 mod herdr_import;
 mod hide_ai_devices;
@@ -100,6 +104,8 @@ mod inbound;
 mod issues;
 #[path = "tests/key_routing.rs"]
 mod key_routing;
+#[path = "tests/kit_store.rs"]
+mod kit_store;
 #[path = "tests/labels.rs"]
 mod labels;
 #[path = "tests/launch_choice.rs"]
@@ -176,6 +182,7 @@ mod snapshot_delta;
 mod ssh_hosts_list;
 mod ssh_sign_in;
 mod start_geometry;
+mod store_cli;
 mod strays;
 mod suggestions;
 #[path = "tests/terminal.rs"]
@@ -194,7 +201,6 @@ mod unseen_views;
 mod usage_limit;
 #[path = "tests/view_areas.rs"]
 mod view_areas;
-mod view_bookmarks;
 #[path = "tests/workspace_control.rs"]
 mod workspace_control;
 #[path = "tests/workspace_view.rs"]
@@ -774,6 +780,7 @@ pub(crate) fn tab(
         label: Some("Session".to_owned()),
         empty: pane.is_none(),
         delegated: false,
+        automation: false,
         panes: pane.into_iter().collect(),
     }
 }
@@ -834,6 +841,7 @@ pub(super) fn workspace(
         last_activity_unix_ms: None,
         checkouts,
         pinned: false,
+        unlisted: false,
         inactive_checkouts: Default::default(),
         session_folds: Default::default(),
         removal: Default::default(),

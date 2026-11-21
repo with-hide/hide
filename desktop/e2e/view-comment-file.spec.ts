@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentPane, type HideAnswer } from "../../web/e2e/agent-pane";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspaceWithLane } from "../../web/e2e/wire";
 import { fitWindow, launchShell, startStack, test, type Stack } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 import { evaluateIn, pageUrls, sendInput } from "./page-input";
@@ -57,7 +57,7 @@ test("Comment on a local HTML page: point at an element and drag an area, and th
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
-  await enterWorkspace(shell, "fixture");
+  await enterWorkspaceWithLane(shell, "fixture");
   const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   const ok = (answer: HideAnswer) => {
     expect(answer.status, answer.out).toBe(0);
@@ -138,7 +138,7 @@ test("The comment world of a local HTML page reads exactly what the page itself 
   const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1400, height: 900 });
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   // Secrets in the checkout beside the page and outside every checkout, and a server that must hear nothing.
   const checkout = path.join(fixture.root, "fixture");

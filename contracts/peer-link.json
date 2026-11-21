@@ -38,67 +38,6 @@
       "number": 8
     }
   ],
-  "core": {
-    "asks": [
-      "delivery",
-      "pane"
-    ],
-    "items": [
-      "agent",
-      "pane"
-    ],
-    "messages": {
-      "call": {
-        "fields": [
-          "ask",
-          "call",
-          "command",
-          "from"
-        ],
-        "since": 1
-      },
-      "call_answer": {
-        "fields": [
-          "answer",
-          "call",
-          "refused"
-        ],
-        "since": 1
-      },
-      "letter": {
-        "fields": [
-          "body",
-          "from",
-          "id",
-          "intent",
-          "kind",
-          "now",
-          "reply_to",
-          "to"
-        ],
-        "since": 1
-      },
-      "letter_refused": {
-        "fields": [
-          "id",
-          "reason"
-        ],
-        "since": 1
-      },
-      "letter_taken": {
-        "fields": [
-          "id",
-          "recipient"
-        ],
-        "since": 1
-      }
-    },
-    "party_fields": [
-      "id",
-      "item",
-      "name"
-    ]
-  },
   "event": {
     "box": {
       "acked_fields": [
@@ -569,13 +508,6 @@
         "priority": 0,
         "since": 1,
         "tag": 10
-      },
-      {
-        "name": "core",
-        "needs_grant": true,
-        "priority": 75,
-        "since": 1,
-        "tag": 11
       }
     ],
     "message": {

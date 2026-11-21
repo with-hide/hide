@@ -37,6 +37,32 @@ pub const WAITING_SENDS: usize = 16;
 /// A screenshot's staged name: a UUID and its extension.
 pub const SHOT_NAME_BYTES: usize = 64;
 
+/// The terminal of a pane no agent runs in whose link the operator pressed
+/// (PRD lane-desk-pair-view D-54), by what survives an engine restart: the
+/// View it opened is that pane's, in its `N views` and beside it in pair
+/// view, with no opener mark, since no agent opened it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LinkTerminal {
+    pub device_id: String,
+    pub terminal_id: String,
+}
+
+/// Who an open belongs to: the operator's own (the Explorer, ⌘P, ⌘K,
+/// History, an address), the agent whose terminal link it was (D-33), or
+/// the terminal of a pane with no agent whose link it was (D-54).
+#[derive(Clone, Debug)]
+pub enum OpenedBy {
+    Operator,
+    Agent(Opener),
+    Terminal(LinkTerminal),
+}
+
+impl From<Option<Opener>> for OpenedBy {
+    fn from(opener: Option<Opener>) -> Self {
+        opener.map_or(Self::Operator, Self::Agent)
+    }
+}
+
 /// The agent that last opened a View (D-03), by what survives an engine
 /// restart: the machine, the engine terminal and the native session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

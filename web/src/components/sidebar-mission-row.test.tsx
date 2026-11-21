@@ -104,3 +104,29 @@ it("says which node's pull request is the operator's to merge on the mission's o
     await act(async () => root.unmount());
   }
 });
+
+// Every row in 내 차례 can be put away by the operator (operator decision 2026-11-20): a right-click on the
+// mission's own row offers what its buttons do and 치우기, which asks the core to keep the row out.
+it("offers 확인하기, the Conductor's terminal and 치우기 on a right-click, and 치우기 sends one put-away for the mission", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  await clientI18n.changeLanguage("ko");
+  const { mission, rest } = missionFixture("no-conductor", Date.UTC(2026, 10, 1));
+  const held = { ...mission, conductor: { ...mission.conductor, present: true }, safety_net: { ...mission.safety_net!, conductor_present: true } };
+  useShellStore.setState({ rest, connection: "live" });
+  const [ask] = missionAsks([held], [held.id]);
+  const sent: { kind: string; payload: unknown }[] = [];
+  const container = document.createElement("ul");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><SidebarMissionRow ask={ask!} inset="0" actions={createActions((event) => sent.push(event as { kind: string; payload: unknown }))} /></TooltipProvider>));
+  try {
+    const row = container.querySelector<HTMLElement>(`[data-mission-ask="${held.id}"]`)!;
+    await act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(items.map((item) => item.textContent)).toEqual(["확인하기", "터미널로 이동", "치우기"]);
+    await act(async () => items[2]!.click());
+    expect(sent.filter((event) => event.kind === "mission_put_away").map((event) => event.payload)).toEqual([{ mission: held.id }]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

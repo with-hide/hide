@@ -1249,6 +1249,11 @@ pub(super) struct PrOpenPayload {
     /// (operator decision 2026-11-09).
     #[serde(default)]
     pub(super) at: super::detail::DetailPlace,
+    /// The page's number for this open, as on `detail_open`.
+    #[serde(default)]
+    pub(super) client_id: Option<String>,
+    #[serde(default)]
+    pub(super) sequence: Option<u64>,
 }
 
 /// `pr_delegate`: an agent started on a pull request's branch with the
@@ -1385,6 +1390,25 @@ pub(super) struct KitAgentSetPayload {
     pub(super) device_id: String,
     pub(super) agent: String,
     pub(super) enabled: bool,
+}
+
+/// The store screen asked for changes to one machine's store of skills and
+/// MCP items (PRD skill-mcp-manager), in order; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStorePayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+    pub(super) changes: Vec<hide_kit::store::StoreChange>,
+}
+
+/// The store screen's [이 Mac에서 복사] for one device (PRD skill-mcp-manager
+/// B28): this Mac's store goes to that device's; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStoreCopyPayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
 }
 
 /// A Settings tab that shows the kit opened: this Mac's parts are read again
@@ -1774,9 +1798,8 @@ pub(super) enum Event {
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
-    DetailBack,
-    DetailClose,
-    DetailShow(super::detail::DetailShowPayload),
+    PairView(super::pair_view::PairViewPayload),
+    PairViewDesk(super::pair_view::PairDeskPayload),
     RemoteControl(RemoteControlPayload),
     RemoteFileList(RemoteFileListPayload),
     FileOpen(FileOpenPayload),
@@ -1836,6 +1859,9 @@ pub(super) enum Event {
     CancelRepositoryClone(CancelRepositoryClonePayload),
     KitReinstall(KitReinstallPayload),
     KitAgentSet(KitAgentSetPayload),
+    KitStore(KitStorePayload),
+    KitStoreCopy(KitStoreCopyPayload),
+    StoreAskAnswer(super::store_cli::StoreAskAnswerPayload),
     AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
@@ -1870,6 +1896,7 @@ pub(super) enum Event {
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
     Access(super::access::AccessEvent),
+    Automation(crate::automations::Call),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -1900,6 +1927,7 @@ pub(super) enum Event {
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
     MissionHandover(MissionHandoverPayload),
+    MissionPutAway(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2097,9 +2125,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         ),
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
-        "detail_back" => Ok(Event::DetailBack),
-        "detail_close" => Ok(Event::DetailClose),
-        "detail_show" => decode!(super::detail::DetailShowPayload, DetailShow),
+        "pair_view" => decode!(super::pair_view::PairViewPayload, PairView),
+        "pair_view_desk" => decode!(super::pair_view::PairDeskPayload, PairViewDesk),
         "remote_control" => decode!(RemoteControlPayload, RemoteControl),
         "remote_file_list" => decode!(RemoteFileListPayload, RemoteFileList),
         "file_open" => decode!(FileOpenPayload, FileOpen),
@@ -2197,6 +2224,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "cancel_repository_clone" => decode!(CancelRepositoryClonePayload, CancelRepositoryClone),
         "kit_reinstall" => decode!(KitReinstallPayload, KitReinstall),
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
+        "kit_store" => decode!(KitStorePayload, KitStore),
+        "kit_store_copy" => decode!(KitStoreCopyPayload, KitStoreCopy),
+        "store_ask_answer" => decode!(super::store_cli::StoreAskAnswerPayload, StoreAskAnswer),
         "agent_permission_set" => decode!(
             super::agent_permission::AgentPermissionSetPayload,
             AgentPermissionSet
@@ -2286,6 +2316,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
+        "mission_put_away" => decode!(MissionEndPayload, MissionPutAway),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -2340,6 +2371,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
         "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        automation if super::automations::EVENT_KINDS.contains(&automation) => {
+            super::automations::decode_event(automation, payload)
+                .map(Event::Automation)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
         access if super::access::AccessEvent::KINDS.contains(&access) => {
             super::access::AccessEvent::decode(access, payload)
                 .map(Event::Access)
@@ -2606,6 +2642,13 @@ impl Runtime {
             Event::KitAgentSet(payload) => {
                 self.request_kit_agent_set(&payload.device_id, &payload.agent, payload.enabled)
             }
+            Event::KitStore(payload) => {
+                self.request_store_change(&payload.device_id, payload.request_id, payload.changes)
+            }
+            Event::KitStoreCopy(payload) => {
+                self.request_store_copy(&payload.device_id, payload.request_id)
+            }
+            Event::StoreAskAnswer(payload) => self.answer_store_ask(payload),
             Event::CodexDaemonDisable(payload) => {
                 self.request_codex_daemon_disable(&payload.device_id)
             }
@@ -3869,6 +3912,7 @@ impl Runtime {
                     && let Some(key) = self.front_workspace_key()
                     && !self.admit_view_open(
                         &key,
+                        &self.front_place(&key),
                         &created,
                         crate::view_layout::DisplayKind::File,
                         None,
@@ -4282,6 +4326,7 @@ impl Runtime {
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)
             }
+            Event::MissionPutAway(payload) => self.mission_put_away_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),
@@ -4290,7 +4335,13 @@ impl Runtime {
             Event::PrLinkIssue(payload) => self.link_pr_issue(payload),
             Event::PrFeedbackRead(payload) => self.read_pr_feedback(payload),
             Event::PrDelegate(payload) => self.delegate_pr(payload),
-            Event::PrOpen(payload) => self.open_pull_request_card(payload),
+            // A card open the page numbered answers it in the next snapshot,
+            // opened or refused, as an operator focus does.
+            Event::PrOpen(payload) => {
+                let numbered = payload.sequence.is_some();
+                self.acknowledge_operator_focus(payload.client_id.as_deref(), payload.sequence);
+                self.open_pull_request_card(payload) || numbered
+            }
             Event::PrCardRead(payload) if payload.look_again => self.look_again_pr_card(payload),
             Event::PrCardRead(payload) => self.read_pr_card(payload),
             Event::PrMerge(payload) => self.merge_pull_request(payload),
@@ -4323,6 +4374,7 @@ impl Runtime {
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::Access(event) => self.access_event(event),
+            Event::Automation(call) => self.automation_event(call),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),
@@ -4526,10 +4578,13 @@ impl Runtime {
             Event::PracticeInviteClose => self.close_practice_invite(),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
-            Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
-            Event::DetailBack => self.detail_back(),
-            Event::DetailClose => self.close_detail(),
-            Event::DetailShow(payload) => self.show_detail(payload.shown),
+            Event::DetailOpen(payload) => {
+                let numbered = payload.sequence.is_some();
+                self.acknowledge_operator_focus(payload.client_id.as_deref(), payload.sequence);
+                self.open_detail_at(payload.item, payload.at) || numbered
+            }
+            Event::PairView(payload) => self.set_pair_view(payload),
+            Event::PairViewDesk(payload) => self.set_pair_desk(payload),
             Event::UiStateUpdate(payload) => {
                 let payload = *payload;
                 if let Some(visible) = payload.usage_window_visible {
@@ -4601,16 +4656,15 @@ impl Runtime {
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
                     // `task_view_set`, `sidebar_project_set`,
-                    // `practice_progress_set`, `practice_invite_close`, `detail_*`,
-                    // `overview_graph_change`).
+                    // `practice_progress_set`, `practice_invite_close`,
+                    // `overview_graph_change`); slot cards still moving onto
+                    // their trays are the core's.
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
-                    detail: current.detail,
-                    detail_pane: current.detail_pane,
-                    detail_panes: current.detail_panes,
+                    moving_cards: current.moving_cards,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

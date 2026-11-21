@@ -35,6 +35,11 @@ pub struct Watch {
     pub status_changed_at_unix_ms: u64,
     #[serde(default)]
     pub generation: u64,
+    /// The operator was told that the observer did not look at this quiet
+    /// episode's first warning (`human::claim`); the episode's activity
+    /// clears it. Left out of the file while false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub operator_notified: bool,
     /// The engine connection `last_status` and `last_state_change_seq` were
     /// read on ([`StateRead::engine`]). Memory only: a core that starts again
     /// connects to every engine anew, so a loaded watch has none, and its first
@@ -114,6 +119,26 @@ impl Watch {
     }
 }
 
+/// What a watch's observer reads of its quiet target in its status cell
+/// (`runtime::status_cells`), as of the warning made at `warned`.
+pub(crate) fn warning_line(watch: &Watch, warned: u64) -> String {
+    let quiet = warned.saturating_sub(watch.last_activity_at_unix_ms);
+    // The first line is what a bell names after the target's name.
+    let summary = if watch.warning_count == 1 && quiet < 2 * QUESTION_WINDOW_MS {
+        format!("Stopped with a question (watch {}).", watch.id)
+    } else {
+        format!(
+            "No activity for {} minutes (watch {}).",
+            quiet / 60_000,
+            watch.id
+        )
+    };
+    format!(
+        "{summary}\nTarget {} in pane {}: read it with `hide pane read {}` before deciding whether it is blocked.",
+        watch.target.name, watch.target.pane_id, watch.target.pane_id
+    )
+}
+
 /// Code-owned observers keep their existing thirty-minute window.
 pub fn inactivity_window(watch: &Watch) -> u64 {
     if watch.parent.code_owned() {
@@ -154,6 +179,7 @@ pub fn start(
         last_state_change_seq: None,
         status_changed_at_unix_ms: activity,
         generation: 0,
+        operator_notified: false,
         last_engine: None,
     };
     ledger.watches.push(watch.clone());
@@ -327,6 +353,7 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             watch.last_activity_at_unix_ms = activity;
             watch.first_warning_at_unix_ms = None;
             watch.warning_count = 0;
+            watch.operator_notified = false;
         }
         let (valid, changed) = (watch.valid(), *watch != before);
         let updated_size = if !valid {
@@ -392,110 +419,25 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
         if !due {
             continue;
         }
+        // The warning is the observer's status cell about its target
+        // (`runtime::status_cells`), read from these counts; no letter is
+        // written (PRD letters-missions-simplify D-16).
         let before = watch.clone();
         let count = watch.warning_count + 1;
-        let open_requests = ledger
-            .letters
-            .iter()
-            .filter(|letter| {
-                letter.waiting_answer
-                    && (letter.sender.pane_id == watch.target.pane_id
-                        || letter.recipient.pane_id == watch.target.pane_id)
-            })
-            .count();
-        let basis = if !reading.status_available {
-            "projection_unavailable"
-        } else if reading.session_modified_at_unix_ms.is_some() {
-            "session_file"
-        } else {
-            "status_transition_only"
+        let watch = &mut ledger.watches[index];
+        watch.first_warning_at_unix_ms.get_or_insert(now);
+        watch.warning_count = count;
+        let resized_now = match size {
+            Some(size) => resized(size, encoded_len(&before)?, encoded_len(watch)?),
+            None => full_size(ledger),
         };
-        let failure = reading.failure.as_deref().unwrap_or("none");
-        // The first line is the letter's summary, which the doorbell types
-        // after the watched agent's name (`bell`).
-        let summary = if early {
-            format!("Stopped with a question (watch {}).", watch.id)
-        } else {
-            format!(
-                "No activity for {} minutes (watch {}).",
-                now.saturating_sub(activity) / 60_000,
-                watch.id
-            )
-        };
-        let body = format!(
-            "{summary}\nTarget {}. Last activity unix_ms={activity}; engine status={}; open requests={open_requests}; activity basis={basis}; read failure={failure}.\nInspect the target before deciding whether it is blocked.",
-            watch.target.name,
-            if reading.status_available {
-                reading.status.as_str()
-            } else {
-                "unavailable"
-            }
-        );
-        let letters_before = ledger.letters.len();
-        // A full ledger makes room for the warning by dropping its oldest
-        // finished letter, so the letters are put back as a whole.
-        let full_before = (letters_before >= super::LETTER_LIMIT).then(|| ledger.letters.clone());
-        let sequence_before = ledger.next_id;
-        let outcome = (|| {
-            let letter = super::mailbox::send(
-                ledger,
-                &before.parent,
-                &before.parent,
-                &format!(
-                    "{}:warning:{count}:{}",
-                    before.id, before.last_activity_at_unix_ms
-                ),
-                &body,
-                "watch",
-                None,
-                now,
-            )?;
-            let letter = ledger
-                .letters
-                .iter_mut()
-                .find(|stored| stored.id == letter.id)
-                .ok_or("ledger_unavailable")?;
-            letter.watch_warning = Some(WarningReceipt {
-                target: before.target.clone(),
-                activity_at_unix_ms: before.last_activity_at_unix_ms,
-                ordinal: count,
-                parent_notified: false,
-            });
-            let watch = &mut ledger.watches[index];
-            watch.first_warning_at_unix_ms.get_or_insert(now);
-            watch.warning_count = count;
-            let Some(size) = size.filter(|_| full_before.is_none()) else {
-                return full_size(ledger);
-            };
-            let letter_growth = if ledger.letters.len() > letters_before {
-                encoded_len(ledger.letters.last().ok_or("ledger_unavailable")?)?
-                    + usize::from(letters_before > 0)
-            } else {
-                0
-            };
-            let next_size = resized(
-                size,
-                encoded_len(&before)?,
-                encoded_len(&ledger.watches[index])?,
-            )?;
-            resized(
-                next_size,
-                sequence_before.to_string().len(),
-                ledger.next_id.to_string().len() + letter_growth,
-            )
-        })();
-        match outcome {
+        match resized_now {
             Ok(updated_size) => {
                 size = Some(updated_size);
                 result.transitions = true;
             }
             Err(code) => {
                 ledger.watches[index] = before;
-                match full_before {
-                    Some(letters) => ledger.letters = letters,
-                    None => ledger.letters.truncate(letters_before),
-                }
-                ledger.next_id = sequence_before;
                 result.rejections.push((reading.id.clone(), code));
             }
         }
@@ -668,8 +610,10 @@ mod tests {
         assert!(outcome.rejections.is_empty());
         assert_eq!(ledger.watches[0].warning_count, 1);
         assert_eq!(ledger.watches[0].target.session, None);
-        assert_eq!(ledger.letters[0].recipient, parent);
-        assert!(ledger.letters[0].body.contains("status_transition_only"));
+        assert!(
+            ledger.letters.is_empty(),
+            "a warning is the parent's status cell, not a letter"
+        );
         assert_eq!(
             super::super::mailbox::pull(&ledger, &target).unwrap_err(),
             "native_identity_required"
@@ -682,12 +626,21 @@ mod tests {
         assert_eq!(ledger, before);
     }
 
-    fn summaries(ledger: &Ledger) -> Vec<&str> {
+    /// The first line of each watch's warning standing now, as its
+    /// observer's status cell shows it (`runtime::status_cells`).
+    fn summaries(ledger: &Ledger) -> Vec<String> {
         ledger
-            .letters
+            .watches
             .iter()
-            .filter(|letter| letter.watch_warning.is_some())
-            .filter_map(|letter| letter.body.lines().next())
+            .filter(|watch| watch.warning_count > 0)
+            .filter_map(|watch| {
+                let first = watch.first_warning_at_unix_ms?;
+                let warned = first + u64::from(watch.warning_count - 1) * SECOND_WARNING_MS;
+                warning_line(watch, warned)
+                    .lines()
+                    .next()
+                    .map(str::to_owned)
+            })
             .collect()
     }
 
@@ -766,13 +719,12 @@ mod tests {
             second,
         )
         .unwrap();
-        let warnings: Vec<_> = ledger
-            .letters
-            .iter()
-            .filter_map(|letter| letter.watch_warning.as_ref())
-            .map(|warning| (warning.ordinal, warning.activity_at_unix_ms))
-            .collect();
-        assert_eq!(warnings, [(1, 10), (2, 10)], "two warnings of one episode");
+        let watch = &ledger.watches[0];
+        assert_eq!(
+            (watch.warning_count, watch.last_activity_at_unix_ms),
+            (2, 10),
+            "two warnings of one episode"
+        );
         assert_eq!(
             super::super::human::claim(&mut ledger, second).len(),
             1,
@@ -858,18 +810,19 @@ mod tests {
         assert!(summaries(&ledger).is_empty());
         tick(&mut ledger, &[asking(10)], 10 + QUESTION_WINDOW_MS).unwrap();
         let first = format!("Stopped with a question (watch {}).", watch.id);
-        assert_eq!(summaries(&ledger), [first.as_str()]);
+        assert_eq!(summaries(&ledger), std::slice::from_ref(&first));
         let second = 10 + QUESTION_WINDOW_MS + SECOND_WARNING_MS;
         tick(&mut ledger, &[asking(10)], second - 1).unwrap();
-        assert_eq!(summaries(&ledger).len(), 1);
+        assert_eq!(summaries(&ledger), std::slice::from_ref(&first));
         tick(&mut ledger, &[asking(10)], second).unwrap();
         assert_eq!(
-            summaries(&ledger)[1],
-            format!("No activity for 61 minutes (watch {}).", watch.id)
+            summaries(&ledger),
+            [format!("No activity for 61 minutes (watch {}).", watch.id)],
+            "the second warning updates the one cell"
         );
         let active = second + 1;
         tick(&mut ledger, &[asking(active)], active + QUESTION_WINDOW_MS).unwrap();
-        assert_eq!(summaries(&ledger).len(), 3);
+        assert_eq!(summaries(&ledger), [first], "a new episode asks again");
     }
 
     #[test]
@@ -892,7 +845,7 @@ mod tests {
         tick(&mut ledger, &[reading(&watch.id, 10)], 10 + INACTIVITY_MS).unwrap();
         assert_eq!(
             summaries(&ledger),
-            [format!("No activity for 20 minutes (watch {}).", watch.id).as_str()]
+            [format!("No activity for 20 minutes (watch {}).", watch.id)]
         );
     }
 
@@ -950,9 +903,9 @@ mod tests {
             10 + INACTIVITY_MS - 1,
         )
         .unwrap();
-        assert!(ledger.letters.is_empty());
+        assert_eq!(ledger.watches[0].warning_count, 0);
         tick(&mut ledger, &[reading(&watch.id, 10)], 10 + INACTIVITY_MS).unwrap();
-        assert_eq!(ledger.letters.len(), 1);
+        assert_eq!(ledger.watches[0].warning_count, 1);
         let mut ledger: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
         tick(
             &mut ledger,
@@ -960,7 +913,7 @@ mod tests {
             10 + INACTIVITY_MS + SECOND_WARNING_MS - 1,
         )
         .unwrap();
-        assert_eq!(ledger.letters.len(), 1);
+        assert_eq!(ledger.watches[0].warning_count, 1);
         tick(
             &mut ledger,
             &[reading(&watch.id, 10)],
@@ -973,7 +926,7 @@ mod tests {
             10 + INACTIVITY_MS + SECOND_WARNING_MS * 2,
         )
         .unwrap();
-        assert_eq!(ledger.letters.len(), 2);
+        assert_eq!(ledger.watches[0].warning_count, 2, "two warnings at most");
         let active = 10 + INACTIVITY_MS + SECOND_WARNING_MS * 2 + 1;
         tick(&mut ledger, &[reading(&watch.id, active)], active).unwrap();
         assert_eq!(ledger.watches[0].warning_count, 0);
@@ -984,7 +937,8 @@ mod tests {
             active + INACTIVITY_MS,
         )
         .unwrap();
-        assert_eq!(ledger.letters.len(), 3);
+        assert_eq!(ledger.watches[0].warning_count, 1);
+        assert!(ledger.letters.is_empty(), "no warning is a letter");
     }
 
     #[test]
@@ -1001,7 +955,6 @@ mod tests {
             10 + INACTIVITY_MS + SECOND_WARNING_MS,
         )
         .unwrap();
-        assert_eq!(restored.letters.len(), 2);
         assert_eq!(restored.watches[0].warning_count, 2);
         assert_eq!(
             restored.watches[0].first_warning_at_unix_ms,
@@ -1043,21 +996,9 @@ mod tests {
         let mut reading = reading(&watch.id, 1);
         reading.failure = Some("session_activity_unavailable".into());
         tick(&mut ledger, &[reading], 1 + INACTIVITY_MS).unwrap();
-        assert!(
-            ledger
-                .letters
-                .last()
-                .unwrap()
-                .body
-                .contains("status_transition_only")
-        );
-        assert!(
-            ledger
-                .letters
-                .last()
-                .unwrap()
-                .body
-                .contains("session_activity_unavailable")
+        assert_eq!(
+            ledger.watches[0].warning_count, 1,
+            "a failed read does not hold the warning back"
         );
         let mut reading = Reading {
             id: watch.id.clone(),
@@ -1092,6 +1033,7 @@ mod tests {
             recipient: actor("filler"),
             kind: "request".into(),
             body,
+            written: None,
             state: if open {
                 super::super::ledger::State::Delivered
             } else {
@@ -1112,7 +1054,8 @@ mod tests {
             bell_turn: None,
             handed: false,
             handed_at_unix_ms: None,
-            intake_from: None,
+            from: None,
+            to: None,
             immediate: false,
             forced: false,
             tool_handovers: 0,
@@ -1189,12 +1132,8 @@ mod tests {
                 }
                 let outcome = tick(&mut ledger, &readings, now).unwrap();
                 assert!(outcome.transitions);
-                assert!(
-                    outcome
-                        .rejections
-                        .contains(&(due.id.clone(), "capacity".into())),
-                    "{cap}"
-                );
+                // A warning writes no letter, so neither cap refuses it.
+                assert!(outcome.rejections.is_empty(), "{cap}");
                 assert!(!ledger.watches.iter().any(|watch| watch.id == gone.id));
                 let reset = ledger
                     .watches
@@ -1209,8 +1148,8 @@ mod tests {
                     .iter()
                     .find(|watch| watch.id == due.id)
                     .unwrap();
-                assert_eq!(due.warning_count, 0);
-                assert_eq!(due.first_warning_at_unix_ms, None);
+                assert_eq!(due.warning_count, 1, "{cap}");
+                assert!(due.first_warning_at_unix_ms.is_some(), "{cap}");
                 assert_eq!(ledger.letters, original_letters);
                 assert_eq!(ledger.next_id, original_sequence);
                 ledger.bytes().unwrap();
@@ -1233,16 +1172,14 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_at_the_total_cap_drops_the_oldest_finished_letter() {
+    fn a_warning_at_the_total_letter_cap_writes_no_letter_and_drops_none() {
         let now = 1 + INACTIVITY_MS;
         let (mut ledger, due) = due_watch_at_the_total_cap(now);
-        ledger.letters[3].finished_at_unix_ms = Some(now - 1);
-        let oldest = ledger.letters[3].id.clone();
+        let letters = ledger.letters.clone();
         let outcome = tick(&mut ledger, &[due], now).unwrap();
         assert!(outcome.rejections.is_empty());
-        assert_eq!(ledger.letters.len(), super::super::LETTER_LIMIT);
-        assert!(ledger.letters.iter().all(|letter| letter.id != oldest));
-        assert!(ledger.letters.last().unwrap().watch_warning.is_some());
+        assert_eq!(ledger.letters, letters);
+        assert_eq!(ledger.watches[0].warning_count, 1);
         ledger.bytes().unwrap();
     }
 
@@ -1273,57 +1210,47 @@ mod tests {
 
     #[test]
     fn file_only_activity_reset_and_failed_read_start_a_distinct_durable_warning_episode() {
-        for cancel in [false, true] {
-            let mut ledger = Ledger::default();
-            let parent = actor("parent");
-            let watch = start(&mut ledger, &parent, &actor("target"), 1).unwrap();
-            let first = 1 + INACTIVITY_MS;
-            tick(&mut ledger, &[reading(&watch.id, 1)], first).unwrap();
-            let old_id = ledger.letters[0].id.clone();
-            let command = if cancel {
-                super::super::Command::Cancel { id: old_id.clone() }
-            } else {
-                super::super::Command::Confirm {
-                    ids: vec![old_id.clone()],
-                }
-            };
-            super::super::mailbox::apply(&mut ledger, &parent, None, &command, first).unwrap();
-            let accepted_activity = first + 1;
-            let mut resumed = reading(&watch.id, 1);
-            resumed.session_modified_at_unix_ms = Some(accepted_activity);
-            tick(&mut ledger, &[resumed], accepted_activity).unwrap();
-            assert_eq!(ledger.watches[0].warning_count, 0);
-            let mut failed = reading(&watch.id, 1);
-            failed.failure = Some("session_activity_unavailable".into());
-            let new_first = accepted_activity + INACTIVITY_MS;
-            tick(&mut ledger, &[failed.clone()], new_first).unwrap();
-            assert_eq!(ledger.letters.len(), 2);
-            assert_ne!(ledger.letters[1].id, old_id);
-            assert!(ledger.letters[1].body.contains("status_transition_only"));
-            let new_id = ledger.letters[1].id.clone();
-            let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-            tick(
-                &mut restored,
-                &[failed.clone()],
-                new_first + SECOND_WARNING_MS - 1,
-            )
-            .unwrap();
-            assert_eq!(restored.letters.len(), 2);
-            tick(
-                &mut restored,
-                &[failed.clone()],
-                new_first + SECOND_WARNING_MS,
-            )
-            .unwrap();
-            assert_eq!(restored.letters.len(), 3);
-            assert_ne!(restored.letters[2].id, new_id);
-            tick(&mut restored, &[failed], new_first + SECOND_WARNING_MS * 2).unwrap();
-            assert_eq!(restored.letters.len(), 3);
-            assert_eq!(
-                restored.watches[0].first_warning_at_unix_ms,
-                Some(new_first)
-            );
-            assert_eq!(restored.watches[0].warning_count, 2);
-        }
+        let mut ledger = Ledger::default();
+        let parent = actor("parent");
+        let watch = start(&mut ledger, &parent, &actor("target"), 1).unwrap();
+        let first = 1 + INACTIVITY_MS;
+        tick(&mut ledger, &[reading(&watch.id, 1)], first).unwrap();
+        assert_eq!(ledger.watches[0].first_warning_at_unix_ms, Some(first));
+        ledger.watches[0].operator_notified = true;
+        let accepted_activity = first + 1;
+        let mut resumed = reading(&watch.id, 1);
+        resumed.session_modified_at_unix_ms = Some(accepted_activity);
+        tick(&mut ledger, &[resumed], accepted_activity).unwrap();
+        assert_eq!(ledger.watches[0].warning_count, 0);
+        assert!(
+            !ledger.watches[0].operator_notified,
+            "a new episode owes again"
+        );
+        let mut failed = reading(&watch.id, 1);
+        failed.failure = Some("session_activity_unavailable".into());
+        let new_first = accepted_activity + INACTIVITY_MS;
+        tick(&mut ledger, &[failed.clone()], new_first).unwrap();
+        assert_eq!(ledger.watches[0].first_warning_at_unix_ms, Some(new_first));
+        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        tick(
+            &mut restored,
+            &[failed.clone()],
+            new_first + SECOND_WARNING_MS - 1,
+        )
+        .unwrap();
+        assert_eq!(restored.watches[0].warning_count, 1);
+        tick(
+            &mut restored,
+            &[failed.clone()],
+            new_first + SECOND_WARNING_MS,
+        )
+        .unwrap();
+        tick(&mut restored, &[failed], new_first + SECOND_WARNING_MS * 2).unwrap();
+        assert_eq!(
+            restored.watches[0].first_warning_at_unix_ms,
+            Some(new_first)
+        );
+        assert_eq!(restored.watches[0].warning_count, 2);
+        assert!(restored.letters.is_empty());
     }
 }

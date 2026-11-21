@@ -47,6 +47,9 @@ pub(super) struct DeltaState {
     last_desk_mentions: Option<Arc<crate::model::DeskMentionsSnapshot>>,
     access_revision: u64,
     last_access: Option<Arc<crate::model::AccessSnapshot>>,
+    automations_revision: u64,
+    /// `None` until the core restored its automations.
+    last_automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     link_summaries_revision: u64,
     last_link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     link_panel_revision: u64,
@@ -163,6 +166,8 @@ impl Runtime {
     ) -> crate::model::SnapshotDeltaPayload {
         use crate::model::{RestSections, SnapshotDeltaPayload};
 
+        // A run's tab is marked before the strip and the tree read it.
+        self.mark_automation_run_tabs();
         // A front Workspace moved by the engine or by a device's own focus, not by
         // an event, is followed here, before anything is stamped.
         self.sync_workspace_view();
@@ -181,6 +186,10 @@ impl Runtime {
         // A mission no row carries is its device's own Needs You item, in
         // the same count as its agents (B14).
         self.publish_mission_asks();
+        // An automation's runs follow their agents' panes; one that stopped
+        // for a person is its own Needs You line (PRD automations D-12).
+        self.refresh_automations();
+        self.publish_automation_asks();
         // The open mission's events, sent for that mission only.
         self.refresh_mission_events();
         // A pane's plan follows its session and the plan book.
@@ -305,6 +314,17 @@ impl Runtime {
             self.delta.revision += 1;
             self.delta.access_revision = self.delta.revision;
             self.delta.last_access = Some(Arc::clone(access));
+        }
+        if let Some(automations) = &self.snapshot.automations
+            && self
+                .delta
+                .last_automations
+                .as_ref()
+                .is_none_or(|last| !Arc::ptr_eq(last, automations))
+        {
+            self.delta.revision += 1;
+            self.delta.automations_revision = self.delta.revision;
+            self.delta.last_automations = Some(Arc::clone(automations));
         }
         if let Some(summaries) = &self.snapshot.link_summaries
             && self.delta.last_link_summaries.as_deref() != Some(summaries)
@@ -458,6 +478,12 @@ impl Runtime {
                 .last_access
                 .as_ref()
                 .filter(|_| self.delta.access_revision > have_revision)
+                .map(Arc::clone),
+            automations: self
+                .delta
+                .last_automations
+                .as_ref()
+                .filter(|_| self.delta.automations_revision > have_revision)
                 .map(Arc::clone),
             link_summaries: self
                 .delta

@@ -726,6 +726,12 @@ impl WorktreeReader {
         }
     }
 
+    /// Ends the Git watch while no renderer is attached; the next
+    /// [`Self::read_if_due`] starts it again (`GitWatch::rest`).
+    pub fn rest(&mut self) {
+        self.git_watch.rest();
+    }
+
     pub fn read_if_due(&mut self, request: WorktreeRequest) -> Option<WorktreeAnswer> {
         self.read_if_due_at(request, Instant::now())
     }

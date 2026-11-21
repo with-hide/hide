@@ -446,6 +446,7 @@ impl Runtime {
             self.unreadable_letters.touch();
         }
         self.observe_registration_panes(device, payload, host_scope);
+        self.observe_successions(device, payload, host_scope);
         // A woken pane is first seen here; the session projection that
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
@@ -749,26 +750,7 @@ impl Runtime {
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
             return;
         };
-        // A sleeping session's pane is closed on purpose and its wake
-        // continues the registration, so its absence ends nothing; nor does a
-        // pane closed for Reopen closed, whose reopen continues it
-        // (`closed_registrations.rs`).
-        let reopen_held = self
-            .reopen_held_registrations()
-            .map(|registration| registration.id.clone())
-            .collect::<Vec<_>>();
-        let held: HashSet<&str> = self
-            .snapshot
-            .ui_state
-            .agent_sleep
-            .dormant
-            .values()
-            .filter_map(|record| record.registration.as_ref())
-            .chain(self.snapshot.ui_state.session_archive.held_registrations())
-            .map(|registration| registration.id.as_str())
-            .chain(reopen_held.iter().map(String::as_str))
-            .chain(self.registration_rebinds.keys().map(String::as_str))
-            .collect();
+        let held = self.carried_registrations();
         let read =
             self.delivery_panes
                 .entry(device.to_owned())
@@ -784,8 +766,205 @@ impl Runtime {
         self.registrations_gone.extend(
             crate::coordination::gone_registrations(ledger, device, read, previous.as_ref())
                 .into_iter()
-                .filter(|(id, _)| !held.contains(id.as_str())),
+                .filter(|(id, _)| !held.contains(id)),
         );
+    }
+
+    /// The registrations Hide carries over to a pane of their own agent's,
+    /// so neither their pane's absence ends them nor another agent there
+    /// takes them over: a sleeping session's, whose pane is closed on
+    /// purpose and whose wake continues it; an archive's; one closed for
+    /// Reopen closed, whose reopen continues it (`closed_registrations.rs`);
+    /// and one the store has still to move (`registration_rebinds`).
+    fn carried_registrations(&self) -> HashSet<String> {
+        self.snapshot
+            .ui_state
+            .agent_sleep
+            .dormant
+            .values()
+            .filter_map(|record| record.registration.as_ref())
+            .chain(self.snapshot.ui_state.session_archive.held_registrations())
+            .map(|registration| registration.id.clone())
+            .chain(
+                self.reopen_held_registrations()
+                    .map(|registration| registration.id.clone()),
+            )
+            .chain(self.registration_rebinds.keys().cloned())
+            .collect()
+    }
+
+    /// Notes, for each live registration on `device`, whether its pane runs
+    /// another agent's conversation now (a new one started there, or another
+    /// resumed there) with the registration of the agent that runs there,
+    /// which the delivery store hands it over to (`coordination::succeed`,
+    /// PRD letters-missions-simplify D-02, B2). The pane is the same terminal
+    /// the registration was made in; a registration Hide carries over to a
+    /// pane of its own agent (`carried_registrations`) is not taken over.
+    /// Judged again by every read of the device, so an agent that leaves the
+    /// pane before the store takes it over leaves nothing behind. A read
+    /// whose panes run the agents their registrations name costs one look
+    /// per live registration on the device.
+    fn observe_successions(
+        &mut self,
+        device: &str,
+        payload: &SessionSnapshotPayload,
+        host_scope: Option<&str>,
+    ) {
+        let Some(scope) = host_scope.or_else(|| (device != self.node.as_str()).then_some(device))
+        else {
+            return;
+        };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let on_device = |record: &crate::coordination::AgentRecord| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && record.host_scope == scope
+        };
+        let taken: Vec<(String, String, Option<String>)> = ledger
+            .agents
+            .iter()
+            .filter(|record| on_device(record))
+            .filter(|record| {
+                self.delivery_observations
+                    .get(&record.actor.pane_id)
+                    .is_some_and(|observation| {
+                        !observation.actor.same_identity(&record.actor)
+                            && observation.actor.session.is_some()
+                            && record.terminal_id.as_ref().is_none_or(|terminal| {
+                                observation.terminal_id.as_ref() == Some(terminal)
+                            })
+                    })
+            })
+            .map(|record| {
+                (
+                    record.id.clone(),
+                    record.actor.pane_id.clone(),
+                    record.project.clone(),
+                )
+            })
+            .collect();
+        let device_ids: HashSet<String> = ledger
+            .agents
+            .iter()
+            .filter(|record| on_device(record))
+            .map(|record| record.id.clone())
+            .collect();
+        self.registration_successions
+            .retain(|id, _| !device_ids.contains(id));
+        if taken.is_empty() {
+            return;
+        }
+        let carried = self.carried_registrations();
+        for (id, pane, project) in taken {
+            if carried.contains(&id) {
+                continue;
+            }
+            if let Some(successor) = self.heir_record(device, &pane, payload, project) {
+                self.registration_successions
+                    .insert(id, crate::coordination::Succession { successor });
+            }
+        }
+    }
+
+    /// Asks the coordinator of `machine`, this one's or a connected
+    /// device's, to read its session again and publish it.
+    fn read_machine_again(&mut self, machine: &str) {
+        if machine == self.node.as_str() {
+            self.request_republish();
+        } else if let Some(sync) = self
+            .remote_connections
+            .get(machine)
+            .and_then(|connection| connection.sync.as_ref())
+        {
+            sync.republish_waker().wake();
+        }
+    }
+
+    /// The registrations the delivery store has still to hand over to the
+    /// next agent in their pane.
+    pub(crate) fn delivery_successions(
+        &self,
+    ) -> std::collections::BTreeMap<String, crate::coordination::Succession> {
+        self.registration_successions.clone()
+    }
+
+    /// The registration of the agent `actor`, the one the core observes in
+    /// its pane now, when it has none: the record a letter between it and
+    /// another agent registers it with first, so the letter names its
+    /// registration (`Letter::to`, `Letter::from`, B3). None for an agent
+    /// already registered, one Hide owns, or one whose pane, session or row
+    /// the core does not hold now; such a letter follows the agent alone.
+    pub(super) fn party_registration(
+        &self,
+        ledger: &Ledger,
+        actor: &Actor,
+    ) -> Option<crate::coordination::AgentRecord> {
+        if actor.code_owned() || crate::coordination::registered_id(ledger, actor).is_some() {
+            return None;
+        }
+        let observation = self
+            .delivery_observations
+            .get(&actor.pane_id)
+            .filter(|observation| observation.actor.same_identity(actor))?;
+        let device = actor.device_id.as_str();
+        let row = self.machine_agents(device).iter().find(|row| {
+            crate::address::same_pane(self.node.as_str(), device, &row.pane_id, &actor.pane_id)
+        })?;
+        self.observed_registration(
+            device,
+            observation,
+            row.close_session.as_ref(),
+            row.given_name.clone(),
+            None,
+        )
+    }
+
+    /// The registration of the agent `observation` holds on `device`, in
+    /// the shape every registration of an engine's agent takes
+    /// (`coordination::executor::registration`), with the session reference
+    /// and the name the engine gives it: none while the observation names no
+    /// scope or the engine no session for it.
+    pub(super) fn observed_registration(
+        &self,
+        device: &str,
+        observation: &Observation,
+        session: Option<&crate::sidebar::SessionAgentSessionPayload>,
+        name: Option<String>,
+        project: Option<String>,
+    ) -> Option<crate::coordination::AgentRecord> {
+        use crate::coordination::executor::{HostIdentity, Native, native_session, registration};
+        observation.actor.require_native_identity().ok()?;
+        let on_node = device == self.node.as_str();
+        // The engine the agent was observed on: its socket on this node, the
+        // device itself for a device's (`continue_moved_registrations`).
+        let scope = observation
+            .host_scope
+            .clone()
+            .or_else(|| (!on_node).then(|| device.to_owned()))?;
+        let native_machine = self.native_machine(device).ok()?;
+        let native = Native {
+            pane: &observation.raw_pane_id,
+            session: native_session(session).ok()?,
+            terminal_id: observation.terminal_id.clone(),
+            actor: observation.actor.clone(),
+        };
+        let host = HostIdentity {
+            machine: device,
+            on_node,
+            scope: &scope,
+            native_machine: &native_machine,
+        };
+        Some(registration(
+            native,
+            &host,
+            observation.raw_pane_id.clone(),
+            name,
+            None,
+            project,
+        ))
     }
 
     /// Puts the registrations of the agents a restore did not resume on the
@@ -822,7 +1001,9 @@ impl Runtime {
         let ended = crate::coordination::not_resumed_registrations(
             ledger, device, host_scope, &left, &shown,
         );
+        let ids: Vec<String> = ended.iter().map(|(id, _)| id.clone()).collect();
         self.registrations_gone.extend(ended);
+        self.heal_not_woken(&ids);
     }
 
     /// The registration the live execution in `pane` holds, which a sleep
@@ -942,37 +1123,6 @@ impl Runtime {
                 .device_registrations
                 .iter()
                 .any(|registration| registration.id == device)
-    }
-
-    /// Every machine other than this core's own that holds agents, with
-    /// whether a letter can reach it now: the core holds a connection to its
-    /// the engine and its link has not ended (PRD core-host-node-move B13). A
-    /// letter to an agent there counts its delivery deadline only while it
-    /// is reachable. A node's link ends here at once; the engine connection
-    /// it carried reads as gone only at the next sync (`ingest_host_closed`).
-    pub(crate) fn delivery_reach(&self) -> crate::delivery::ledger::Reach {
-        self.snapshot
-            .ui_state
-            .device_registrations
-            .iter()
-            .filter(|registration| registration.id != self.node.as_str())
-            .map(|registration| {
-                let id = registration.id.as_str();
-                let reachable = self.device_engine(id).is_some() && !self.device_host_ended(id);
-                (registration.id.clone(), reachable)
-            })
-            // A letter to an agent of another core waits on the connection
-            // between the two cores (`Actor::reach`).
-            .chain(self.core_reach())
-            .collect()
-    }
-
-    /// The pending letters whose recipient the doorbell's last pass saw in
-    /// its pane, held by a state that ends on its own or by the operator's
-    /// act: the delivery upkeep renews their deadline rather than ending
-    /// them undelivered (`Ledger::renew_present`).
-    pub(crate) fn delivery_present_holds(&self) -> std::collections::HashSet<String> {
-        self.delivery_present.clone()
     }
 
     /// The registrations and spawn records the core's books still need,
@@ -1463,7 +1613,7 @@ impl Runtime {
         match self.checkout_kind(device, &folder) {
             Some(CheckoutKind::Folder) => Ok(folder),
             Some(CheckoutKind::Unread) => Err("spawn_project_loading".into()),
-            Some(CheckoutKind::Unreadable) => Err("spawn_folder_unreadable".into()),
+            Some(CheckoutKind::Unreadable) => Err(crate::coordination::FOLDER_GONE.into()),
             Some(CheckoutKind::Git) | None => Err("spawn_repo_required".into()),
         }
     }
@@ -1631,6 +1781,8 @@ impl Runtime {
                     context,
                     also_reads: Vec::new(),
                     proven,
+                    registers: Vec::new(),
+                    written: None,
                 },
                 actor,
                 None,
@@ -1745,6 +1897,13 @@ impl Runtime {
             *mission = self
                 .mission_spawn_admission(&actor, &worker, &mut picked, intent, brief.is_some())?
                 .map(Box::new);
+            if mission
+                .as_ref()
+                .is_some_and(|admission| admission.node_worker)
+                && let Some(text) = brief.as_mut()
+            {
+                self.brief_round_line(&actor, intent, text, earlier);
+            }
             *pick = picked.map(|request| crate::coordination::Picked(Box::new(request)));
         }
         // Only the pane's own session proves its composer was submitted, so a
@@ -1832,10 +1991,12 @@ impl Runtime {
                 .clone()
                 .ok_or("no_parent")?;
         }
-        // A send under an intent its sender already used is a retry only of
-        // the same letter; another recipient, kind or body is refused here,
-        // before a target is looked for.
-        let repeated = match &command {
+        // A send under an intent its sender already used is a retry of the
+        // same letter, answered with it: the store is handed that letter's
+        // recipient as the target, so it finds the same letter again whoever
+        // else got one under the intent. Another recipient, kind or body is
+        // a new letter, sent to a target as any other.
+        let retry = match &command {
             Command::Send {
                 target,
                 intent,
@@ -1861,12 +2022,13 @@ impl Runtime {
                                 .is_some_and(|registered| registered.same_identity(stored))
                     },
                     unix_milliseconds(),
-                )?
-                .is_some(),
-                Err(_) => false,
+                )
+                .map(|letter| letter.recipient.clone()),
+                Err(_) => None,
             },
-            _ => false,
+            _ => None,
         };
+        let repeated = retry.is_some();
         // An agent of another core is no pane of this one: it is found by
         // its address, and judged by how its machine stands.
         let core_target = if repeated {
@@ -1875,7 +2037,10 @@ impl Runtime {
             self.core_send_target(&actor, &command)?
         };
         let target = match &command {
-            Command::Send { .. } if repeated => None,
+            Command::Send { .. } if repeated => retry.map(|recipient| Observation {
+                status: "repeated".into(),
+                ..super::agent_sleep::letters::asleep_observation(recipient)
+            }),
             Command::Send { .. } if core_target.is_some() => core_target,
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
@@ -1907,7 +2072,8 @@ impl Runtime {
                 }
                 // An agent Hide put to sleep takes letters, which wait for
                 // its wake (PRD mission-worker-sleep B1), and so does one
-                // closed for Reopen closed, whose letters wait for its reopen.
+                // closed for Reopen closed, whose letters the store's next
+                // pass ends with no recipient (`Runtime::delivery_closed`).
                 let first = match (&command, first) {
                     (Command::Send { .. }, None) => {
                         self.delivery_ledger.as_ref().ok().and_then(|ledger| {
@@ -1934,12 +2100,16 @@ impl Runtime {
             _ => None,
         };
         // A report names the Views its sender opened, so the agent that
-        // answers for its work finds them (PRD unseen-agent-views D-21).
+        // answers for its work finds them (PRD unseen-agent-views D-21); the
+        // letter keeps how much of it the sender wrote (`Letter::written`).
+        let mut written = None;
         if !repeated
             && let Command::Send { kind, body, .. } = &mut command
             && kind == "report"
         {
+            let sender_wrote = body.len();
             self.list_opened_views(&actor.pane_id, body);
+            written = (body.len() > sender_wrote).then_some(sender_wrote);
         }
         // A mission worker's report or progress often follows a push: its
         // project's pull requests are read again (PRD mission-node-simple
@@ -2012,6 +2182,17 @@ impl Runtime {
             }
         }
         let also_reads = self.node_exchanges(&actor, &command);
+        // A new letter names the registrations it is between, so its
+        // parties are registered first when they have none (B3).
+        let registers = match (&command, self.delivery_ledger.as_ref(), &target) {
+            (Command::Send { .. }, Ok(ledger), Some(target)) if !repeated => {
+                [&actor, &target.actor]
+                    .into_iter()
+                    .filter_map(|party| self.party_registration(ledger, party))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let prepared = Prepared::new(
             self.delivery_client.clone().ok_or("delivery_unavailable")?,
             Authority {
@@ -2019,6 +2200,8 @@ impl Runtime {
                 context,
                 also_reads,
                 proven,
+                registers,
+                written,
             },
             actor,
             target,
@@ -2263,6 +2446,22 @@ impl Runtime {
                         || record.terminal_id != rebind.terminal_id)
             })
         });
+        // A registration the store handed over leaves the map, and its
+        // mission roles follow it once the ledger below is the core's; so do
+        // roles the first ledger after a start shows handed over, which a
+        // stop before the mission book's save left behind.
+        let mut succeeded = self.delivery_ledger.is_err();
+        let mut handed_over = std::collections::BTreeSet::new();
+        self.registration_successions.retain(|id, _| {
+            let Some(record) = ledger.agents.iter().find(|record| &record.id == id) else {
+                return false;
+            };
+            if record.ended && record.successor.is_some() {
+                succeeded = true;
+                handed_over.insert(record.id.clone());
+            }
+            !record.ended
+        });
         // Only a change in who waits for a reply, from whom, and whether that
         // agent took the letter in moves a row's wait, so the lineage is not
         // rebuilt for every other step of a letter's delivery.
@@ -2305,6 +2504,21 @@ impl Runtime {
         self.note_reports(previous.as_deref(), &ledger);
         self.note_core_outbox(&ledger);
         self.delivery_ledger = Ok(ledger);
+        if succeeded {
+            self.follow_successors();
+        }
+        // The panes' lineage tokens name the agent before the successor
+        // until each machine's lineage writer, which runs on its session
+        // reads, sees the successor with the parent and the children it
+        // took; nothing on the engines moves to read them again, so they are
+        // asked to (PRD letters-missions-simplify D-24), once per machine.
+        if !handed_over.is_empty()
+            && let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone)
+        {
+            for machine in crate::coordination::handover_machines(&ledger, &handed_over) {
+                self.read_machine_again(&machine);
+            }
+        }
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
         let lineage =
@@ -2350,6 +2564,7 @@ impl Runtime {
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
+                || *actor == Actor::hide(super::automations::AUTOMATION_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
@@ -2357,11 +2572,7 @@ impl Runtime {
                 || *actor
                     == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::blocked_children::BLOCKED_ROLE, self.node.as_str())
-                || *actor
-                    == Actor::hide(
-                        super::transition_letters::TRANSITION_ROLE,
-                        self.node.as_str(),
-                    )
+                || *actor == Actor::hide(super::heal_letters::HEAL_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
                     && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))
@@ -2438,6 +2649,8 @@ impl Runtime {
                 context,
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -2463,6 +2676,8 @@ impl Runtime {
                 context,
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -2617,7 +2832,6 @@ impl Runtime {
                             }
                             None => letter.attempts() < BELLS,
                         }
-                        && letter.within_deadline(&ledger.node_clocks, now)
                 })
             })
             .ok_or(Hold::Letter)?;
@@ -2763,6 +2977,8 @@ impl Runtime {
                 context,
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -2995,6 +3211,7 @@ pub(crate) mod tests {
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".into(),
                 workspace_id: "workspace".into(),
@@ -3010,6 +3227,7 @@ pub(crate) mod tests {
                     label: None,
                     empty: false,
                     delegated: false,
+                    automation: false,
                     panes,
                 }],
                 ..Default::default()
@@ -3040,7 +3258,7 @@ pub(crate) mod tests {
             Arc::new(Mutex::new(runtime)),
             actor,
             target,
-            hide_kit::layout::delivery_ledger(&state),
+            hide_kit::layout::delivery_store(&state),
         )
     }
 
@@ -3055,6 +3273,8 @@ pub(crate) mod tests {
             },
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
+            written: None,
         }
     }
 
@@ -3949,6 +4169,7 @@ pub(crate) mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             });
             guard.delivery_ledger = Ok(Arc::new(ledger));
         }
@@ -4024,12 +4245,13 @@ pub(crate) mod tests {
                     ended: false,
                     terminal_id: Some(format!("{pane}-terminal")),
                     forked: false,
+                    successor: None,
                 });
             }
             ledger.next_id = 3;
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         }
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4062,7 +4284,7 @@ pub(crate) mod tests {
         );
         let report = kept("sender-terminal", "after-close").unwrap();
         assert_eq!(report["recipient"]["pane_id"], "recipient");
-        let letters = crate::delivery::ledger::load(&path).unwrap().letters;
+        let letters = crate::delivery::store::load(&path).unwrap().letters;
         let written = letters
             .iter()
             .find(|letter| letter.intent == "after-close")
@@ -4131,12 +4353,13 @@ pub(crate) mod tests {
                     ended: false,
                     terminal_id: None,
                     forked: false,
+                    successor: None,
                 });
             }
             ledger.next_id = 3;
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         }
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4216,6 +4439,7 @@ pub(crate) mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             });
             ledger.next_id = 2;
             let reserve = Mutation::Reserve {
@@ -4258,8 +4482,8 @@ pub(crate) mod tests {
                 apply(&mut ledger, &parent, &step, reserved_at).unwrap();
             }
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         };
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4287,7 +4511,7 @@ pub(crate) mod tests {
         assert_eq!(send().err().as_deref(), Some("participant_unavailable"));
         drop(worker);
         assert!(
-            crate::delivery::ledger::load(&path)
+            crate::delivery::store::load(&path)
                 .unwrap()
                 .letters
                 .is_empty(),
@@ -4354,6 +4578,7 @@ pub(crate) mod tests {
                 ended,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             });
             guard.delivery_ledger = Ok(Arc::new(ledger));
         };
@@ -4939,7 +5164,7 @@ pub(crate) mod tests {
         assert_eq!(result["sender"]["pane_id"], caller);
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let stored = crate::delivery::ledger::load(&path).unwrap();
+        let stored = crate::delivery::store::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 1);
         assert_eq!(
             stored.letters[0].sender.session.as_deref(),
@@ -5154,7 +5379,7 @@ pub(crate) mod tests {
         );
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let stored = crate::delivery::ledger::load(&path).unwrap();
+        let stored = crate::delivery::store::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 5);
     }
 
@@ -5162,7 +5387,7 @@ pub(crate) mod tests {
     fn a_checkout_bound_caller_is_refused_delivery_and_agent_commands_with_or_without_a_hint() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
-        let before = std::fs::read(&path).unwrap();
+        let before = crate::delivery::store::read_value(&path).unwrap();
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
@@ -5238,7 +5463,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         drop(guard);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(crate::delivery::store::read_value(&path).unwrap(), before);
         let result = prepared.run(Duration::from_secs(5)).unwrap();
         assert_eq!(result["sender"]["pane_id"], "sender");
         drop(worker);
@@ -5248,7 +5473,7 @@ pub(crate) mod tests {
     fn prepared_command_refuses_a_changed_pane_context_without_saving() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
-        let before = std::fs::read(&path).unwrap();
+        let before = crate::delivery::store::read_value(&path).unwrap();
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
@@ -5291,7 +5516,7 @@ pub(crate) mod tests {
                 .letters
                 .is_empty()
         );
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(crate::delivery::store::read_value(&path).unwrap(), before);
         drop(worker);
     }
 
@@ -5325,6 +5550,7 @@ pub(crate) mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             });
         }
         ledger.next_id = 3;
@@ -5366,8 +5592,8 @@ pub(crate) mod tests {
                 1,
             )
             .unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
             // A restarted core has no old in-memory observation to guess from.
             guard.delivery_observations.clear();
             let payload = serde_json::from_value(json!({
@@ -5390,7 +5616,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.id, "agent-2");
         assert_eq!(child.pane, "moved-child");
@@ -5464,8 +5690,8 @@ pub(crate) mod tests {
                 1,
             )
             .unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
             guard.delivery_observations.clear();
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
@@ -5487,7 +5713,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.actor.pane_id, "remote:device:pane:moved-child");
         assert_eq!(child.parent.as_deref(), Some("agent-1"));
@@ -5535,7 +5761,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let ended = |ledger: &Ledger| {
             ledger
                 .agents
@@ -5627,7 +5853,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let ended = |ledger: &Ledger| {
             ledger
                 .agents
@@ -5739,7 +5965,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let mut persisted = crate::delivery::ledger::load(&path).unwrap();
+        let mut persisted = crate::delivery::store::load(&path).unwrap();
         let shown = crate::delivery::mailbox::apply(
             &mut persisted,
             &lead,

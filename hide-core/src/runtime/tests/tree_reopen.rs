@@ -77,6 +77,7 @@ pub(super) fn registered_tree() -> Runtime {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     ledger.next_id = 6;

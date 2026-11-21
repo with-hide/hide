@@ -148,6 +148,7 @@ export type CommandId =
   | "focus_pane_up"
   | "focus_pane_down"
   | "toggle_zoom"
+  | "pair_view"
   | "toggle_plan"
   | "close_pane"
   | "text_larger"
@@ -312,6 +313,11 @@ export const REGISTRY: readonly Command[] = [
   { id: "focus_pane_up", title: "Focus pane up", group: "Panes", browser: { code: "ArrowUp", meta: true, alt: true }, electron: { code: "ArrowUp", meta: true, alt: true }, moved: false },
   { id: "focus_pane_down", title: "Focus pane down", group: "Panes", browser: { code: "ArrowDown", meta: true, alt: true }, electron: { code: "ArrowDown", meta: true, alt: true }, moved: false },
   { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
+  // The focused pane beside its tab's desk, or the tab's own layout back
+  // (PRD lane-desk-pair-view B18, B26, D-24): ⌘. in both hosts and
+  // Ctrl+Shift+. on Windows and Linux by the rule; no shell, agent CLI or
+  // Chrome keeps either, and a View's comment chord is ⇧⌘., another key.
+  { id: "pair_view", title: "Focus mode", group: "Panes", browser: { code: "Period", meta: true }, electron: { code: "Period", meta: true }, moved: false },
   // The focused pane's plan (PRD hide-plan B7), in the place the task list's
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
   // by the rule (⇧⌘L is the Memory tool, and Chrome keeps Alt+Shift+I); no
@@ -531,6 +537,7 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "focus_pane_up",
   "focus_pane_down",
   "toggle_zoom",
+  "pair_view",
   "toggle_plan",
   "close_pane",
   "text_larger",

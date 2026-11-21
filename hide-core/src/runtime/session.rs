@@ -724,6 +724,7 @@ impl Runtime {
                 )),
                 empty: panes.is_empty(),
                 delegated: delegated_tabs.contains(&session_tab.tab_id),
+                automation: false,
                 panes,
             };
             self.apply_tab_rename(&mut tab);
@@ -864,7 +865,9 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -1386,23 +1389,65 @@ impl Runtime {
                 Some(checkout.id.as_str()) == self.snapshot.navigator.focused_checkout_id.as_deref()
             })
         });
-        if !focused_checkout_exists && self.snapshot.ui_state.focused_checkout_id.is_none() {
+        // A project no list shows (an automation's folder) holds the focus
+        // only while the engine has a pane there, the run's terminal the
+        // operator came to look at: once that closes, the Workspace and
+        // Changes would go on naming a folder no list holds. The focus goes
+        // back to the checkout last in front that a list shows, else as with
+        // none.
+        let left_unlisted = self.snapshot.navigator.workspaces.iter().any(|workspace| {
+            workspace.unlisted
+                && workspace.checkouts.iter().any(|checkout| {
+                    !checkout.has_panes
+                        && Some(checkout.id.as_str())
+                            == self.snapshot.navigator.focused_checkout_id.as_deref()
+                })
+        });
+        if left_unlisted
+            || (!focused_checkout_exists && self.snapshot.ui_state.focused_checkout_id.is_none())
+        {
+            let listed = |checkout_id: &str| {
+                self.snapshot.navigator.workspaces.iter().any(|workspace| {
+                    workspace.device_id == self.node.as_str()
+                        && !workspace.unlisted
+                        && workspace
+                            .checkouts
+                            .iter()
+                            .any(|checkout| checkout.id == checkout_id && checkout.exists)
+                })
+            };
+            let last_in_front = left_unlisted
+                .then(|| {
+                    self.snapshot
+                        .ui_state
+                        .recent_checkouts
+                        .iter()
+                        .filter(|recent| recent.device_id == self.node.as_str())
+                        .find(|recent| listed(&recent.checkout_id))
+                        .map(|recent| recent.checkout_id.clone())
+                })
+                .flatten();
             // The catalog's first checkout, passing over one whose folder
             // the node found gone: a restored pane's row stays while its
             // folder is missing, and with no activity its place in the order
-            // is its id's, so the window would open on it by chance.
+            // is its id's, so the window would open on it by chance. A
+            // project no list shows (an automation's folder) is never opened
+            // on: its run's terminal would become the selected pane.
             let starts = || {
                 self.snapshot
                     .navigator
                     .workspaces
                     .iter()
+                    .filter(|workspace| !workspace.unlisted)
                     .flat_map(|workspace| workspace.checkouts.iter())
                     .filter(|checkout| checkout.exists)
             };
-            self.snapshot.navigator.focused_checkout_id = starts()
-                .find(|checkout| !self.catalog_paths.gone(&checkout.path))
-                .or_else(|| starts().next())
-                .map(|checkout| checkout.id.clone());
+            self.snapshot.navigator.focused_checkout_id = last_in_front.or_else(|| {
+                starts()
+                    .find(|checkout| !self.catalog_paths.gone(&checkout.path))
+                    .or_else(|| starts().next())
+                    .map(|checkout| checkout.id.clone())
+            });
         }
         let focused = self
             .snapshot
@@ -1539,12 +1584,16 @@ impl Runtime {
                     }
                     let store = self.workspace_views.as_mut().expect("checked above");
                     let first = store.agent_live.insert(key.clone());
-                    let view = store.views.entry(&key.0, &key.1);
-                    let layout = view.selected_agent_layout();
+                    // A checkout with no tabs has no entry (`reconcile_agent_topology`).
+                    let layout = store
+                        .views
+                        .get(&key.0, &key.1)
+                        .map(|view| view.selected_agent_layout());
+                    let active = layout.and_then(|layout| layout.active());
                     placed_tabs = Some(
                         layout
-                            .tree
-                            .displays()
+                            .into_iter()
+                            .flat_map(|layout| layout.tree.displays())
                             .map(|t| t.id.clone())
                             .chain(
                                 topology
@@ -1563,7 +1612,7 @@ impl Runtime {
                             !checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
                         });
                     unlisted_agent_selection = !first
-                        && layout.active().is_some_and(|id| {
+                        && active.is_some_and(|id| {
                             !checkout
                                 .tabs
                                 .iter()
@@ -1577,7 +1626,7 @@ impl Runtime {
                                 .is_some_and(|placed| !placed.contains(id))
                         })
                     {
-                        restored_agent_tab = layout.active().map(str::to_owned);
+                        restored_agent_tab = active.map(str::to_owned);
                     }
                 }
                 let has_tab = |tab_id: &str| {
@@ -1963,6 +2012,7 @@ impl Runtime {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
             return;
@@ -1989,6 +2039,7 @@ impl Runtime {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
             return;
@@ -2016,6 +2067,7 @@ impl Runtime {
                 label: Some("No tabs".to_owned()),
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             };
         }
@@ -2043,9 +2095,10 @@ impl Runtime {
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
         self.request_home_retirements();
-        // The device's word on the pane in front, or a pane it closed.
-        let detail = self.sync_detail_pane() | self.prune_detail_panes();
-        changed | detail | self.complete_look()
+        // An older build's slot cards of the device's panes move onto their
+        // trays once the device lists the panes.
+        let moved = self.move_slot_cards();
+        changed | moved | self.complete_look()
     }
 
     fn apply_remote_session(
@@ -2584,8 +2637,9 @@ impl Runtime {
         self.ingesting_session = false;
         // The projects are known now: an old Home waiting on them is asked.
         self.request_home_retirements();
-        // A pane that closed takes its 보기 slot.
-        let detail = self.prune_detail_panes();
+        // An older build's slot cards move onto their pane's tray once the
+        // engine lists the pane.
+        let detail = self.move_slot_cards();
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
         let pumped = self.pump_geometry_queues();
@@ -3373,10 +3427,14 @@ impl Runtime {
 
     /// Records the number a page gave an operator focus, so the next snapshot
     /// tells that page how much of what it sent the focused pane already
-    /// includes (`OperatorFocusAck`).
+    /// includes (`OperatorFocusAck`). A card open (`detail_open`, `pr_open`)
+    /// carries the same numbering, since it may focus its owner's pane and
+    /// the page hands the card the keyboard only from the snapshot that
+    /// includes it.
     ///
-    /// Called for every operator focus the core receives, before it decides
-    /// what to do with it: a refused or redundant focus still answers the page.
+    /// Called for every operator focus and card open the core receives,
+    /// before it decides what to do with it: a refused or redundant one still
+    /// answers the page.
     /// The record is capped by page, oldest evicted, and an eviction is logged
     /// because the evicted page then reads as having nothing in flight.
     pub(super) fn acknowledge_operator_focus(
@@ -3441,7 +3499,11 @@ impl Runtime {
         origin: PaneFocusOrigin,
         request_id: Option<String>,
     ) {
+        let followed = (origin == PaneFocusOrigin::Operator).then(|| pane_id.clone());
         self.change_look(|runtime| runtime.focus_pane_steps(pane_id, origin, request_id));
+        if let Some(pane) = followed {
+            self.follow_pair_focus(&pane);
+        }
     }
 
     /// The steps of `focus_pane`, which runs them as one selection (`look.rs`).
@@ -6095,7 +6157,9 @@ impl Runtime {
             &mut workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -6254,6 +6318,7 @@ impl Runtime {
             && let Some(key) = self.workspace_key(&payload.workspace_id, &payload.checkout_id)
             && !self.admit_view_open(
                 &key,
+                &self.front_place(&key),
                 &payload.path,
                 crate::view_layout::DisplayKind::File,
                 None,

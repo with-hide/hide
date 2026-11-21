@@ -3,7 +3,7 @@
 // B7, B13): two 제안 lines whose agents left a commit on a local branch of a
 // scratch repository with no remote, seeded into the daemon's own suggestion
 // store while it is down, the way a stopped agent leaves them. The core reads
-// each branch from git, the 보기 slot shows the branch and one file's diff,
+// each branch from git, a card tab shows the branch and one file's diff,
 // and `Merge into main` merges on the node without pushing. Nothing here is an
 // operator's checkout, app or store.
 
@@ -88,7 +88,7 @@ async function open(page: Page, origin: string, token: string): Promise<void> {
   await page.goto(`${origin}/#token=${token}`);
 }
 
-test("a fix waits on its local branch, shows its files and diff in the 보기 slot, and merges into main on the press without a remote", async ({ page }) => {
+test("a fix waits on its local branch, shows its files and diff on a card tab, and merges into main on the press without a remote", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -123,16 +123,16 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     await expect(fix.locator('[data-suggestion-open-pr="s1"]')).toHaveCount(0);
     await lane.screenshot({ path: path.join(evidence, "branch-row-ready.png") });
 
-    // B4: the card in the 보기 slot lists each file; a file opens its diff against main, read on the node.
+    // B4: the card tab lists each file; a file opens its diff against main, read on the node.
     await fix.locator('[data-suggestion-branch-view="s1"]').click();
-    const card = page.locator('[data-lane="detail"] [data-branch-card="s1"]');
+    const card = page.locator('[data-card] [data-branch-card="s1"]');
     await expect(card.locator("[data-branch-card-file]")).toHaveCount(2, { timeout: 20_000 });
     await expect(card).toContainText(FIX);
-    await page.locator('[data-lane="detail"]').screenshot({ path: path.join(evidence, "branch-card.png") });
+    await page.locator('[data-card]').screenshot({ path: path.join(evidence, "branch-card.png") });
     await card.locator('[data-branch-card-file="AGENTS.md"]').click();
-    const diff = page.locator('[data-lane="detail"] [data-branch-card-diff="AGENTS.md"]');
+    const diff = page.locator('[data-card] [data-branch-card-diff="AGENTS.md"]');
     await expect(diff.locator("[data-patch-view]")).toContainText("Run the linter before the tests.", { timeout: 20_000 });
-    await page.locator('[data-lane="detail"]').screenshot({ path: path.join(evidence, "branch-card-diff.png") });
+    await page.locator('[data-card]').screenshot({ path: path.join(evidence, "branch-card-diff.png") });
     // The checkout in front did not move for it.
     expect(head(repo, "HEAD")).toBe(head(repo, "main"));
 

@@ -51,10 +51,10 @@ fn daemon_env(root: &Path) -> Env {
 
 /// The operator's window: a web client, the one kind of connection that may
 /// approve, refuse, change the level of and disconnect a tool.
-struct Window(Socket);
+pub(crate) struct Window(Socket);
 
 impl Window {
-    async fn open(running: &hided::RunningDaemon) -> Self {
+    pub(crate) async fn open(running: &hided::RunningDaemon) -> Self {
         Self::open_as(running, Some("web")).await
     }
 
@@ -88,7 +88,7 @@ impl Window {
         Self(socket)
     }
 
-    async fn send(&mut self, kind: &str, payload: Value) {
+    pub(crate) async fn send(&mut self, kind: &str, payload: Value) {
         self.0
             .send(Message::Text(
                 json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": kind,
@@ -142,15 +142,15 @@ impl InAPane {
 /// A fake tool: the built `hide`, run with its own home, in that home, with
 /// every `HIDE_*` of this process removed but the state folder
 /// of the daemon it asks.
-struct Tool {
+pub(crate) struct Tool {
     home: PathBuf,
     state: PathBuf,
 }
 
 /// What one `hide` run answered.
-struct Ran {
-    ok: bool,
-    out: String,
+pub(crate) struct Ran {
+    pub(crate) ok: bool,
+    pub(crate) out: String,
 }
 
 impl Ran {
@@ -166,7 +166,7 @@ impl Ran {
     }
 
     /// The JSON line the run printed last.
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         let line = self.out.lines().rev().find(|line| line.starts_with('{'));
         serde_json::from_str(line.unwrap_or_else(|| panic!("no JSON line: {}", self.out))).unwrap()
     }
@@ -186,7 +186,7 @@ impl Ran {
 }
 
 impl Tool {
-    fn new(root: &Path, name: &str) -> Self {
+    pub(crate) fn new(root: &Path, name: &str) -> Self {
         let home = root.join(name);
         std::fs::create_dir_all(&home).unwrap();
         Self {
@@ -218,7 +218,7 @@ impl Tool {
         command
     }
 
-    fn run(&self, args: &[&str]) -> Ran {
+    pub(crate) fn run(&self, args: &[&str]) -> Ran {
         self.run_with(args, &[])
     }
 
@@ -284,7 +284,7 @@ impl Tool {
 
     /// `hide access request --name <name> --no-wait --json` until the
     /// answer is not pending, as a script polls after the operator was asked.
-    async fn request_until_answered(&self, name: &str) -> Ran {
+    pub(crate) async fn request_until_answered(&self, name: &str) -> Ran {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let ran = self.run(&["access", "request", "--name", name, "--no-wait", "--json"]);
@@ -297,7 +297,7 @@ impl Tool {
     }
 
     /// Requests without waiting and returns the pending request's id (B1).
-    fn put_up(&self, name: &str) -> String {
+    pub(crate) fn put_up(&self, name: &str) -> String {
         let ran = self.run(&["access", "request", "--name", name, "--no-wait", "--json"]);
         assert!(ran.ok, "{}", ran.out);
         let value = &ran.json()["value"];

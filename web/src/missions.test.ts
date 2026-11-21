@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeWait, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeSpans, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { kindWord } from "./missionLine";
 import { missionEntry, rowLine, rowLineText } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
@@ -230,6 +230,18 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
     expect(missionTone(mission("m", { decision: "Which base?" }))).toBe("hold");
     expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
     expect([missionTone(mission("m", { status: "planning" })), missionTone(mission("m", { status: "merge_wait" })), missionTone(mission("m", { status: "cancelled" }))]).toEqual(["waiting", "review", "cancelled"]);
+  });
+
+  it("turns a running mission's chip to the stopped colour once a node stopped and none works, and keeps it working while one still moves (operator decision 2026-11-20)", () => {
+    const stopped = { status: "working" as const, work: { state: "stopped" as const, cause: null, since_unix_ms: 1 } };
+    const tones = [
+      [node("a", stopped), node("b", { status: "working", work: { state: "working" } })],
+      [node("a", stopped), node("b", { status: "done" }), node("c")],
+      // A node resting on a review still moves; nothing stopped is not a stall.
+      [node("a", { status: "working", work: { state: "waiting", on: { kind: "review" } } }), node("b", stopped)],
+      [node("a", { status: "done" }), node("b")],
+    ].map((nodes) => missionTone(mission("m", { nodes })));
+    expect(tones).toEqual(["working", "stopped", "working", "working"]);
   });
 });
 
@@ -722,25 +734,51 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
   });
 });
 
+describe("where a node's time went (mission-82)", () => {
+  const minute = 60_000;
+  const end = 1_000 * minute;
+  const at = (minutes: number) => end - minutes * minute;
+  it("splits at its start and where its worker's lines first all stood met, counting a running span to the end", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }), end)).toEqual({ work: 90 * minute, review: 510 * minute, wait: 180 * minute });
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(200), own_met_at_unix_ms: at(110), finished_at_unix_ms: at(20) }), end)).toEqual({ work: 90 * minute, review: 90 * minute, wait: null });
+    expect(nodeSpans(node("n", { status: "working", started_at_unix_ms: at(40), ready_at_unix_ms: at(40) }), end)).toEqual({ work: 40 * minute, review: null, wait: null });
+    expect(nodeSpans(node("n", { status: "planned", ready_at_unix_ms: at(25) }), end)).toEqual({ work: null, review: null, wait: 25 * minute });
+  });
+  it("counts a node back at work from a finish from when it went back, not the time it stood done", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(1000), started_at_unix_ms: at(1000), worked_at_unix_ms: at(60), own_met_at_unix_ms: at(20) }), end)).toEqual({ work: 40 * minute, review: 20 * minute, wait: null });
+  });
+  it("leaves out what the record cannot say: a finished node from before the stamp, and a node that could not start yet", () => {
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    // Its wait alone never stands in for the total of a node that started.
+    expect(nodeSpans(node("n", { status: "done", ready_at_unix_ms: at(480), started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    expect(nodeSpans(node("n", { status: "planned" }), end)).toBeNull();
+  });
+});
+
 describe("a node's warnings", () => {
   // hide-private issue 552: the card shows the first warning's short word
   // with `+n` for the rest, and its hover says each in full as told to the
   // Conductor; a dropped node or a cancelled mission warns of nothing.
   const warned = node("n", {
     status: "working",
-    review_fails: 3,
+    review_rounds: { line: "review", rounds: 3, limit: 3 },
     warnings: [
       { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1, told_unix_ms: 1 },
-      { kind: "no_push", from_unix_ms: 0, since_unix_ms: 95 * 60_000, told_unix_ms: 95 * 60_000 },
+      { kind: "stopped", from_unix_ms: 0, since_unix_ms: 6 * 60_000, told_unix_ms: 6 * 60_000, cause: { kind: "error", line: "API Error: 500" } },
     ],
   });
 
   it("names the first on the card and each in full", () => {
     expect(warningWords(mission("m"), warned, t)).toEqual({
-      short: "Review/verify FAIL ×3 +1",
-      full: ["Warned the Conductor: review or verify failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
+      short: "Review limit 3/3 +1",
+      full: ["Warned the Conductor: review or verify failed in round 3: the 3-round limit is reached", "Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"],
     });
-    expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
+    expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("Stopped");
+  });
+
+  it("leaves out an older core's review warning, which carries no rounds", () => {
+    expect(warningWords(mission("m"), { ...warned, review_rounds: undefined }, t)).toEqual({ short: "Stopped", full: ["Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"] });
+    expect(warningWords(mission("m"), { ...warned, review_rounds: null, warnings: [warned.warnings![0]!] }, t)).toBeNull();
   });
 
   it("says a stopped worker's warning with how long and why (mission-56)", () => {
@@ -753,7 +791,7 @@ describe("a node's warnings", () => {
 
   it("says a warning told only once its letter was queued", () => {
     const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
-    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: no push for 95 minutes"]);
+    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: worker stopped for 6 minutes · API error · API Error: 500"]);
   });
 
   it("is none without a warning, on a dropped node or in a cancelled mission", () => {
@@ -815,21 +853,18 @@ describe("missionTurn", () => {
   });
 });
 
-describe("nodeHold", () => {
-  // A Conductor's hold shows only on a node that has not started in a mission
-  // still open: the card's pause line and the list's count read the same nodes.
-  const hold = { why: "check on the phone in the morning", until_unix_ms: 9 * 3_600_000 };
+describe("nodeWait", () => {
+  // The core decides which nodes wait (`Mission::wait_of`): the card's pause
+  // line reads its wait, the list's count only a node's own hold.
+  const own = { why: "check on the phone in the morning", until_unix_ms: 9 * 3_600_000, mission: false };
+  const delay = { why: "disk", until_unix_ms: 3_600_000, mission: true };
 
-  it("counts the held nodes that have not started", () => {
-    const held = mission("m", { nodes: [node("a", { hold }), node("b", { hold, status: "working" }), node("c"), node("d", { hold, status: "dropped" })] });
-    expect(nodeHold(held, held.nodes[0]!)).toEqual(hold);
-    expect(nodeHold(held, held.nodes[1]!)).toBeNull();
+  it("reads the core's wait and counts the nodes held on their own", () => {
+    const held = mission("m", { nodes: [node("a", { wait: own }), node("b", { wait: delay }), node("c")] });
+    expect(nodeWait(held.nodes[0]!)).toEqual(own);
+    expect(nodeWait(held.nodes[1]!)).toEqual(delay);
+    expect(nodeWait(held.nodes[2]!)).toBeNull();
     expect(heldNodes(held)).toBe(1);
-  });
-
-  it("is none once the mission ended", () => {
-    expect(heldNodes(mission("m", { status: "done", nodes: [node("a", { hold })] }))).toBe(0);
-    expect(heldNodes(mission("m", { status: "cancelled", nodes: [node("a", { hold })] }))).toBe(0);
   });
 });
 
@@ -868,6 +903,7 @@ describe("how a node in progress moves (operator decision 2026-11-13)", () => {
     expect(pace({ work: { state: "waiting", on: { kind: "review" } } })).toBe("waiting");
     // A worker Hide put to sleep rests; its sleep is the label's.
     expect(pace({ agent_runtime: "asleep" })).toBe("waiting");
+    expect(pace({ agent_runtime: "asleep", work: { state: "asleep" } })).toBe("waiting");
     expect(pace({ work: { state: "stopped", cause: null, since_unix_ms: 1 } })).toBe("stopped");
     expect(pace({ work: { state: "no_worker" } })).toBe("stopped");
     expect(pace({ work: { state: "no_worker", since_unix_ms: 1 } })).toBe("stopped");
@@ -893,8 +929,10 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
     for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
     const states = contract.mission_node_work as string[];
-    expect(states).toEqual(["working", "waiting", "stopped", "no_worker"]);
+    expect(states).toEqual(["working", "waiting", "asleep", "stopped", "no_worker"]);
     expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
+    expect(nodeWorkWords({ state: "asleep" }, t)).toBe("Worker asleep");
     // A stopped worker says why: a usage limit with the agent's own line, an API error, or no report (mission-56).
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");
@@ -923,7 +961,7 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
       expect(turn, `${cause}: 내 차례 and 확인 필요 agree`).toBe(held);
       return turn;
     };
-    for (const cause of ["draft", "parent_blocked", "bell_exhausted", "undelivered"] as const) {
+    for (const cause of ["draft", "parent_blocked"] as const) {
       expect(shown(cause, true), cause).toBe(false);
       expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
       // Without the letters line the worker's own item still says it, on both.
@@ -936,7 +974,7 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   });
 
   it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {
-    const letters = { count: 3, reason: "unreachable" as const, since_unix_ms: 1 };
+    const letters = { count: 3, reason: "approval" as const, since_unix_ms: 1 };
     expect(turnItems(mission("m", { conductor_letters: letters }), () => null)).toEqual([{ kind: "letters", letters }]);
     expect(turnItems(mission("m", { conductor_letters: letters, status: "done" }), () => null)).toEqual([]);
     expect(turnItems(mission("m"), () => null)).toEqual([]);

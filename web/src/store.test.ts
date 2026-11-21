@@ -85,7 +85,7 @@ describe("snapshot merge", () => {
 
   it("drops the front Workspace's view when a delta no longer carries one", () => {
     const store = useShellStore.getState();
-    const view = { device_id: "local", path: "/h/hide", open: true, documents: true, tool: "explorer", pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+    const view = { device_id: "local", path: "/h/hide", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: "explorer", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { workspace_view: view } as never } });
     expect(useShellStore.getState().rest?.workspace_view?.path).toBe("/h/hide");
     store.applyFrame({ type: "delta", payload: { revision: 2, rest: { focused: { pane_id: "p2" } } } });
@@ -94,7 +94,7 @@ describe("snapshot merge", () => {
 
   it("merges negotiated semantic fields, retains omitted lists and clears explicit values", () => {
     const store = useShellStore.getState();
-    const view = { device_id: "local", path: "/fixture", open: true, documents: true, tool: null };
+    const view = { device_id: "local", path: "/fixture", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null };
     const workspaces = [{ id: "a", checkouts: [] }, { id: "b", checkouts: [] }];
     const remote = [{ target_id: "device", session: { workspaces } }];
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest_format: "semantic-rest-v1", rest: {

@@ -8,7 +8,7 @@ use hide_platform::fs::identity;
 
 use crate::error::{ErrorCode, HostError, HostResult};
 
-pub use hide_node_link::project::ProjectCreated;
+pub use hide_node_link::project::{AutomationFolder, ProjectCreated};
 
 /// What stands at the path a new project would be created at.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +95,30 @@ pub fn create(
     })
 }
 
+/// Makes an automation's own folder under `home` with the folders above it
+/// (`~/hide/automations/<name>`, PRD automations D-08), and answers its real
+/// path. A folder already there is answered as it is; a file at the name is
+/// refused.
+pub fn automation_folder(home: &Path, name: &str) -> HostResult<AutomationFolder> {
+    hide_node_link::mutate::valid_name(name)?;
+    let folder = hide_kit::layout::automations_home(home).join(name);
+    std::fs::create_dir_all(&folder).map_err(|error| {
+        HostError::new(
+            ErrorCode::Io,
+            format!("{} could not be made: {error}", folder.display()),
+        )
+    })?;
+    let real = identity::canonical(&folder).map_err(|error| {
+        HostError::new(
+            ErrorCode::Io,
+            format!("{} could not be read: {error}", folder.display()),
+        )
+    })?;
+    Ok(AutomationFolder {
+        path: hide_platform::path::to_wire_lossy(&real),
+    })
+}
+
 /// Makes a new project's folder and a Git repository in it, and answers its
 /// real path. The repository is made in this folder even inside another
 /// repository's tree, because a new project is its own repository. A
@@ -155,6 +179,29 @@ mod tests {
 
     fn root_of(path: &Path) -> Option<std::path::PathBuf> {
         hide_project::git::discover(path).map(|repository| repository.root)
+    }
+
+    /// PRD automations D-08: an automation's own folder is made with the
+    /// folders above it, with no repository, and asking again answers the
+    /// same folder with what the run left in it.
+    #[test]
+    fn an_automation_folder_is_made_with_its_parents_and_asked_again_as_it_is() {
+        let scratch = tempfile::tempdir().unwrap();
+        let home = identity::canonical(scratch.path()).unwrap();
+        let made = automation_folder(&home, "Morning-issues-abc123").unwrap();
+        let folder = home.join("hide/automations/Morning-issues-abc123");
+        assert_eq!(made.path, hide_platform::path::to_wire_lossy(&folder));
+        assert!(folder.is_dir() && root_of(&folder).is_none());
+        fs::write(folder.join("report.md"), "result").unwrap();
+        assert_eq!(
+            automation_folder(&home, "Morning-issues-abc123").unwrap(),
+            made
+        );
+        assert_eq!(
+            fs::read_to_string(folder.join("report.md")).unwrap(),
+            "result"
+        );
+        assert!(automation_folder(&home, "../escape").is_err());
     }
 
     /// Create new project makes the folder and its own repository, even inside

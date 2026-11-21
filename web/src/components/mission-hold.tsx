@@ -1,7 +1,7 @@
 import { PauseIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { missionDelay } from "../missions";
-import type { Mission } from "../snapshot";
+import type { Mission, MissionNodeWait } from "../snapshot";
 import { useRemaining } from "./elapsed";
 
 /** A mission delay as a chip says it: its reason, and when it ends by itself. */
@@ -37,4 +37,34 @@ export function useDelayWords(delay: MissionDelay | null): string | null {
 /** The pause mark a held pill leads with. */
 export function HeldMark() {
   return <PauseIcon aria-hidden="true" className="size-(--size-icon-sm)" />;
+}
+
+/** A waiting node's words: why first, then how long it still waits while the core has not lifted it yet; `full` is the whole sentence for the hover and the card's name. */
+export function useWaitWords(wait: MissionNodeWait | null | undefined): { why: string; left: string | null; full: string } | null {
+  const { t } = useInterfaceTranslation();
+  const left = useRemaining(wait?.until_unix_ms);
+  if (!wait) return null;
+  const still = left && left !== "past" ? left.text : null;
+  return {
+    why: t("mission.wait", { why: wait.why }),
+    left: still,
+    full: still ? t("mission.waitLeft", { why: wait.why, left: still }) : t("mission.wait", { why: wait.why }),
+  };
+}
+
+/**
+ * A node its Conductor set waiting, by its own hold or the mission's delay
+ * (`Mission::wait_of`; PRD letters-missions-simplify B21), as the desktop's
+ * and the phone's cards draw it: a grey pause, `기다리는 중 · <why>` cut when
+ * it runs long, and how long it still waits whole at the line's end
+ * (operator decision 2026-11-11).
+ */
+export function NodeWaitLine({ wait, words }: { wait: MissionNodeWait; words: NonNullable<ReturnType<typeof useWaitWords>> }) {
+  return (
+    <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" title={words.full} data-node-wait={wait.mission ? "mission" : "node"}>
+      <HeldMark />
+      <span className="min-w-0 truncate">{words.why}</span>
+      {words.left ? <span className="shrink-0 whitespace-nowrap" data-node-wait-left="true">· {words.left}</span> : null}
+    </span>
+  );
 }

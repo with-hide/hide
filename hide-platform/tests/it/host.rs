@@ -739,6 +739,40 @@ fn a_posix_locale_names_its_language_in_the_order_messages_are_read() {
     }
 }
 
+/// with-hide/hide#2706: a terminal's program with no locale reads UTF-8 by
+/// the system's own name for it; a locale the account set, whatever it
+/// names, is left alone, and an empty variable names none.
+#[test]
+fn a_terminal_gives_utf8_only_to_a_program_whose_environment_names_no_locale() {
+    let given = |pairs: Vec<(&'static str, &'static str)>| {
+        let pairs: Vec<(&'static str, PathBuf)> = pairs
+            .into_iter()
+            .map(|(name, value)| (name, PathBuf::from(value)))
+            .collect();
+        host::terminal_locale_from(&variables(pairs))
+    };
+    for named in ["LC_ALL", "LC_CTYPE", "LANG"] {
+        assert_eq!(given(vec![(named, "C")]), None, "{named}");
+    }
+    let none = given(vec![("LANG", ""), ("LC_MESSAGES", "ko_KR.UTF-8")]);
+    if cfg!(target_os = "macos") {
+        assert_eq!(none, Some(("LC_CTYPE", "UTF-8")));
+    } else if cfg!(windows) {
+        assert_eq!(none, None);
+    } else {
+        // Whether the system has C.UTF-8, as its own `locale -a` lists it,
+        // from glibc's archive or a folder alike.
+        let listed = std::process::Command::new("locale")
+            .arg("-a")
+            .output()
+            .expect("locale -a runs");
+        let has = String::from_utf8_lossy(&listed.stdout).lines().any(|name| {
+            name.eq_ignore_ascii_case("C.utf8") || name.eq_ignore_ascii_case("C.UTF-8")
+        });
+        assert_eq!(none, has.then_some(("LC_CTYPE", "C.UTF-8")));
+    }
+}
+
 #[test]
 fn the_primary_language_is_a_tag_or_says_the_system_names_none() {
     match host::primary_language() {

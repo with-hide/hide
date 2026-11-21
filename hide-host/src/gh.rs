@@ -211,7 +211,7 @@ mod tests {
     use std::path::PathBuf;
 
     use hide_node_link::gh::{
-        ISSUE_DETAIL_FIELDS, ISSUE_LIST_FIELDS, ISSUE_LIST_LIMIT, ISSUE_LIST_SEARCH,
+        AUTH_STATUS, ISSUE_DETAIL_FIELDS, ISSUE_LIST_FIELDS, ISSUE_LIST_LIMIT, ISSUE_LIST_SEARCH,
         OPEN_CHECK_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_LIMIT,
     };
 
@@ -250,7 +250,7 @@ mod tests {
 [ "$GH_PROMPT_DISABLED" = 1 ] && [ "$GIT_TERMINAL_PROMPT" = 0 ] || exit 90
 case "$1 $2" in
   "pr list"|"issue list") printf '[]';;
-  "auth status") printf 'not logged into any GitHub hosts' >&2; exit 1;;
+  "auth status") [ "$3" = --active ] || exit 92; printf 'not logged into any GitHub hosts' >&2; exit 1;;
   *) touch forbidden; exit 91;;
 esac"#,
         );
@@ -293,7 +293,7 @@ esac"#,
         let failure = run_gh(
             &fixture.binary,
             Some(&fixture.root),
-            &["auth", "status"],
+            &AUTH_STATUS,
             FIXTURE_DEADLINE,
         )
         .unwrap_err();
@@ -575,11 +575,11 @@ esac"#,
     #[ignore = "needs the minimum gh release named in HIDE_TEST_GH_BIN"]
     fn every_command_line_parses_on_the_oldest_gh_hide_supports() {
         use hide_node_link::gh::{
-            BranchPushRead, ChecksList, GhVersion, ISSUE_DETAIL_FIELDS, MERGED_PROOF_FIELDS,
-            MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS, OUTSIDE_PR_FIELDS,
-            PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_FIELDS, PrMergeMethod,
-            REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
-            SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
+            AUTH_STATUS, BranchPushRead, ChecksList, GhVersion, ISSUE_DETAIL_FIELDS,
+            MERGED_PROOF_FIELDS, MERGED_PROOF_LIMIT, MINIMUM_VERSION, OPEN_CHECK_FIELDS,
+            OUTSIDE_PR_FIELDS, PLAN_PR_FIELDS, PR_FEEDBACK_FIELDS, PULL_REQUEST_FIELDS,
+            PrMergeMethod, REPOSITORY_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH,
+            SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VERSION, VIEWER_LOGIN,
         };
         const REPOSITORY: &str = "acme/app";
         const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -629,7 +629,7 @@ esac"#,
             ])
         };
         let mut lines: Vec<Vec<String>> = vec![
-            owned(&["auth", "status"]),
+            owned(&AUTH_STATUS),
             owned(&VIEWER_LOGIN),
             owned(&[
                 "pr",
@@ -771,7 +771,7 @@ esac"#,
                 };
                 // `auth status` reports its token check in its own words.
                 let asked = reason.contains("proxyconnect")
-                    || (words == ["auth", "status"] && reason.contains("using token (GH_TOKEN)"));
+                    || (words == AUTH_STATUS && reason.contains("using token (GH_TOKEN)"));
                 (!asked).then(|| {
                     format!(
                         "{}: {}",

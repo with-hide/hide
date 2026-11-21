@@ -143,6 +143,9 @@ test("of three panes the focused one is outlined, and zoom hides the other two b
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-zoomed", "true");
     await expect(page.locator("[data-pane-boundary]")).toHaveCount(0);
     await expect.poll(() => sent.get("toggle_zoom")).toBe(1);
+    // ⇧⌘↩ on a pane is the tab's zoom, never focus mode, which only ⌘. turns on (D-65).
+    await expect(page.locator("[data-pair-layer]")).toHaveCount(0);
+    expect(sent.get("pair_view") ?? 0).toBe(0);
     // Zoom keeps the input perimeter and names the two panes it hides.
     await expect(page.locator("[data-pane-zoom]")).toHaveAttribute("data-pane-zoom", "2");
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(1);

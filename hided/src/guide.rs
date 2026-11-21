@@ -53,6 +53,18 @@ mod tests {
         assert!(TEXT.contains(crate::session_cli::USAGE));
     }
 
+    /// An agent asked for a repeated task finds the automation command and
+    /// its guide (PRD automations B9).
+    #[test]
+    fn the_guide_routes_a_repeated_task_to_an_automation() {
+        let guide = text();
+        assert!(guide.contains("## Automations"));
+        assert!(guide.contains("Run `hide automation help` first"));
+        assert!(guide.contains(
+            "hide automation add --name <name> --task <text> --schedule <when> --kind <kind>"
+        ));
+    }
+
     #[test]
     fn the_guide_spells_hide_agent_profile_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::profile_cli::USAGE));

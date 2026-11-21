@@ -52,7 +52,13 @@ pub(crate) const MARKER_VERSION: u32 = 1;
 pub const CORE_STATE: &str = "core-state.json";
 pub(crate) const WORKSPACE_VIEWS: &str = "workspace-views.json";
 const LABELS: &str = "labels.json";
+/// The delivery ledger's name in `KEYS` and its rewrites, which address it in
+/// the shape of the JSON file builds before the store kept it in; the store
+/// itself is [`DELIVERY_STORE`], read and written through [`read_store`] and
+/// [`write_store`].
 const DELIVERY_LEDGER: &str = "delivery-ledger.json";
+/// The delivery ledger's file (`delivery::store`).
+const DELIVERY_STORE: &str = hide_kit::layout::DELIVERY_STORE;
 const PROJECT_MEMORY: &str = hide_memory::DATABASE_FILE;
 pub(crate) const SESSION_SEARCH: &str = "session-search.sqlite3";
 const LINKS: &str = "links.sqlite3";
@@ -87,7 +93,10 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     CORE_STATE,
     WORKSPACE_VIEWS,
     LABELS,
+    // The old file goes with the store, which replaced it, so a machine the
+    // core left never imports it again.
     DELIVERY_LEDGER,
+    DELIVERY_STORE,
     LINKS,
     hide_kit::layout::USAGE_STORE,
     hide_kit::layout::SUGGESTIONS_STORE,
@@ -109,6 +118,9 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     // External tools' connections, which name no machine: each is a tool on
     // the core's own machine.
     hide_kit::layout::ACCESS_STORE,
+    // Automations, which name no machine: each runs on the core's own, and
+    // its runs are named by ledger ids.
+    hide_kit::layout::AUTOMATIONS_STORE,
     MARKER_FILE,
 ];
 
@@ -341,6 +353,31 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     (
         CORE_STATE,
         "/detail_panes/*/slot/items/*/session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    // Slot cards moving to their pane's desk, waiting for its tab.
+    (
+        CORE_STATE,
+        "/moving_cards/*/pane",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/checkout_id",
+        Mechanism::Owned,
+        Moves::Checkout,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/session/device_id",
         Mechanism::Rewritten,
         Moves::Device,
     ),
@@ -747,9 +784,33 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Tab,
     ),
+    // An older file's one View list, read once into the desks
+    // (`workspace_views`, schema 6); a move before that first read still
+    // finds it.
     (
         WORKSPACE_VIEWS,
         "/workspaces/*/view_layout",
+        Mechanism::Rewritten,
+        Moves::Whole,
+    ),
+    // Each Agent tab's desk: its tab and its Views, whose openers and cards
+    // name machines at any depth; and the Views on no desk (PRD
+    // lane-desk-pair-view D-06, D-19).
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/trays/*/tab",
+        Mechanism::Owned,
+        Moves::Tab,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/trays/*/layout",
+        Mechanism::Rewritten,
+        Moves::Whole,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/shelf",
         Mechanism::Rewritten,
         Moves::Whole,
     ),
@@ -862,15 +923,6 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     (
         DELIVERY_LEDGER,
         "/agents/*/actor/device_id",
-        Mechanism::Rewritten,
-        Moves::Device,
-    ),
-    // A machine's clock follows its id; the clock of the machine that becomes
-    // the owner is ended by the new core's store, which keeps each letter's
-    // wait (`Ledger::observe_reach`).
-    (
-        DELIVERY_LEDGER,
-        "/node_clocks/{key}",
         Mechanism::Rewritten,
         Moves::Device,
     ),
@@ -1146,6 +1198,7 @@ pub const UNBOUND: &[&str] = &[
     "mobile.json",
     "phones.json",
     hide_kit::layout::ACCESS_STORE,
+    hide_kit::layout::AUTOMATIONS_STORE,
     "pane-capabilities",
     "attachments",
     "TerminalClipboard",
@@ -1250,11 +1303,12 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     // check needs none of the pairs found below.
     for (file, version_key, versions, convert) in JSON_STORES {
         let limit = stored_limit(file);
-        let path = state_dir.join(file);
-        if limit == usize::MAX || over_limit(&path, limit) {
+        if limit == usize::MAX {
             continue;
         }
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some((path, mut value)) = convertible(state_dir, file, false)
+            .map_err(|reason| refuse(&state_dir.join(file), reason))?
+        else {
             continue;
         };
         if !current(&value, version_key, versions) {
@@ -1326,25 +1380,23 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     let project_ids: BTreeMap<String, String> = project_pairs.iter().cloned().collect();
 
     for (file, version_key, versions, convert) in JSON_STORES {
-        let path = state_dir.join(file);
-        // A store its own loader already refuses is left to that loader,
-        // as a store of an unknown version is.
-        if over_limit(&path, stored_limit(file)) {
-            continue;
-        }
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some((path, mut value)) = convertible(state_dir, file, true)
+            .map_err(|reason| refuse(&state_dir.join(file), reason))?
+        else {
             continue;
         };
         if !current(&value, version_key, versions) {
             continue;
         }
         if convert(&mut value, node.as_str(), &project_ids) {
-            let bytes =
-                serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
+            let kept_as = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| (*file).to_owned());
             backup
-                .copy(&path, file)
+                .copy(&path, &kept_as)
                 .map_err(|reason| refuse(&path, reason))?;
-            write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+            write_store(&path, &value).map_err(|reason| refuse(&path, reason))?;
             outcome.files.push(path.display().to_string());
         }
     }
@@ -1374,6 +1426,39 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
         write(&marker_path, &marker).map_err(|reason| refuse(&marker_path, reason))?;
     }
     Ok(outcome)
+}
+
+/// The JSON store `file` of `state_dir` a conversion rewrites, where it is
+/// kept and its value; `None` when there is none, or when its own loader is
+/// left to refuse it, as a store of an unknown version is.
+///
+/// The delivery ledger is converted in its store and its old file is only
+/// ever read (D-20, B27): with `import`, a folder an older build wrote is
+/// imported into the store first, as the core's start would import it;
+/// without, the check before anything is written reads the old file in
+/// place. A ledger the import refuses is left to the core's start, which
+/// refuses it again and keeps both files.
+fn convertible(
+    state_dir: &Path,
+    file: &str,
+    import: bool,
+) -> Result<Option<(PathBuf, Value)>, String> {
+    let limit = stored_limit(file);
+    let path = state_dir.join(file);
+    let store = store_path(state_dir, file);
+    if store == path || !(import || store.exists()) {
+        if over_limit(&path, limit) {
+            return Ok(None);
+        }
+        return Ok(read_json(&path)?.map(|value| (path, value)));
+    }
+    if !store.exists() && (!path.exists() || over_limit(&path, limit)) {
+        return Ok(None);
+    }
+    Ok(read_store(&store)
+        .ok()
+        .flatten()
+        .map(|value| (store, value)))
 }
 
 type JsonConverter = fn(&mut Value, &str, &BTreeMap<String, String>) -> bool;
@@ -1464,6 +1549,58 @@ pub(crate) fn mission_files(state_dir: &Path) -> Result<Vec<(String, PathBuf)>, 
     Ok(files)
 }
 
+/// The file that holds the JSON store `KEYS` names `file` in `dir`: the
+/// delivery ledger's is its store.
+pub(crate) fn store_path(dir: &Path, file: &str) -> PathBuf {
+    if file == DELIVERY_LEDGER {
+        dir.join(DELIVERY_STORE)
+    } else {
+        dir.join(file)
+    }
+}
+
+fn holds_delivery_store(path: &Path) -> bool {
+    path.file_name() == Some(std::ffi::OsStr::new(DELIVERY_STORE))
+}
+
+/// A store at `path` ([`store_path`]) as its rewrites read it: the delivery
+/// ledger in its JSON file's shape (`delivery::store::read_value`), any other
+/// as [`read_json`] reads it.
+pub(crate) fn read_store(path: &Path) -> Result<Option<Value>, String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::read_value(path)
+            .map_err(|code| format!("the delivery ledger does not open: {code}"))
+    } else {
+        read_json(path)
+    }
+}
+
+/// Keeps `value`, a rewrite of what [`read_store`] read, at `path`.
+pub(crate) fn write_store(path: &Path, value: &Value) -> Result<(), String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::write_value(path, value)
+            .map_err(|code| format!("the delivery ledger was not kept: {code}"))
+    } else {
+        write(
+            path,
+            &serde_json::to_vec(value).map_err(|error| error.to_string())?,
+        )
+    }
+}
+
+/// Copies the store at `path` to `destination` as it stands: the delivery
+/// ledger's with every committed row, any other file as it is.
+fn copy_store(path: &Path, destination: &Path) -> Result<(), String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::copy(path, destination)
+            .map_err(|code| format!("the delivery ledger was not copied: {code}"))
+    } else {
+        std::fs::copy(path, destination)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
 pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     hide_platform::fs::atomic::write_file(path, bytes, hide_platform::fs::Access::Private)
         .map(|_| ())
@@ -1545,10 +1682,11 @@ fn rename_key(object: Option<&mut Value>, node: &str) -> bool {
     true
 }
 
-/// The device a 보기 slot's records name.
-fn rewrite_slot_devices(slot: &mut Value, node: &str) -> bool {
+/// The device the cards under `key` name: a 보기 slot's `items`, or the
+/// `cards` of slot cards moving to their pane's desk.
+fn rewrite_card_devices(holder: &mut Value, key: &str, node: &str) -> bool {
     let mut changed = false;
-    for item in each(slot, "items") {
+    for item in each(holder, key) {
         changed |= rewrite(
             item.get_mut("session")
                 .and_then(|session| session.get_mut("device_id")),
@@ -1592,12 +1730,15 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     }
     // The front slot and each other pane's.
     if let Some(detail) = value.get_mut("detail") {
-        changed |= rewrite_slot_devices(detail, node);
+        changed |= rewrite_card_devices(detail, "items", node);
     }
     for held in each(value, "detail_panes") {
         if let Some(slot) = held.get_mut("slot") {
-            changed |= rewrite_slot_devices(slot, node);
+            changed |= rewrite_card_devices(slot, "items", node);
         }
+    }
+    for moving in each(value, "moving_cards") {
+        changed |= rewrite_card_devices(moving, "cards", node);
     }
     changed |= rename_key(value.get_mut("device_expanded_paths"), node);
     for fold in each(value, "session_open_folds") {
@@ -1669,7 +1810,7 @@ fn convert_workspace_views(value: &mut Value, node: &str, _: &BTreeMap<String, S
 }
 
 /// Calls `change` with every View opener's machine in one Workspace's
-/// layout, at any depth: the agent that opened a View last (`opener`) and
+/// layouts, at any depth: the agent that opened a View last (`opener`) and
 /// every session that opened it (`openers`, PRD session-files D-10).
 pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
     fn walk(value: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
@@ -1699,8 +1840,13 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
             _ => false,
         }
     }
-    view.get_mut("view_layout")
-        .is_some_and(|layout| walk(layout, change))
+    // An older file's one View list, or each tray and the Views on no tray
+    // (PRD lane-desk-pair-view D-06, D-19).
+    ["view_layout", "trays", "shelf"]
+        .into_iter()
+        .fold(false, |changed, key| {
+            view.get_mut(key).is_some_and(|layout| walk(layout, change)) | changed
+        })
 }
 
 fn convert_labels(value: &mut Value, node: &str, _: &BTreeMap<String, String>) -> bool {
@@ -1827,11 +1973,7 @@ impl Backup {
     }
 
     fn copy(&self, path: &Path, kept_as: &str) -> Result<(), String> {
-        self.copy_with(kept_as, |destination| {
-            std::fs::copy(path, destination)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        })
+        self.copy_with(kept_as, |destination| copy_store(path, destination))
     }
 
     /// Keeps the original as `kept_as`, written under a temporary name and
@@ -1997,6 +2139,14 @@ mod tests {
                     {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
                 ], "shown": false}}]),
             )
+            .tap_insert(
+                "moving_cards",
+                json!([{"pane": "w1:p2", "cards": [
+                    {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
+                    {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
+                    {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
+                ], "shown": true}]),
+            )
             .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
             .tap_insert(
                 "device_agent_permissions",
@@ -2035,6 +2185,8 @@ mod tests {
                     "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed", "started_at": 1,
                     "result_pane": "w1:p1", "result_tab": "w1:t3"}},
                  "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
+                 "trays": [{"tab": "w1:t1", "shown": true, "layout": {"root": {"area": {"displays": [{"id": "d4", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}}}],
+                 "shelf": {"root": {"area": {"displays": [{"id": "d5", "openers": [{"device_id": "local", "terminal_id": "t1"}]}]}}},
                  "feedback": {"comments": [{"id": "c2", "recipient": {"device_id": "local"}, "shot": {"node": "local", "name": "shot.png"}}], "waiting": [{"to": {"device_id": "local"}}]}},
                 {"device_id": "mini", "path": "/srv/p"},
             ]}),
@@ -2053,25 +2205,58 @@ mod tests {
             HOOK_FACTS,
             json!({"schema_version": 1, "panes": {"w1:p1": {"sessions": [], "seen_agent": true}}}),
         );
-        let actor = |device: &str| json!({"pane_id": "w1:p1", "name": "a", "kind": "claude", "device_id": device});
-        write(
-            DELIVERY_LEDGER,
-            json!({
-                "version": 1, "next_id": 9,
-                "letters": [{"sender": actor("local"), "recipient": actor("mini"),
-                             "watch_warning": {"target": actor("local")}}],
-                "watches": [{"parent": actor("local"), "target": actor("local")}],
-                "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
-                            "project": root, "session": "s1", "instance": "term_1"}],
-                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
-                            "task": {"kind": "memory_promote", "target": "m1"},
-                            "plan": {"plan": "1000", "step": "a", "attempt": 1,
-                                     "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}],
-                "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
-                                    "owed": {"for": "fork", "origin": "agent-1"}}],
-                "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
-            }),
-        );
+        // A ledger the core loads, so its first start imports it into its
+        // store: records of a released ledger's shape, given a value at every
+        // key `KEYS` names.
+        let released: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/release-state/v1.2.10/delivery-ledger.json"
+        ))
+        .unwrap();
+        let template = |list: &str, at: usize| released[list][at].clone();
+        let digest = crate::engine::tokens::session_digest("s1");
+        let actor = |device: &str| {
+            json!({"pane_id": "w1:p1", "name": "a", "kind": "claude", "device_id": device,
+                   "session": digest})
+        };
+        let with = |mut record: Value, fields: Value| {
+            for (key, value) in fields.as_object().unwrap() {
+                record[key] = value.clone();
+            }
+            record
+        };
+        let ledger = json!({
+            "version": 1, "next_id": 9,
+            "letters": [
+                // Delivered to a device's agent, as a letter on its clock is.
+                with(template("letters", 2), json!({"id": "letter-2", "intent": "to-mini",
+                    "sender": actor("local"), "recipient": actor("mini")})),
+                with(template("letters", 0), json!({"id": "letter-3", "intent": "watch-1",
+                    "kind": "watch", "sender": actor("local"), "recipient": actor("local"),
+                    "watch_warning": {"target": actor("local"), "activity_at_unix_ms": 1, "ordinal": 1}})),
+            ],
+            "watches": [with(template("watches", 0), json!({"id": "watch-4",
+                "parent": actor("local"), "target": actor("local")}))],
+            "agents": [with(template("agents", 0), json!({"id": "agent-1", "name": "a",
+                "machine": "local", "native_machine": "local", "actor": actor("local"),
+                "pane": "w1:p1", "terminal_id": "w1:p1", "host_scope": "/tmp/herdr.sock",
+                "project": root, "session": "s1", "instance": "term_1"}))],
+            "spawns": [with(template("spawns", 1), json!({"id": "spawn-5", "parent": "agent-1",
+                "mode": "handoff", "repo": root, "path": root, "requested_path": root,
+                "pane": "w1:p2", "machine": "mini", "child": null, "completed": false,
+                "auto_watch_id": null, "task": {"kind": "memory_promote", "target": "m1"},
+                "plan": {"plan": "1000", "step": "a", "attempt": 1,
+                         "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}))],
+            "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
+                                "owed": {"for": "fork", "origin": "agent-1"}}],
+        });
+        crate::delivery::ledger::from_bytes(&serde_json::to_vec(&ledger).unwrap())
+            .expect("the legacy ledger is one the core loads");
+        // The core wrote its ledger private.
+        std::io::Write::write_all(
+            &mut hide_platform::fs::private::create_new_file(&state.join(DELIVERY_LEDGER)).unwrap(),
+            &serde_json::to_vec(&ledger).unwrap(),
+        )
+        .unwrap();
         write(
             "github-snapshot.json",
             json!({"projects": [{"root_path": root}]}),
@@ -2154,6 +2339,12 @@ mod tests {
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
     }
 
+    /// The JSON store `file` of `state` as a conversion left it: the
+    /// delivery ledger's from its store.
+    fn converted(state: &Path, file: &str) -> Value {
+        read_store(&store_path(state, file)).unwrap().unwrap()
+    }
+
     /// Every value a pointer pattern reaches; `*` is each array element or
     /// object value, `{key}` each object key, a number an array's element.
     pub(super) fn reach(value: &Value, pattern: &str) -> Vec<Value> {
@@ -2200,6 +2391,7 @@ mod tests {
     #[test]
     fn every_machine_bound_key_is_either_rewritten_to_the_node_or_owned_through_node_json() {
         let legacy = legacy();
+        let old_ledger = std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap();
         let before: BTreeMap<String, Value> = KEYS
             .iter()
             .filter(|(file, ..)| file.ends_with(".json"))
@@ -2220,7 +2412,7 @@ mod tests {
         for (file, pattern, mechanism, _) in
             KEYS.iter().filter(|(file, ..)| file.ends_with(".json"))
         {
-            let after = reach(&read(&legacy.state.join(file)), pattern);
+            let after = reach(&converted(&legacy.state, file), pattern);
             match mechanism {
                 Mechanism::Rewritten => {
                     assert!(
@@ -2237,9 +2429,15 @@ mod tests {
         }
         // No converted store names the legacy machine anywhere.
         for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS, DELIVERY_LEDGER] {
-            let text = std::fs::read_to_string(legacy.state.join(file)).unwrap();
+            let text = converted(&legacy.state, file).to_string();
             assert!(!text.contains("\"local\""), "{file}: {text}");
         }
+        // The ledger was converted in its store; its old file is as the
+        // build before node ids left it, for that build to read (D-20).
+        assert_eq!(
+            std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap(),
+            old_ledger
+        );
         let core_state = read(&legacy.state.join(CORE_STATE));
         assert_eq!(core_state["workspace_registrations"][1]["device_id"], NODE);
         assert_eq!(
@@ -2252,7 +2450,7 @@ mod tests {
             read(&legacy.state.join(LABELS))["targets"][NODE]["w1:p1"]["owner"],
             "v1:a"
         );
-        let ledger = read(&legacy.state.join(DELIVERY_LEDGER));
+        let ledger = converted(&legacy.state, DELIVERY_LEDGER);
         assert_eq!(ledger["letters"][0]["recipient"]["device_id"], "mini");
         assert_eq!(ledger["agents"][0]["machine"], NODE);
         assert_eq!(ledger["agents"][0]["actor"]["device_id"], NODE);
@@ -2401,12 +2599,20 @@ mod tests {
     fn every_field_the_core_saves_is_a_row_of_the_table_or_names_no_machine() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CORE_STATE);
-        crate::persistence::save(
-            &path,
-            &crate::model::UiStateSnapshot::default(),
-            &Default::default(),
-        )
-        .unwrap();
+        // A field left out while empty is saved here with a value, so it is
+        // held to the table too.
+        let state = crate::model::UiStateSnapshot {
+            moving_cards: vec![crate::model::MovingCards {
+                pane: Some("w1:p1".into()),
+                cards: vec![crate::model::DetailItem::PullRequest {
+                    workspace_id: "workspace:a".into(),
+                    number: 7,
+                }],
+                shown: true,
+            }],
+            ..Default::default()
+        };
+        crate::persistence::save(&path, &state, &Default::default()).unwrap();
         let saved = read(&path);
         let rows: Vec<&str> = KEYS
             .iter()
@@ -2437,15 +2643,22 @@ mod tests {
     fn every_file_a_state_folder_holds_is_listed_with_how_its_machine_keys_are_kept() {
         let legacy = legacy();
         convert(&legacy.state, &node()).unwrap();
-        let listed: Vec<&str> = KEYS
+        // A file `KEYS` names is listed with the file that holds it: the
+        // delivery ledger's store.
+        let listed: Vec<String> = KEYS
             .iter()
-            .map(|(file, ..)| *file)
-            .chain(UNBOUND.iter().copied())
+            .flat_map(|(file, ..)| {
+                [
+                    (*file).to_owned(),
+                    store_path(Path::new(""), file).display().to_string(),
+                ]
+            })
+            .chain(UNBOUND.iter().map(|file| (*file).to_owned()))
             .collect();
         for entry in std::fs::read_dir(&legacy.state).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
             assert!(
-                listed.contains(&name.as_str()),
+                listed.contains(&name),
                 "{name} is in the state folder but neither KEYS nor UNBOUND names it"
             );
         }
@@ -2464,13 +2677,29 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .collect();
         assert_eq!(backups.len(), 1);
-        for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS, DELIVERY_LEDGER] {
+        for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS] {
             assert_eq!(
                 std::fs::read(backups[0].join(file)).unwrap(),
                 before[file],
                 "{file}"
             );
         }
+        // The ledger's original is its old file, which stays where it was;
+        // the backup keeps the store as the import made it, before its keys
+        // were rewritten.
+        assert_eq!(
+            std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap(),
+            before[DELIVERY_LEDGER]
+        );
+        assert!(!backups[0].join(DELIVERY_LEDGER).exists());
+        let kept = crate::delivery::store::load(&backups[0].join(DELIVERY_STORE)).unwrap();
+        assert_eq!(
+            kept,
+            crate::delivery::store::as_upgraded(
+                crate::delivery::ledger::from_bytes(&before[DELIVERY_LEDGER]).unwrap(),
+                &kept
+            )
+        );
         assert!(backups[0].join(PROJECT_MEMORY).is_file());
         let copy = rusqlite::Connection::open(backups[0].join(LINKS)).unwrap();
         let legacy_rows: i64 = copy

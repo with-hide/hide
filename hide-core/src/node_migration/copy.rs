@@ -358,8 +358,9 @@ pub fn check_loadable(dir: &Path) -> Result<(), Refusal> {
             }
             // The ledger is the one store whose loader refuses what it does
             // not accept and leaves the bytes alone, so the core would start
-            // with every letter, watch and registration unavailable.
-            if *name == super::DELIVERY_LEDGER {
+            // with every letter, watch and registration unavailable. The old
+            // file is read only while no store has replaced it.
+            if *name == super::DELIVERY_LEDGER && !dir.join(super::DELIVERY_STORE).is_file() {
                 crate::delivery::ledger::from_bytes(&bytes).map_err(|code| {
                     refuse(
                         &path,
@@ -384,6 +385,16 @@ pub fn check_loadable(dir: &Path) -> Result<(), Refusal> {
                     &path,
                     format!("failed its integrity check: {answer}"),
                 ));
+            }
+            // The ledger's store is read as the core starts with it, for the
+            // reason the old file was (B28).
+            if *name == super::DELIVERY_STORE {
+                crate::delivery::store::read_from(&connection).map_err(|code| {
+                    refuse(
+                        &path,
+                        format!("is not a delivery ledger this build loads: {code}"),
+                    )
+                })?;
             }
         }
     }
@@ -936,25 +947,67 @@ mod tests {
         );
     }
 
-    /// The delivery ledger is held to the reader the core loads it with: a
-    /// copy whose ledger the core would refuse (and, refusing, start with
-    /// every letter unavailable) is a copy the move does not place.
+    /// The delivery ledger moves in its store, every committed row with it,
+    /// and is held to the reader the core loads it with (B28): a copy whose
+    /// ledger the core would refuse (and, refusing, start with every letter
+    /// unavailable) is a copy the move does not place.
     #[test]
     fn a_ledger_the_core_would_refuse_is_named_by_the_load_check() {
+        use crate::delivery::{Actor, ledger::Ledger, mailbox, store};
         let source = folder();
+        let actor = |pane: &str| Actor {
+            pane_id: pane.into(),
+            name: pane.into(),
+            kind: "claude".into(),
+            device_id: "n".into(),
+            session: Some(format!("{pane}-session")),
+        };
+        let mut ledger = Ledger::default();
+        mailbox::send(
+            &mut ledger,
+            &actor("w1:p1"),
+            &actor("w1:p2"),
+            "moved",
+            "a letter that moves with the core",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        let kept = source.path().join(super::super::DELIVERY_STORE);
+        let (mut open, before, _) = store::LedgerStore::open(&kept).unwrap();
+        open.write(&before, &ledger).unwrap();
+        // Left open, as the core's store thread holds it: a copy of the
+        // main file alone could miss the rows still in its log.
+        std::mem::forget(open);
         let staging = source.path().join("move-staging/i1");
         stage(source.path(), &staging, &settings(source.path())).unwrap();
-        let ledger = staging.join(super::super::DELIVERY_LEDGER);
-        crate::delivery::ledger::save(&ledger, &crate::delivery::ledger::Ledger::default())
-            .unwrap();
         check_loadable(&staging).unwrap();
+        let copy = staging.join(super::super::DELIVERY_STORE);
+        assert_eq!(store::load(&copy).unwrap(), ledger);
 
-        let mut broken: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
-        broken["next_id"] = json!(0);
-        std::fs::write(&ledger, serde_json::to_vec(&broken).unwrap()).unwrap();
+        rusqlite::Connection::open(&copy)
+            .unwrap()
+            .execute(
+                "UPDATE ledger SET body = json_set(body, '$.next_id', 0)",
+                [],
+            )
+            .unwrap();
         let refusal = check_loadable(&staging).unwrap_err();
-        assert_eq!(refusal.file, ledger);
+        assert_eq!(refusal.file, copy);
+        assert!(refusal.reason.contains("ledger_unavailable"), "{refusal}");
+
+        // A copy an older build left, with only the old file, is held to
+        // that file's reader.
+        for sidecar in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(staging.join(format!("delivery.sqlite3{sidecar}")));
+        }
+        let old = staging.join(super::super::DELIVERY_LEDGER);
+        let mut broken = serde_json::to_value(&ledger).unwrap();
+        broken["next_id"] = json!(0);
+        std::fs::write(&old, serde_json::to_vec(&broken).unwrap()).unwrap();
+        let refusal = check_loadable(&staging).unwrap_err();
+        assert_eq!(refusal.file, old);
         assert!(refusal.reason.contains("ledger_unavailable"), "{refusal}");
     }
 

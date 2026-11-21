@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { agentPane, type HideAnswer } from "../../web/e2e/agent-pane";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspaceWithLane } from "../../web/e2e/wire";
 import { fitWindow, focusPage, launchShell, NEEDS_FOCUS, screenshot, startStack, test, type Stack } from "./fixture";
 import { evaluateIn, sendInput } from "./page-input";
 
@@ -101,7 +101,7 @@ test("Comment on a page: the operator picks an element in the page and its agent
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
-  await enterWorkspace(shell, "fixture");
+  await enterWorkspaceWithLane(shell, "fixture");
 
   const pane = fixture.panes[0];
   const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, pane);
@@ -214,7 +214,7 @@ test(`A note written over a page takes the keyboard from the page and gives it b
   app = launched.app;
   const shell: Page = launched.page;
   await fitWindow(app, { width: 1400, height: 900 });
-  await enterWorkspace(shell, "fixture");
+  await enterWorkspaceWithLane(shell, "fixture");
   const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
   const url = `${origin}/focus`;
   const opened = await agent(["browser", "open", url, "--wait"]);

@@ -208,6 +208,27 @@ it("opens a step's worker only when the phone's list holds that row", async () =
   }
 });
 
+it("draws a step its Conductor set waiting as the desktop's card does, why and how long it still waits (B21)", async () => {
+  const now = Date.now();
+  const delayed = mission("m-wait", { nodes: [
+    node("a", "working", { wait: { why: "disk", until_unix_ms: now + 40 * 60_000, mission: true } }),
+    node("b", "planned", { wait: { why: "morning check", until_unix_ms: now + 90 * 60_000, mission: false } }),
+    node("c", "planned"),
+  ] });
+  const { container, click, unmount } = await connect([delayed]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-wait"]');
+    const line = (key: string) => container.querySelector(`[data-mission-node="${key}"] [data-node-wait]`);
+    expect(line("a")?.getAttribute("data-node-wait")).toBe("mission");
+    expect(line("a")?.textContent).toMatch(/^Waiting · disk· 40m$/);
+    expect(line("b")?.getAttribute("data-node-wait")).toBe("node");
+    expect(line("c")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
 it("draws the raises its Conductor has not settled as one safety net card with a line per held step, and folds the lines the Conductor skipped on its own", async () => {
   const now = Date.now();
   const held = ["a", "b", "c", "d", "e"].map((key) => ({ key, title: `Step ${key}`, reason: "worker_ended" as const, pr: null, since_unix_ms: now - 25 * 60_000 }));

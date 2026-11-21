@@ -233,6 +233,8 @@ pub enum Capability {
     /// Facts include whether the pane uses the alternate screen. Older
     /// watchers receive no extension and keep the original frame shape.
     AlternateScreen,
+    /// Facts include the program's explicit OSC 7501 lifecycle state.
+    ProgramStatus,
     /// The holder reads [`ClientMessage::Submit`]; a node sends it only to a
     /// holder whose welcome names this.
     Submit,
@@ -261,6 +263,7 @@ impl Capability {
             Self::LineEditing => "line_editing",
             Self::ForegroundUnread => "foreground_unread",
             Self::AlternateScreen => "alternate_screen",
+            Self::ProgramStatus => "program_status",
             Self::Submit => "submit",
             Self::Clipboard => "clipboard",
             Self::MouseOutside => "mouse_outside",
@@ -278,6 +281,7 @@ impl Capability {
             "line_editing" => Self::LineEditing,
             "foreground_unread" => Self::ForegroundUnread,
             "alternate_screen" => Self::AlternateScreen,
+            "program_status" => Self::ProgramStatus,
             "submit" => Self::Submit,
             "clipboard" => Self::Clipboard,
             "mouse_outside" => Self::MouseOutside,
@@ -382,6 +386,28 @@ pub struct Facts {
     pub foreground_unread: Option<bool>,
     /// Present exactly when the watch accepted [`Capability::AlternateScreen`].
     pub alternate_screen: Option<bool>,
+    /// Outer `None` means this extension was not negotiated; inner `None`
+    /// means the program has not reported a status or cleared it.
+    pub program_status: Option<Option<Box<ProgramStatus>>>,
+}
+
+/// A program's own lifecycle report, independent of screen activity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProgramStatus {
+    pub app: String,
+    pub state: ProgramState,
+}
+
+/// States fixed by the `program_status` capability (wire codes 1 through 5;
+/// 0 clears the report). Adding a state requires a new capability so a peer
+/// never receives a code outside the vocabulary it negotiated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+    Error,
 }
 
 /// The facts extensions a watch agreed: each is in every facts frame of that
@@ -391,6 +417,7 @@ struct Extensions {
     line_editing: bool,
     foreground_unread: bool,
     alternate_screen: bool,
+    program_status: bool,
 }
 
 impl Extensions {
@@ -399,6 +426,7 @@ impl Extensions {
             line_editing: agreed.contains(&Capability::LineEditing),
             foreground_unread: agreed.contains(&Capability::ForegroundUnread),
             alternate_screen: agreed.contains(&Capability::AlternateScreen),
+            program_status: agreed.contains(&Capability::ProgramStatus),
         }
     }
 }
@@ -2364,6 +2392,21 @@ impl Facts {
         if let Some(alternate) = self.alternate_screen {
             payload.push(u8::from(alternate));
         }
+        if let Some(status) = &self.program_status {
+            match status {
+                None => payload.push(0),
+                Some(status) => {
+                    payload.push(match status.state {
+                        ProgramState::Idle => 1,
+                        ProgramState::Working => 2,
+                        ProgramState::Blocked => 3,
+                        ProgramState::Done => 4,
+                        ProgramState::Error => 5,
+                    });
+                    put_text(payload, &bounded(&status.app, MAX_PROCESS_NAME));
+                }
+            }
+        }
         // No extension is the original facts frame. Older watchers are
         // handed a program with no package by the negotiated writer.
         if let Some(package) = self.foreground.as_ref().and_then(|p| p.package.as_deref()) {
@@ -2441,6 +2484,28 @@ impl Facts {
         } else {
             None
         };
+        let program_status = if agreed.program_status {
+            Some(match payload.u8()? {
+                0 => None,
+                code @ 1..=5 => Some(Box::new(ProgramStatus {
+                    state: match code {
+                        1 => ProgramState::Idle,
+                        2 => ProgramState::Working,
+                        3 => ProgramState::Blocked,
+                        4 => ProgramState::Done,
+                        _ => ProgramState::Error,
+                    },
+                    app: payload.text(MAX_PROCESS_NAME)?,
+                })),
+                other => {
+                    return Err(FrameError::Malformed(format!(
+                        "an unknown program status {other}"
+                    )));
+                }
+            })
+        } else {
+            None
+        };
         if !payload.0.is_empty() {
             let program = foreground.as_mut().ok_or_else(|| {
                 FrameError::Malformed("a package without a foreground program".to_owned())
@@ -2458,6 +2523,7 @@ impl Facts {
             line_editing,
             foreground_unread,
             alternate_screen,
+            program_status,
         })
     }
 }
@@ -2556,6 +2622,55 @@ mod tests {
         };
         write_holder(&mut both, &HolderMessage::Facts(forged)).unwrap();
         assert!(read_watch_holder(&mut &both[..], &agreed).is_err());
+    }
+
+    #[test]
+    fn program_status_is_optional_and_precedes_the_package_extension() {
+        let agreed = [
+            Capability::Facts,
+            Capability::ProgramStatus,
+            Capability::ProgramPackage,
+        ];
+        for state in [
+            None,
+            Some(ProgramState::Idle),
+            Some(ProgramState::Working),
+            Some(ProgramState::Blocked),
+            Some(ProgramState::Done),
+            Some(ProgramState::Error),
+        ] {
+            let facts = Facts {
+                program_status: Some(state.map(|state| {
+                    Box::new(ProgramStatus {
+                        app: "codex".to_owned(),
+                        state,
+                    })
+                })),
+                foreground: Some(Program {
+                    pid: 7,
+                    name: "codex".to_owned(),
+                    package: Some("@openai/codex".to_owned()),
+                    argv: vec![],
+                }),
+                ..Facts::default()
+            };
+            let mut bytes = Vec::new();
+            write_holder(&mut bytes, &HolderMessage::Facts(facts.clone())).unwrap();
+            assert_eq!(
+                read_watch_holder(&mut &bytes[..], &agreed).unwrap(),
+                HolderMessage::Facts(facts)
+            );
+        }
+        let mut bytes = Vec::new();
+        write_holder(&mut bytes, &HolderMessage::Facts(Facts::default())).unwrap();
+        assert!(
+            read_watch_holder(&mut &bytes[..], &agreed).is_err(),
+            "a negotiated field cannot silently disappear"
+        );
+        assert_eq!(
+            read_watch_holder(&mut &bytes[..], &[Capability::Facts]).unwrap(),
+            HolderMessage::Facts(Facts::default())
+        );
     }
 
     #[test]
@@ -2738,6 +2853,7 @@ mod tests {
                 line_editing: None,
                 foreground_unread: None,
                 alternate_screen: None,
+                program_status: None,
             }),
             HolderMessage::Facts(Facts {
                 screen: ScreenRead::Unknown {

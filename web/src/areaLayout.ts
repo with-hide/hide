@@ -327,6 +327,8 @@ export type TabStripSizes = {
   preferred: number;
   /** `--size-tab-title-min`: the narrowest a full titled tab is. */
   titleMin: number;
+  /** `--size-tab-selected-max`: the widest the selected tab grows for its name, a little past `preferred`. */
+  selectedMax: number;
   /** `--size-tab-icon-identity`: a tab's marks alone. */
   icon: number;
   /** `--size-control-sm`: the close control. */
@@ -348,17 +350,34 @@ export type TabStripSizes = {
  *    and so one control's worth of title, then marks with its close control,
  *    and the strip scrolls only once even those overflow.
  *
- * The same room and count always give the same answer, whichever way the
- * room changed. With no tab of this strip selected (a delegated canvas shows
- * instead) every tab follows the others' rule on an equal share.
+ * With `selectedNeed`, the width the selected tab's whole name takes, the
+ * selected tab grows past its stage's width to that need, up to
+ * `selectedMax` and to what the others' marks leave, a longer name cut short, and the others split the rest by the same stages: the
+ * tab in front reads whole and only the others shrink (PRD lane-desk-pair-view
+ * D-30); each tab's tooltip still names it whole.
+ *
+ * The same room, count and need always give the same answer, whichever way
+ * the room changed. With no tab of this strip selected (a delegated canvas
+ * shows instead) every tab follows the others' rule on an equal share.
  */
-export function tabStripFit(room: number, count: number, hasSelected: boolean, sizes: TabStripSizes): TabStripFit {
+export function tabStripFit(room: number, count: number, hasSelected: boolean, sizes: TabStripSizes, selectedNeed?: number): TabStripFit {
+  const base = stagedFit(room, count, hasSelected, sizes);
+  const rest = count - 1;
+  if (!hasSelected || selectedNeed === undefined || rest < 1 || base.selected.width >= selectedNeed) return base;
+  const width = Math.max(base.selected.width, Math.min(selectedNeed, sizes.selectedMax, room - rest * sizes.icon));
+  if (width < sizes.titleMin) return base;
+  return { selected: { width, fit: "titled" }, others: othersFit((room - width) / rest, sizes) };
+}
+
+function othersFit(width: number, { preferred, titleMin, icon, control }: TabStripSizes): TabSlotFit {
+  if (width >= titleMin) return { width: Math.min(preferred, width), fit: "titled" };
+  if (width >= icon + control) return { width, fit: "compact" };
+  return { width: Math.max(icon, width), fit: "marks" };
+}
+
+function stagedFit(room: number, count: number, hasSelected: boolean, sizes: TabStripSizes): TabStripFit {
   const { preferred, titleMin, icon, control } = sizes;
-  const other = (width: number): TabSlotFit => {
-    if (width >= titleMin) return { width: Math.min(preferred, width), fit: "titled" };
-    if (width >= icon + control) return { width, fit: "compact" };
-    return { width: Math.max(icon, width), fit: "marks" };
-  };
+  const other = (width: number) => othersFit(width, sizes);
   const share = count > 0 ? room / count : preferred;
   if (share >= titleMin || !hasSelected) {
     const slot = other(share);

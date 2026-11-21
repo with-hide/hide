@@ -107,22 +107,31 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
     await shows(page, "memory");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
 
-    // The document is kept, and its rail button brings it beside Memory.
+    // The document is kept, and its rail button stands the desk with Memory
+    // floating over its right edge (D-50).
     await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveAttribute("data-lane-badge", "1");
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await shows(page, "memory");
-
-    // The documents' own ✕ closes their column alone, as a tool's ✕ does.
     await screenshot(page, "lane-documents-close");
-    await page.locator("[data-lane-documents-close]").click();
+
+    // The desk's button folds the desk alone, as a tool's ✕ does, and brings it back.
+    await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await shows(page, "memory");
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
 
-    // Escape closes the unpinned lane as ⌘E does, so Memory again opens alone.
-    await page.locator("[data-editor-body] .cm-content").click();
+    // Escape first closes the floating Memory, the desk standing, then the
+    // lane as ⌘E does, so Memory again opens alone; from the desk's tab,
+    // since Escape in the editor is the editor's (PRD lane-desk-pair-view
+    // B30, D-50).
+    await page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]').focus();
+    await page.keyboard.press("Escape");
+    await shows(page, "none");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]').focus();
     await page.keyboard.press("Escape");
     await closed(page);
     await page.locator('[data-lane-tool="memory"]').click();

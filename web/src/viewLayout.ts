@@ -8,7 +8,7 @@
 
 import { useExternalStore } from "./externalFiles";
 import type { TFunction } from "i18next";
-import type { ViewDisplaySnapshot, ViewLayoutSnapshot, ViewNode } from "./snapshot";
+import { sameDetailItem, type DetailItem, type ViewDisplaySnapshot, type ViewLayoutSnapshot, type ViewNode } from "./snapshot";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { translate } from "./i18n/client";
 import type { MenuEntry } from "./components/entry-menu";
@@ -167,7 +167,7 @@ function displayCommands(
     if (id === "reveal_external") {
       // A page is not a file of the checkout, and an outside file is in no
       // checkout's tree (PRD outside-path-in-hide B12).
-      const [entry] = display.kind === "browser" || display.kind === "external" ? [] : revealExternalEntry(external.host, external.device, external.node, translate, revealBlocked(display));
+      const [entry] = display.kind === "browser" || display.kind === "external" || display.kind === "card" ? [] : revealExternalEntry(external.host, external.device, external.node, translate, revealBlocked(display));
       return entry ? { ...entry, hidden: false } : { id, label, unavailable: null, hidden: true };
     }
     const edge = menuEdge(id);
@@ -184,8 +184,11 @@ function displayCommands(
       hidden = unavailable !== null;
     } else if (id === "select_in_tree") {
       unavailable = revealBlocked(display);
-      // A page is not a file of the checkout.
-      hidden = display.kind === "browser" || display.kind === "external";
+      // A page or a card is not a file of the checkout.
+      hidden = display.kind === "browser" || display.kind === "external" || display.kind === "card";
+    } else if (id === "copy_path" && display.kind === "card") {
+      // A card has no path to copy.
+      hidden = true;
     } else if (id === "copy_path" && display.kind === "external") {
       // Only the window holding the grant knows the path.
       hidden = !display.external || !useExternalStore.getState().described[display.external.grant];
@@ -244,6 +247,8 @@ export function displayIdentity(display: ViewDisplaySnapshot, t: TFunction<"tran
     const held = display.external ? useExternalStore.getState().described[display.external.grant] : null;
     return held ? t("documents.external.identity", { path: held.path }) : `${display.label} · ${t("documents.external.elsewhereTab")}`;
   }
+  // A card tab's label is its name (`cardTitle`), which the tab fills in.
+  if (display.kind === "card") return display.label;
   if (display.kind === "browser" && !display.url) return t("panes.area.newTab");
   if (display.kind === "browser") return t("documents.view.identityPage", { target: `${display.title ? `${display.title} · ` : ""}${display.url ?? ""}` });
   const kind = display.kind === "diff" ? (display.committed ? t("documents.view.kindBranchDiff") : t("documents.view.kindWorkingDiff")) : t("documents.view.kindFile");
@@ -285,15 +290,19 @@ export function viewAreaStepUnavailable(layout: ViewLayoutSnapshot, drawn: { geo
 /**
  * Where the keyboard goes once the core shows it (B20): a display a menu,
  * the palette or a drop moved or split, with where it stood when asked; an
- * area a focus command chose; or a file or diff the operator opened, which
+ * area a focus command chose, on its front tab when `tab` (the rail's desk
+ * button); or a file or diff the operator opened, which
  * has no display id until the core places it; each in the Workspace it was
- * asked in.
+ * asked in. A card the operator opened names no Workspace: the core puts it
+ * on its owner's desk, which may be another tab or checkout it brings to
+ * the front in the same event, so the card itself is what is waited for.
  */
 export type ViewFocusRequest =
   | { workspace: string; displayId: string; from: { areaId: string; index: number } | null }
-  | { workspace: string; areaId: string; revision?: number }
+  | { workspace: string; areaId: string; revision?: number; tab?: boolean }
   | { workspace: string; opened: { path: string; kind: "file" | "diff"; committed: boolean | null } }
-  | { workspace: string; browserOpen: string };
+  | { workspace: string; browserOpen: string }
+  | { card: DetailItem };
 
 /** The core's answer to a `browser_open` that named itself (`status.browser_opens`). */
 export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: string | null };
@@ -303,11 +312,16 @@ export type BrowserOpenReceipt = { request_id: string; ok: boolean; display_id: 
  * can follow: the named area active, the display active in the active area
  * and no longer where it stood when asked, or the opened file or diff (of
  * its own History group) the active area's view once it is past opening,
- * or the page a named browser open answered with, active in the active area.
+ * or the page a named browser open answered with, active in the active area,
+ * or the card opened, in front of the active area of the desk drawn.
  * A move or split of the active view therefore resolves once it has landed,
  * never on the frame it was asked from, and a refused one never resolves.
  */
 export function focusRequestArrived(request: ViewFocusRequest, workspace: string, layout: ViewLayoutSnapshot, opens: readonly BrowserOpenReceipt[] = []): boolean {
+  if ("card" in request) {
+    const shown = activeDisplay(layout)?.display;
+    return shown?.kind === "card" && sameDetailItem(shown.card, request.card);
+  }
   if (request.workspace !== workspace) return false;
   if ("areaId" in request) return request.revision === undefined ? layout.active_area === request.areaId : !!findArea(layout.root, request.areaId);
   if ("browserOpen" in request) {

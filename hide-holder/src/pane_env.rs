@@ -5,11 +5,12 @@
 // the repository root.
 // Changed by Hide: the terminal says it is Hide's (`TERM_PROGRAM=hide`, no
 // version) and that it shows hyperlinks (`FORCE_HYPERLINK=1`), every
-// `HERDR_*` variable is removed rather than set, and fish's reflow variable
-// is not set.
+// `HERDR_*` variable is removed rather than set, fish's reflow variable
+// is not set, and a pane whose environment names no locale reads UTF-8.
 
 //! The environment a pane's program starts with: the terminal the holder
-//! emulates, and nothing that names another terminal, another pane or the
+//! emulates, a UTF-8 character set when the environment names no locale,
+//! and nothing that names another terminal, another pane or the
 //! agent that started the daemon (PRD engine-bundle-3-core-owns D-9). The
 //! pane's own identity, `HIDE_PANE_ID`, is the starting node's to add, since
 //! the node names the pane by the core's id.
@@ -58,12 +59,22 @@ const PARENT_AGENT: [&str; 6] = [
 
 /// Sets `command`'s terminal and removes what names another terminal, pane
 /// or agent, whatever the environment it was started from held (an app
-/// opened from the Dock has no `TERM`).
+/// opened from the Dock has no `TERM`). An environment that names no locale
+/// (a Dock launch, or an account whose shell sets none) gets the system's
+/// UTF-8 one, as a terminal gives it (`hide_platform::host::terminal_locale_from`),
+/// so the shell reads a Korean line, typed by the operator or by Hide's start
+/// of an agent, as characters; a locale the account set stays as it is.
 pub fn apply(command: &mut CommandBuilder) {
     command.env("TERM", TERM);
     command.env("COLORTERM", COLORTERM);
     command.env("TERM_PROGRAM", TERM_PROGRAM);
     command.env("FORCE_HYPERLINK", FORCE_HYPERLINK);
+    let locale = hide_platform::host::terminal_locale_from(&|name| {
+        command.get_env(name).map(std::ffi::OsStr::to_owned)
+    });
+    if let Some((name, value)) = locale {
+        command.env(name, value);
+    }
     let foreign: Vec<String> = command
         .iter_full_env_as_str()
         .map(|(key, _)| key)
@@ -113,5 +124,36 @@ mod tests {
         }
         assert_eq!(env.get("HIDE_PANE_ID"), Some(&"w1:p2"));
         assert_eq!(env.get("PATH"), Some(&"/usr/bin"));
+    }
+
+    /// with-hide/hide#2706: a pane started from an environment with no
+    /// locale (a Dock launch) reads UTF-8, as the system names it; a locale
+    /// the account set is the pane's, with nothing added.
+    #[test]
+    fn a_pane_with_no_locale_reads_utf8_and_one_the_account_set_stays() {
+        let mut bare = CommandBuilder::new("sh");
+        bare.env_clear();
+        apply(&mut bare);
+        let given = hide_platform::host::terminal_locale_from(&|_| None);
+        for name in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            let expected = given
+                .filter(|(given, _)| *given == name)
+                .map(|(_, value)| std::ffi::OsStr::new(value));
+            assert_eq!(bare.get_env(name), expected, "{name}");
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(given, Some(("LC_CTYPE", "UTF-8")));
+        }
+
+        let mut set = CommandBuilder::new("sh");
+        set.env_clear();
+        set.env("LANG", "ko_KR.eucKR");
+        apply(&mut set);
+        assert_eq!(
+            set.get_env("LANG"),
+            Some(std::ffi::OsStr::new("ko_KR.eucKR"))
+        );
+        assert_eq!(set.get_env("LC_CTYPE"), None);
+        assert_eq!(set.get_env("LC_ALL"), None);
     }
 }

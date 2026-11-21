@@ -1,11 +1,12 @@
 //! Pane-scoped queries and actions against the live engine projection.
 
-use super::{AreaIntent, Runtime};
+use super::Runtime;
 use crate::view_layout::DisplayKind;
 use crate::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, ActionSource, BrowserRouteSource,
     Caller, Context, Query, QueryResult, Refusal, View,
 };
+use crate::workspace_views::Place;
 
 const ACTION_RESULTS_KEPT: usize = 128;
 const ACTION_RETRY_WINDOW_MS: u64 = 10 * 60 * 1000;
@@ -27,6 +28,10 @@ pub(super) struct RecordedAction {
     caller_identity: (Option<String>, Option<String>),
     result: Option<Result<ActionResult, Refusal>>,
 }
+
+/// What a file read of this machine's checkout answers when its folder is
+/// no longer where Hide opened it.
+const CHECKOUT_FOLDER_GONE: &str = "The checkout's folder could not be found where Hide opened it (moved, renamed or deleted): open the folder from its new place in Hide, then retry";
 
 impl Runtime {
     fn view_caller_identity(
@@ -57,7 +62,8 @@ impl Runtime {
             _ => return Ok(()),
         };
         let in_scope = self
-            .view_layout_of(key)
+            .view_place(key, view_id)
+            .and_then(|place| self.view_layout_at(key, &place))
             .and_then(|layout| layout.area(expected_area))
             .is_some_and(|area| {
                 area.displays
@@ -79,11 +85,10 @@ impl Runtime {
         area_id: Option<&str>,
     ) -> Result<(), Refusal> {
         if let Some(area_id) = area_id {
-            let empty = crate::view_layout::Layout::default();
-            let known = self
-                .view_layout_of(key)
-                .map_or(empty.area(area_id), |layout| layout.area(area_id))
-                .is_some();
+            let known = self.area_place(key, area_id).is_some()
+                || crate::view_layout::Layout::default()
+                    .area(area_id)
+                    .is_some();
             if !known {
                 return Err(layout_refusal(
                     crate::view_layout::LayoutError::UnknownArea(area_id.to_owned()),
@@ -316,13 +321,17 @@ impl Runtime {
                     reason: "invalid_address",
                     next_action: "Use a local file URL with an absolute path",
                 })?;
+                let local = context.device_id == self.node.as_str();
                 let (root, channel) = self
                     .document_source(&context.workspace_id, &context.checkout_id)
                     .map_err(|_| Refusal {
                         reason: "host_unavailable",
-                        next_action: "Reconnect the device and retry",
+                        next_action: if local {
+                            CHECKOUT_FOLDER_GONE
+                        } else {
+                            "Reconnect the device and retry"
+                        },
                     })?;
-                let local = context.device_id == self.node.as_str();
                 return Ok(ActionPreparation::Read(ActionSource::browser(
                     root, channel, path, local,
                 )));
@@ -355,13 +364,19 @@ impl Runtime {
                     && tab.kind == crate::model::EditorTabKind::File
                     && tab.unavailable_reason.is_none()
             });
+        let local = context.device_id == self.node.as_str();
+        // On this machine the read can only fail on the checkout's folder,
+        // gone from where Hide opened it, as after a rename (#2624).
         let (root, channel) = self
             .document_source(&context.workspace_id, &context.checkout_id)
             .map_err(|_| Refusal {
                 reason: "host_unavailable",
-                next_action: "Reconnect the device and check file access consent, then retry",
+                next_action: if local {
+                    CHECKOUT_FOLDER_GONE
+                } else {
+                    "Reconnect the device and check file access consent, then retry"
+                },
             })?;
-        let local = context.device_id == self.node.as_str();
         let source = if file {
             ActionSource::file(root, channel, path.clone(), already_open, local)
         } else {
@@ -400,31 +415,49 @@ impl Runtime {
                 self.check_browser_area(&key, area_id.as_deref())?;
             }
             self.reconcile_view_displays();
+            // The agent of the pane the operator watches opens on that tab's
+            // tray; any other caller's View waits in its pane's list (PRD
+            // lane-desk-pair-view B1, B2). A browser action bound to a page's
+            // own area stays in that page's tree.
+            let place = match &action {
+                Action::OpenBrowser {
+                    area_id: Some(area),
+                    ..
+                } => self
+                    .area_place(&key, area)
+                    .unwrap_or_else(|| self.front_place(&key)),
+                _ => self.control_place(&key, pane_id),
+            };
             if self.open_adds_view(
                 &key,
+                &place,
                 &action,
                 material.as_ref().map(|material| material.path.as_str()),
             ) {
-                self.make_view_room(&key);
+                self.make_view_room(&key, &place);
             }
-            // On the Workspace in front only the agent in the pane the
-            // operator is in changes what they see; another pane, of the same
-            // tab or not, leaves the selection, the lane and every tab's
-            // bookmark as they were.
-            let kept = self
-                .caller_stays_behind(&key, pane_id)
-                .then(|| self.keep_front(&key));
-            // An open the operator is looking at calls the lane as a click
-            // does (PRD right-lane B17).
-            let calls_lane = kept.is_none()
-                && self.front_workspace_key().as_ref() == Some(&key)
-                && lane_call(&action);
-            let mut applied =
-                self.apply_workspace_action(&key, &context, pane_id, request_id, &action, material);
+            // The View comes in front only on a tray the operator sees now:
+            // the lane open, or the tab in pair view, where the paired pane's
+            // own View stands the desk beside it even while it is drawn
+            // alone (D-53). A closed lane stays closed, and the tray's count
+            // and the To look at mark say a tab came (B2).
+            let in_view = match &place {
+                Place::Tray(tab) => {
+                    self.watched_caller(&key, pane_id)
+                        && (self.tray_in_view(&key, tab)
+                            || self.pair_left_of(&key, tab).as_deref() == Some(pane_id))
+                }
+                Place::Shelf => false,
+            };
+            let kept = (!in_view || !lane_call(&action)).then(|| self.keep_front(&key));
+            let calls_lane = in_view && lane_call(&action);
+            let mut applied = self.apply_workspace_action(
+                &key, &place, &context, pane_id, request_id, &action, material,
+            );
             if let Ok(done) = &mut applied
                 && calls_lane
             {
-                self.apply_area_intent_to(&key, AreaIntent::Documents);
+                self.open_tray_for(&key, &place);
                 // A view already in front still calls the lane, which the
                 // page sees only if the change is announced.
                 done.changed = true;
@@ -471,9 +504,11 @@ impl Runtime {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_workspace_action(
         &mut self,
         key: &(String, String),
+        place: &Place,
         context: &Context,
         pane_id: &str,
         request_id: &str,
@@ -499,41 +534,47 @@ impl Runtime {
                 });
             }
             let load = self.next_browser_load();
-            let view_id = {
-                self.change_view_layout(key, |layout, stamp| {
-                    let existing = if *new_target {
-                        None
-                    } else {
-                        layout
-                            .areas()
-                            .into_iter()
-                            .filter(|area| area_id.as_ref().is_none_or(|id| area.id == *id))
-                            .flat_map(|area| area.displays.iter())
-                            .find(|display| {
-                                display.kind == DisplayKind::Browser
-                                    && display.url.as_deref() == Some(url)
-                            })
-                            .map(|display| display.id.clone())
-                    };
-                    if let Some(id) = existing {
-                        layout.focus(&id, stamp)?;
-                        if let Some(display) = layout.display_mut(&id) {
+            // The page the checkout holds already: a tray takes it (D-20),
+            // no tray leaves it where it is; bound to an area, only a page of
+            // that area counts.
+            let existing = (!*new_target)
+                .then(|| {
+                    self.claim_existing_view(key, place, |display| {
+                        display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
+                    })
+                })
+                .flatten()
+                .filter(|(id, at)| {
+                    area_id.as_ref().is_none_or(|area| {
+                        self.view_layout_at(key, at)
+                            .and_then(|layout| layout.area_of(id))
+                            .is_some_and(|held| held.id == *area)
+                    })
+                });
+            let at = existing
+                .as_ref()
+                .map_or_else(|| place.clone(), |(_, at)| at.clone());
+            let view_id = self
+                .change_view_layout(key, &at, |layout, stamp| {
+                    if let Some((id, _)) = &existing {
+                        layout.focus(id, stamp)?;
+                        if let Some(display) = layout.display_mut(id) {
                             display.load = load;
                         }
-                        return Ok((id, true));
+                        return Ok((id.clone(), true));
                     }
-                    let area_id = area_id.as_ref().unwrap_or(&layout.active_area().id).clone();
+                    let area_id = area_id
+                        .as_ref()
+                        .filter(|area| layout.area(area).is_some())
+                        .unwrap_or(&layout.active_area().id)
+                        .clone();
                     let display = layout.new_browser_display(url, load);
                     let id = display.id.clone();
                     layout.insert(&area_id, display, stamp)?;
                     Ok((id, true))
                 })
-                .map_err(layout_refusal)?
-            };
-            let area_id = self
-                .view_layout_of(key)
-                .and_then(|layout| layout.area_of(&view_id))
-                .map(|area| area.id.clone());
+                .map_err(layout_refusal)?;
+            let area_id = self.view_area(key, &view_id);
             return Ok(ActionResult {
                 context: context.clone(),
                 request_id: request_id.to_owned(),
@@ -552,7 +593,9 @@ impl Runtime {
                     next_action: "Open this Workspace in the Hide desktop app and retry",
                 });
             }
-            let (view_id, load) = self.put_external(key, file).map_err(layout_refusal)?;
+            let (view_id, load) = self
+                .put_external(key, place, file)
+                .map_err(layout_refusal)?;
             crate::diagnostic!(serde_json::json!({
                 "component": "workspace_control",
                 "kind": "external.open",
@@ -560,10 +603,7 @@ impl Runtime {
                 "file_kind": kind,
                 "request_id": request_id,
             }));
-            let area_id = self
-                .view_layout_of(key)
-                .and_then(|layout| layout.area_of(&view_id))
-                .map(|area| area.id.clone());
+            let area_id = self.view_area(key, &view_id);
             return Ok(ActionResult {
                 context: context.clone(),
                 request_id: request_id.to_owned(),
@@ -584,6 +624,7 @@ impl Runtime {
             let is_file = matches!(action, Action::OpenFile { .. });
             if !self.admit_view_open(
                 key,
+                place,
                 path,
                 if is_file {
                     DisplayKind::File
@@ -653,35 +694,32 @@ impl Runtime {
                 }
                 tab_id
             };
-            self.place_document(key, &tab_id, false, false, None, None);
+            self.place_document(key, place, &tab_id, false, false, None, None);
+            let kind = if is_file {
+                DisplayKind::File
+            } else {
+                DisplayKind::Diff
+            };
+            let committed = if is_file { None } else { Some(false) };
+            // The View that shows it: the one at `place`, else the one a tray
+            // kept when no tray took it (D-20).
             let view_id = self
-                .view_layout_of(key)
-                .and_then(|layout| layout.active_area().active.clone())
+                .view_layout_at(key, place)
+                .and_then(|layout| {
+                    layout
+                        .displays()
+                        .find(|display| display.shows(path, kind, committed))
+                })
+                .or_else(|| {
+                    self.view_displays(key)
+                        .find(|display| display.shows(path, kind, committed))
+                })
+                .map(|display| display.id.clone())
                 .ok_or(Refusal {
                     reason: "view_placement_failed",
                     next_action: "Run hide view list to inspect the Workspace and retry",
                 })?;
-            if !self.view_layout_of(key).is_some_and(|layout| {
-                layout.display(&view_id).is_some_and(|display| {
-                    display.shows(
-                        path,
-                        if is_file {
-                            DisplayKind::File
-                        } else {
-                            DisplayKind::Diff
-                        },
-                        if is_file { None } else { Some(false) },
-                    )
-                })
-            }) {
-                return Err(Refusal {
-                    reason: "view_placement_failed",
-                    next_action: "Run hide view list to inspect the Workspace and retry",
-                });
-            }
-            let area_id = self
-                .view_layout_of(key)
-                .map(|layout| layout.active_area().id.clone());
+            let area_id = self.view_area(key, &view_id);
             return Ok(ActionResult {
                 context: context.clone(),
                 request_id: request_id.to_owned(),
@@ -699,27 +737,72 @@ impl Runtime {
             Action::OpenBrowser { .. } | Action::OpenExternal { .. } => {
                 unreachable!("handled above")
             }
-            Action::Select { view_id, .. } => {
-                let selected = self
-                    .change_view_layout(key, |layout, stamp| {
-                        layout
-                            .focus(view_id, stamp)
-                            .map(|changed| (changed, changed))
-                    })
-                    .map_err(layout_refusal)?;
-                let area = self
-                    .view_layout_of(key)
-                    .and_then(|layout| layout.area_of(view_id))
-                    .map(|area| area.id.clone());
-                (view_id.clone(), selected, area)
+            Action::Select {
+                view_id,
+                expected_browser_area,
+            } => {
+                let Some(at) = self.view_place(key, view_id) else {
+                    return Err(layout_refusal(
+                        crate::view_layout::LayoutError::UnknownDisplay(view_id.clone()),
+                    ));
+                };
+                // A select follows the open rule (D-36): the watched pane's
+                // agent brings the View onto its tab's tray; anyone else's
+                // marks it To look at where it is. A page's own action
+                // selects it in its own tree.
+                let target = if expected_browser_area.is_some() {
+                    at.clone()
+                } else {
+                    place.clone()
+                };
+                let moved = match &target {
+                    Place::Tray(_) if target != at => {
+                        if !self.bring_view_to(key, view_id, &target) {
+                            return Err(layout_refusal(
+                                crate::view_layout::LayoutError::DisplayLimit,
+                            ));
+                        }
+                        true
+                    }
+                    _ => false,
+                };
+                let selected = match &target {
+                    Place::Shelf => false,
+                    Place::Tray(_) => self
+                        .change_view_layout(key, &target, |layout, stamp| {
+                            layout
+                                .focus(view_id, stamp)
+                                .map(|changed| (changed, changed))
+                        })
+                        .map_err(layout_refusal)?,
+                };
+                // Selected where the operator does not see it (on no desk, or
+                // on a desk whose lane is closed), an agent's select is To
+                // look at (B2).
+                let unseen = match place {
+                    Place::Shelf => true,
+                    Place::Tray(tab) => !self.tray_in_view(key, tab),
+                };
+                if unseen
+                    && expected_browser_area.is_none()
+                    && let Caller::Pane(_) = Caller::parse(pane_id)
+                {
+                    self.mark_view_unseen(key, view_id);
+                }
+                (
+                    view_id.clone(),
+                    moved || selected,
+                    self.view_area(key, view_id),
+                )
             }
             Action::Split {
                 view_id,
                 area_id,
                 edge,
             } => {
+                let at = self.placed_view(key, view_id)?;
                 let area = self
-                    .change_view_layout(key, |layout, stamp| {
+                    .change_view_layout(key, &at, |layout, stamp| {
                         layout
                             .split(view_id, area_id, *edge, stamp)
                             .map(|area| (area, true))
@@ -732,8 +815,9 @@ impl Runtime {
                 area_id,
                 index,
             } => {
+                let at = self.placed_view(key, view_id)?;
                 let changed = self
-                    .change_view_layout(key, |layout, stamp| {
+                    .change_view_layout(key, &at, |layout, stamp| {
                         layout
                             .move_display(view_id, area_id, *index, stamp)
                             .map(|changed| (changed, changed))
@@ -742,11 +826,7 @@ impl Runtime {
                 (view_id.clone(), changed, Some(area_id.clone()))
             }
             Action::Read { view_id } => {
-                if self
-                    .view_layout_of(key)
-                    .and_then(|layout| layout.display(view_id))
-                    .is_none()
-                {
+                if self.view_display(key, view_id).is_none() {
                     return Err(Refusal {
                         reason: "view_unknown",
                         next_action: "Run hide view list to choose a current View and retry",
@@ -756,11 +836,7 @@ impl Runtime {
                 (view_id.clone(), false, None)
             }
             Action::Close { view_id, .. } => {
-                let Some(display) = self
-                    .view_layout_of(key)
-                    .and_then(|layout| layout.display(view_id))
-                    .cloned()
-                else {
+                let Some(display) = self.view_display(key, view_id).cloned() else {
                     return Ok(ActionResult {
                         context: context.clone(),
                         request_id: request_id.to_owned(),
@@ -788,16 +864,14 @@ impl Runtime {
                         next_action: "Save or discard the draft in Hide before closing its last View",
                     });
                 }
-                let area = self
-                    .view_layout_of(key)
-                    .and_then(|layout| layout.area_of(view_id))
-                    .map(|area| area.id.clone());
+                let area = self.view_area(key, view_id);
+                let at = self.view_place(key, view_id);
                 if !shared {
                     if let Some(tab) = display.tab_id.as_deref() {
                         self.close_file_tab_now(tab);
                         self.reconcile_view_displays();
                     } else {
-                        self.change_view_layout(key, |layout, _| {
+                        self.change_view(key, view_id, |layout, _| {
                             Ok(((), layout.remove(view_id).is_some()))
                         })
                         .map_err(layout_refusal)?;
@@ -810,10 +884,16 @@ impl Runtime {
                         }
                     }
                 } else {
-                    self.change_view_layout(key, |layout, _| {
+                    self.change_view(key, view_id, |layout, _| {
                         Ok(((), layout.remove(view_id).is_some()))
                     })
                     .map_err(layout_refusal)?;
+                }
+                // An agent's close leaves the desk shown as it was (PRD
+                // right-lane B12, lane-desk-pair-view B33); a pair view stays
+                // on and its desk settles (D-64).
+                if matches!(at, Some(Place::Tray(_))) {
+                    self.keep_pair_front_shown();
                 }
                 (view_id.clone(), true, area)
             }
@@ -825,6 +905,53 @@ impl Runtime {
             view_id,
             area_id,
             load: None,
+        })
+    }
+
+    /// The tray `view_id` is on, which `split` and `move` act in; a View on
+    /// no tray is the operator's to put there first (PRD
+    /// lane-desk-pair-view B33, D-36).
+    fn placed_view(&self, key: &(String, String), view_id: &str) -> Result<Place, Refusal> {
+        match self.view_place(key, view_id) {
+            Some(Place::Tray(tab)) => Ok(Place::Tray(tab)),
+            Some(Place::Shelf) => Err(VIEW_NOT_IN_LANE),
+            None => Err(layout_refusal(
+                crate::view_layout::LayoutError::UnknownDisplay(view_id.to_owned()),
+            )),
+        }
+    }
+
+    /// The area that holds `view_id`, on whichever tree it is.
+    fn view_area(&self, key: &(String, String), view_id: &str) -> Option<String> {
+        let place = self.view_place(key, view_id)?;
+        self.view_layout_at(key, &place)?
+            .area_of(view_id)
+            .map(|area| area.id.clone())
+    }
+
+    /// The desk that holds the area `area_id`; the shelf's area is no
+    /// command's to name.
+    fn area_place(&self, key: &(String, String), area_id: &str) -> Option<Place> {
+        self.workspace_views
+            .as_ref()?
+            .views
+            .get(&key.0, &key.1)?
+            .layouts()
+            .find(|(place, layout)| {
+                matches!(place, Place::Tray(_)) && layout.area(area_id).is_some()
+            })
+            .map(|(place, _)| place)
+    }
+
+    /// Whether the operator sees `tab`'s tray when a tab lands on it: as
+    /// focus mode draws it beside the tab's pane, else while the lane is
+    /// open (PRD lane-desk-pair-view B2, D-53).
+    pub(super) fn tray_in_view(&self, key: &(String, String), tab: &str) -> bool {
+        self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
+            self.workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+                .is_some_and(|view| view.open)
         })
     }
 
@@ -944,17 +1071,32 @@ impl Runtime {
         // An untouched Workspace has no stored row yet. Its View tree is the
         // default one-empty-area layout, even when it is not the front one.
         let empty = crate::view_layout::Layout::default();
-        let layout = self.view_layout_of(&key).unwrap_or(&empty);
+        let trees: Vec<(Place, &crate::view_layout::Layout)> = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .map(|view| view.layouts().collect())
+            .unwrap_or_else(|| vec![(self.front_place(&key), &empty)]);
+        let front = self.front_place(&key);
         let caller_session = match Caller::parse(pane_id) {
             Caller::Pane(pane) => self.session_scope_of_pane(pane),
             Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => None,
         };
+        // Every View of the checkout, on a tray or not (D-19); the area in
+        // use is the tray in front's.
         let views = (query == Query::ViewList).then(|| {
-            layout
-                .areas()
-                .into_iter()
-                .flat_map(|area| {
-                    area.displays.iter().map(|display| View {
+            let (context, caller_session) = (&context, &caller_session);
+            trees
+                .iter()
+                .flat_map(|(place, layout)| {
+                    let in_front = *place == front;
+                    layout
+                        .areas()
+                        .into_iter()
+                        .map(move |area| (in_front, layout, area))
+                })
+                .flat_map(|(in_front, layout, area)| {
+                    area.displays.iter().map(move |display| View {
                         area_id: area.id.clone(),
                         view_id: display.id.clone(),
                         kind: match display.kind {
@@ -962,13 +1104,14 @@ impl Runtime {
                             DisplayKind::Diff => "diff",
                             DisplayKind::Browser => "browser",
                             DisplayKind::External => "external",
+                            DisplayKind::Card => "card",
                         },
                         // An outside file's path stays in the operator's
                         // window; an agent reads that a View is there and
                         // nothing of the file (PRD outside-path-in-hide D-09).
                         target: display.url.as_ref().unwrap_or(&display.path).clone(),
                         selected: area.active.as_deref() == Some(display.id.as_str()),
-                        active_area: layout.active_area().id == area.id,
+                        active_area: in_front && layout.active_area().id == area.id,
                         page: (display.kind == DisplayKind::Browser).then(|| {
                             let reported = self
                                 .browser_pages
@@ -1058,6 +1201,12 @@ impl Runtime {
         })
     }
 }
+
+/// `split` and `move` of a View on no tray (PRD lane-desk-pair-view D-36).
+const VIEW_NOT_IN_LANE: Refusal = Refusal {
+    reason: "view_not_in_lane",
+    next_action: "The operator has not put this View on their tab's Views yet; it waits in your pane's Views list until they open it, so leave its layout to them",
+};
 
 /// Desk has no pane and no checkout: it acts through delivery commands
 /// alone (`hide agent`, `hide request`, `hide inbox`, `hide watch`, `hide

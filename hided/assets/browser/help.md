@@ -86,8 +86,8 @@ The usual loop:
 The display stays on the operator's screen while you work, and an arrow cursor in hide's accent color shows each action: it glides to the target, a click ripples, a drag leaves a line, filled fields flash, pressed keys are named, scrolls show an arrow.
 It fades two seconds after the last action, lets clicks through, and never appears in a snapshot.
 No command moves the operator's mouse, changes which View is in front, or takes keyboard focus.
-Input and screenshots need the display to be its area's selected View: one behind another tab of its area fails `display_hidden`, and reading commands still work there.
-While the operator is looking at your checkout from another pane, a page you open lands behind what they see, and only the operator brings it forward.
+Input and screenshots need the display to be its area's selected View on a desk, or a page on no desk (one you opened while the operator watched another pane), which takes input as it is: one behind another tab of its area on a desk fails `display_hidden`, and reading commands still work there. A page on no desk the operator has never shown has no pixels yet, so `screenshot` on it fails `display_hidden`.
+A page you open from a pane the operator is not watching waits in your pane's Views list, still loaded, and every command here works on it; only the operator brings it onto their screen.
 A selected View of a Workspace that is not in front takes input and screenshots like any other, though the operator does not see the action.
 
 ## When something fails

@@ -298,6 +298,21 @@ describe("where a display's place and the keyboard go", () => {
     expect(focusRequestArrived(request, here, behind, answered)).toBe(false);
     expect(focusRequestArrived(request, here, shown, [{ request_id: "follow:1", ok: false, display_id: null }])).toBe(false);
   });
+
+  it("follows an opened card once it is in front of the active area, on whichever Workspace's desk the core put it", () => {
+    const pull = { kind: "pull_request" as const, workspace_id: "w1", number: 31 };
+    const request = { card: pull };
+    const card = (id: string, item: ViewDisplaySnapshot["card"]) => display(id, { kind: "card", path: "", tab_id: null, card: item });
+    const shown = layout(area("a1", [card("c1", pull), "a"]));
+    // The owner's desk may be another checkout's, which the core brings forward with it.
+    expect(focusRequestArrived(request, here, shown)).toBe(true);
+    expect(focusRequestArrived(request, "mini\u0000/repo", shown)).toBe(true);
+    // Behind another tab, or another card in front: the keyboard waits.
+    const behind = layout(area("a1", ["a", card("c1", pull)]));
+    expect(focusRequestArrived(request, here, behind)).toBe(false);
+    const other = layout(area("a1", [card("c2", { ...pull, number: 32 })]));
+    expect(focusRequestArrived(request, here, other)).toBe(false);
+  });
 });
 
 describe("a dragged tab's target", () => {

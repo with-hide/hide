@@ -406,7 +406,7 @@ pub enum AttentionReason {
     /// The node could start, nothing holds it, and it was not started
     /// (`mission_health::stall_acts`).
     NotStarted,
-    /// A no-push or stopped warning its Conductor was sent stood with
+    /// A stopped warning its Conductor was sent stood with
     /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
     /// raised to the Conductor as every other stall is.
     WarningStood,
@@ -571,9 +571,6 @@ pub enum WarningKind {
     /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
     /// (`MissionNode::review_fails`).
     ReviewFails,
-    /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
-    /// request does not just wait on others.
-    NoPush,
     /// Its worker's program runs, its turn ended and it waits on nothing
     /// (`mission_health::stopped_worker`), for
     /// `mission_health::STOPPED_THAT_WARNS_MS` (hide-private
@@ -585,15 +582,14 @@ impl WarningKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ReviewFails => "review_fails",
-            Self::NoPush => "no_push",
             Self::Stopped => "stopped",
         }
     }
 
     /// Whether the warning, still standing after its letter, is raised as a
     /// stall (`warning_stood`): the one rule raising and keeping that stall
-    /// read. A warning the worker's own move takes off (a push, the stopped
-    /// worker at work again) stands only while no move came. A failed review
+    /// read. A warning the worker's own move takes off (the stopped worker at
+    /// work again) stands only while no move came. A failed review
     /// or verification goes only once that line passes, which a worker fixing the findings
     /// does not reach for a whole round, so standing says nothing of a move:
     /// it stays the Conductor's warning and never reaches the operator.
@@ -625,14 +621,14 @@ impl StopCause {
 }
 
 /// A warning a node carries now: raised once with one letter to its
-/// Conductor, and gone when its fact goes (the review passes, a new push
-/// arrives, the node finishes).
+/// Conductor, and gone when its fact goes (the review passes, the worker
+/// moves, the node finishes or waits, `Mission::wait_of`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NodeWarning {
     pub kind: WarningKind,
     /// The fact it stands on, which keys its letter: for failed reviews when
-    /// the failure that reached the count was recorded, for no push the time
-    /// the quiet is counted from.
+    /// the failure that reached the count was recorded, for a stopped worker
+    /// when its stop was first seen.
     pub from_unix_ms: u64,
     /// When Hide raised it.
     pub since_unix_ms: u64,
@@ -820,7 +816,9 @@ pub struct PendingWake {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiNews>,
     /// The finish line a `line_met` or `line_reopened` wake is about,
-    /// `<node>:<line>`.
+    /// `<node>:<line>`; for a `checker_needed` round wake, the checker line of
+    /// its node that has no live checker (`<node>:review`), none when both
+    /// its review and its verification have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<Dependency>,
     /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
@@ -830,6 +828,64 @@ pub struct PendingWake {
     /// intent names `seq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Since when the node's cell has stood unresolved: set when a standing
+    /// fact is recorded and kept while another standing fact of the node
+    /// updates it, so the safety net counts the cell's 20 minutes, not the
+    /// last update's (PRD letters-missions-simplify D-23, B15). None for
+    /// news, and for a book from before cells until its load sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
+    /// The operator was told of this standing cell by the safety net's
+    /// notice, as a raise's `Attention::notified` says for a raise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
+    /// The `seq` of the first wake of the node's cell for this recipient
+    /// that still stands with it: the cell's episode, kept while a fact
+    /// updates it, new once every wake of the cell went (a recurrence,
+    /// which rings again). None on a book from before it: its own `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_seq: Option<u64>,
+    /// What a `new_head` wake is about when it is about a node's review
+    /// round or its place in the plan (`RoundWake`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<RoundWake>,
+}
+
+impl PendingWake {
+    /// Whether the wake tells a state that stands until its cause goes (a
+    /// raise, a warning, a CI that did not pass, a review asking for
+    /// changes, an outside pull request closed unmerged), rather than news
+    /// its receiver reads once (`runtime::status_cells`). A worker's wake is
+    /// news: it asks the worker to act, and the worker's own move answers it.
+    pub(crate) fn standing(&self) -> bool {
+        self.to.is_none()
+            && match self.event {
+                WakeEvent::Attention
+                | WakeEvent::Warning
+                | WakeEvent::ChangesRequested
+                | WakeEvent::OutsideFailed => true,
+                WakeEvent::Ci => self
+                    .ci
+                    .as_ref()
+                    .is_some_and(|ci| ci.result != CiResult::Passed),
+                _ => false,
+            }
+    }
+
+    /// Whether `other` is about the same subject for the same receiver: the
+    /// node (or the mission itself) and the worker it goes to, if any.
+    pub(crate) fn same_cell(&self, other: &Self) -> bool {
+        self.node == other.node && self.to == other.to
+    }
+
+    /// Whether the wake's cell reaches its receiver while it works, at the
+    /// point a `--now` letter does (its next tool use), rather than at its
+    /// next turn: a wake to a node's worker or checker asks it to act on
+    /// its node now (a check to review, a result to fix, a conflict); the
+    /// Conductor's cells wait for its turn.
+    pub(crate) fn mid_turn(&self) -> bool {
+        self.to.is_some()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -886,6 +942,45 @@ pub enum WakeEvent {
     /// check passed on a commit its work folder left, `Criterion::shown`)
     /// after nodes that wait on it started; they go on.
     LineReopened,
+}
+
+/// A wake about a node's review round or its place in the plan (PRD
+/// mission-speed-2), kept as `PendingWake::round` beside the event
+/// `new_head`, which every build reads and words as news to read the
+/// mission by: a build before these wakes ignores the field and loads the
+/// book, and a build after them that adds another kind reads it as
+/// `unknown` here rather than refusing the book.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundWake {
+    /// The node's worker recorded its check (`MissionNode::check_signal`):
+    /// its checker (`to`) reviews or verifies the commit `head` now (D-01,
+    /// D-05).
+    CheckAsked,
+    /// The node's worker recorded its check while a checker line of it
+    /// (`line`) has no live checker: the Conductor binds a fresh one (D-05).
+    CheckerNeeded,
+    /// A checker of the node failed it in the round of its last check: its
+    /// worker (`to`) starts fixing (D-02, D-04).
+    Checked,
+    /// The plan makes a change node wait for the whole of another change
+    /// node: the Conductor may start it sooner on one of its lines (D-07).
+    WholeNodeWait,
+    /// A kind a later build wrote.
+    #[serde(other)]
+    Unknown,
+}
+
+impl RoundWake {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::CheckAsked => "check_asked",
+            Self::CheckerNeeded => "checker_needed",
+            Self::Checked => "checked",
+            Self::WholeNodeWait => "whole_node_wait",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl WakeEvent {
@@ -1038,7 +1133,8 @@ impl KeptView {
         let address = match display.kind {
             DisplayKind::File | DisplayKind::Diff => display.path.clone(),
             DisplayKind::Browser => display.url.clone()?,
-            DisplayKind::External => return None,
+            // A card names no View to open again: the mission's own map does.
+            DisplayKind::External | DisplayKind::Card => return None,
         };
         if address.is_empty() || address.len() > SHOW_LIMIT {
             return None;
@@ -1064,7 +1160,7 @@ impl KeptView {
             DisplayKind::File | DisplayKind::Diff => {
                 display.shows(&self.address, self.kind, Some(self.committed))
             }
-            DisplayKind::External => false,
+            DisplayKind::External | DisplayKind::Card => false,
         }
     }
 }
@@ -1319,14 +1415,25 @@ pub struct MissionNode {
     pub launched: Option<NodeLaunch>,
     /// When Hide read a new head on one of the node's pull requests last,
     /// the first head it read of one included: the node's last push as
-    /// GitHub shows it. A book from before it has none.
+    /// GitHub shows it, a move that settles a pull request's long wait
+    /// (`WaitStood`). A book from before it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pushed_at_unix_ms: Option<u64>,
     /// When the node last went to work, from planned or from a finish: a
-    /// node back at work has gone without a push only since then. A book
+    /// node back at work counts its time of work from then. A book
     /// from before it has none, and `started_at_unix_ms` stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers (`CriterionKind::worker_answers`)
+    /// first all stood passed or skipped: where its own work ended and the
+    /// review, CI and fix rounds began, the split of the node's time
+    /// (`hide mission show`, the map's panel), counted from
+    /// `worked_at_unix_ms`. Set once a run of its work, on the record or
+    /// skip that met the last of them; going back to work from a finish
+    /// starts the next run (`back_to_work`). A book from before it has none,
+    /// and a node whose lines were already met then never gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_met_at_unix_ms: Option<u64>,
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
@@ -1354,6 +1461,16 @@ pub const OPERATOR_MERGE_CHARS: usize = 80;
 pub struct NodeHold {
     pub why: String,
     pub until_unix_ms: u64,
+}
+
+/// A node's wait as every screen draws it (`Mission::wait_of`): why, until
+/// when, and whether it is the mission's delay rather than the node's own
+/// hold.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeWait {
+    pub why: String,
+    pub until_unix_ms: u64,
+    pub mission: bool,
 }
 
 /// A hold as a command asks for it: why, and for how many minutes.
@@ -1574,29 +1691,22 @@ impl MissionNode {
     }
 
     /// The node goes back to work from a finish at `now`: a new round for
-    /// the keys of Hide's acts (B27), the time its quiet without a push
-    /// counts from, and no showing of its gate, which was of the work that
+    /// the keys of Hide's acts (B27), the time its work counts from, and no showing of its gate, which was of the work that
     /// ended (`Criterion::shown`).
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        // Its time splits again from here: work until its lines stand met
+        // again, now when nothing of its own is left open.
+        self.own_met_at_unix_ms = self.own_lines_met().then_some(now);
         self.done_head = None;
         for line in &mut self.criteria {
             line.shown.clear();
         }
     }
 
-    /// A change at work delivered by pull request: the node a push is asked
-    /// of, whose quiet without one can warn its Conductor.
-    pub fn asks_push(&self) -> bool {
-        self.status == NodeStatus::Working
-            && self.kind == NodeKind::Change
-            && self.delivery == Some(Delivery::Pr)
-    }
-
-    /// When the node's time without a push counts from: its last push, or
-    /// when it went to work if that is later. None for a node that never
-    /// worked.
+    /// When the node last moved its pull requests: its last push, or when
+    /// it went to work if that is later. None for a node that never worked.
     pub fn quiet_since(&self) -> Option<u64> {
         let worked = self.worked_at_unix_ms.or(self.started_at_unix_ms);
         match (self.pushed_at_unix_ms, worked) {
@@ -1605,18 +1715,112 @@ impl MissionNode {
         }
     }
 
-    /// The failures in a row of the node's review or verification line, the
-    /// more of the two (`CriterionKind::checker_judges`); 0 with neither. The
-    /// name and the wire field `review_fails` predate the verification
-    /// counting too.
-    pub fn review_fails(&self) -> u32 {
+    /// Whether every line its worker answers stands passed or skipped, with
+    /// at least one such line.
+    pub(crate) fn own_lines_met(&self) -> bool {
+        let mut own = self
+            .criteria
+            .iter()
+            .filter(|line| line.kind.worker_answers())
+            .peekable();
+        own.peek().is_some()
+            && own.all(|line| {
+                matches!(
+                    line.state,
+                    crate::mission_criteria::CriterionState::Pass
+                        | crate::mission_criteria::CriterionState::Skipped
+                )
+            })
+    }
+
+    /// Stamps `own_met_at_unix_ms` at `now` when a record or skip met the
+    /// last of its worker's lines, which were not all met before it
+    /// (`was_met`): a node whose lines a book from before it already held
+    /// met gets no stamp, rather than one at a later record's time.
+    pub(crate) fn note_own_met(&mut self, was_met: bool, now: u64) {
+        if self.own_met_at_unix_ms.is_none() && !was_met && self.own_lines_met() {
+            self.own_met_at_unix_ms = Some(now);
+        }
+    }
+
+    /// The node's review rounds line (`Criterion::rounds`): the review or
+    /// verification line past `limit` (`Criterion::past_limit`), a failed
+    /// one first and then the one with more rounds, else the one with the
+    /// most rounds; none
+    /// before any checker answered. The one rule the limit's warning, its
+    /// letter and the screens that count rounds read.
+    pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        let lines = || {
+            self.criteria
+                .iter()
+                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+        };
+        lines()
+            .filter(|line| line.past_limit(limit))
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.rounds,
+                )
+            })
+            .or_else(|| lines().max_by_key(|line| line.rounds))
+    }
+
+    /// The worker's signal that its work is ready for its checkers (PRD
+    /// mission-speed-2 D-01), as the book holds it now: a node with a
+    /// `check` line signals with that line passed, at its record and on its
+    /// commit; a node without one when every line its worker answers for
+    /// passed or was skipped, at the newest of their records, on no commit.
+    /// A push alone is no signal. Each new signal opens a round: the
+    /// checkers' answers from before it are the round before's
+    /// (`Criterion::round_state`).
+    pub(crate) fn check_signal(&self) -> Option<CheckSignal> {
+        use crate::mission_criteria::{CriterionKind, CriterionState};
+        if let Some(check) = self
+            .criteria
+            .iter()
+            .find(|line| line.kind == CriterionKind::Check)
+        {
+            return (check.state == CriterionState::Pass)
+                .then(|| {
+                    Some(CheckSignal {
+                        at_unix_ms: check.by.as_ref()?.at_unix_ms,
+                        commit: check.commit.clone(),
+                    })
+                })
+                .flatten();
+        }
+        if !self.own_lines_met() {
+            return None;
+        }
+        self.criteria
+            .iter()
+            .filter(|line| line.kind.worker_answers())
+            .filter_map(|line| line.by.as_ref().map(|by| by.at_unix_ms))
+            .max()
+            .map(|at_unix_ms| CheckSignal {
+                at_unix_ms,
+                commit: None,
+            })
+    }
+
+    /// The node's review and verification lines, the lines its checkers
+    /// judge.
+    pub(crate) fn checker_lines(
+        &self,
+    ) -> impl Iterator<Item = &crate::mission_criteria::Criterion> {
         self.criteria
             .iter()
             .filter(|line| line.kind.checker_judges())
-            .map(|line| line.fails_in_a_row)
-            .max()
-            .unwrap_or(0)
     }
+}
+
+/// When and on which commit a node's worker last signalled its work ready
+/// for its checkers (`MissionNode::check_signal`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CheckSignal {
+    pub(crate) at_unix_ms: u64,
+    pub(crate) commit: Option<String>,
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -1765,6 +1969,12 @@ pub struct Mission {
     /// (`Runtime::warn_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay_until_unix_ms: Option<u64>,
+    /// When the operator put the mission's 내 차례 row away
+    /// (`mission_put_away`): the mission stays out of its device's Needs You
+    /// until something asks them that was raised after this, so a put-away
+    /// row never hides a newer turn (operator decision 2026-11-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_away_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     /// The line about the operator's checkout Hide added to `report` when
@@ -1876,6 +2086,25 @@ impl Mission {
         self.nodes.iter().find(|node| node.key == key)
     }
 
+    /// The pull-request changes pull-request change `key` waits for whole,
+    /// by their plain key, where one of their finish lines
+    /// (`<node>:<line>`) might start it sooner, stacked on their branch
+    /// (PRD mission-speed-2 D-07); none for any other node.
+    pub(crate) fn whole_node_waits(&self, key: &str) -> Vec<&str> {
+        let Some(node) = self.node(key).filter(|node| node.runs_elsewhere()) else {
+            return Vec::new();
+        };
+        node.depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_none())
+            .filter(|dependency| {
+                self.node(&dependency.node)
+                    .is_some_and(MissionNode::runs_elsewhere)
+            })
+            .map(|dependency| dependency.node.as_str())
+            .collect()
+    }
+
     /// Whether the operator, not the Conductor, merges `node`'s pull
     /// request (PRD mission-destination D-10, D-35): every one of a mission
     /// whose scope ends at ready pull requests, and one the plan gave the
@@ -1884,6 +2113,33 @@ impl Mission {
     /// rule the done check, the map and `hide mission show` read.
     pub(crate) fn operator_merges(&self, node: &MissionNode) -> bool {
         self.scope == MissionScope::Pr || node.operator_merge.is_some()
+    }
+
+    /// What the node waits on now that its Conductor set on purpose (PRD
+    /// letters-missions-simplify D-07, B21): its own hold (`hide mission node
+    /// --hold`), else the mission's delay (`hide mission delay`), which holds
+    /// every node of an open mission that is not done or dropped. The one
+    /// state the map, the phone and `hide mission show` draw as `기다리는 중 ·
+    /// 이유 · 언제까지`, and the one rule that keeps every warning and stall
+    /// off the node while it holds (`mission_health::stall_excused`). It ends
+    /// by itself at `until_unix_ms` (`Runtime::stall_missions`). A worker's
+    /// sleep is not one: its card says asleep.
+    pub(crate) fn wait_of(&self, node: &MissionNode) -> Option<NodeWait> {
+        if !self.status.open() || matches!(node.status, NodeStatus::Done | NodeStatus::Dropped) {
+            return None;
+        }
+        if let Some(hold) = &node.hold {
+            return Some(NodeWait {
+                why: hold.why.clone(),
+                until_unix_ms: hold.until_unix_ms,
+                mission: false,
+            });
+        }
+        Some(NodeWait {
+            why: self.delay.clone()?,
+            until_unix_ms: self.delay_until_unix_ms?,
+            mission: true,
+        })
     }
 
     /// Whether the open decision is about node `key` (`Question::names`):
@@ -1917,7 +2173,8 @@ impl Mission {
     /// while it is not, else when, which is none when the record cannot say
     /// (a key naming no node holds nothing back, and a book may keep no
     /// finish time). A plain key is met when its node is done, at its
-    /// finish; `<node>:<line>` also when that line is met now as its owner
+    /// finish, and `<node>:<line>` then at the line's record if it came
+    /// first; `<node>:<line>` also when that line is met now as its owner
     /// shows it (`Criterion::met` against the node's heads, read into
     /// `lines` by `Runtime::lines_now`), at the line's record, so a check
     /// line passed on an older commit is open again. A dropped node meets
@@ -1933,8 +2190,20 @@ impl Mission {
             return Some(None);
         };
         let before = &self.nodes[at];
+        let recorded = |line: &str| {
+            let known = before.criteria.iter().find(|known| known.key == line)?;
+            known.by.as_ref().map(|by| by.at_unix_ms)
+        };
         match before.status {
-            NodeStatus::Done => return Some(before.finished_at_unix_ms),
+            // A line of a node done stays met when it was recorded, so the
+            // wait of the node behind it does not move to the finish.
+            NodeStatus::Done => {
+                let line = key.line.as_deref().and_then(recorded);
+                return Some(match (line, before.finished_at_unix_ms) {
+                    (Some(line), Some(finished)) => Some(line.min(finished)),
+                    (line, finished) => line.or(finished),
+                });
+            }
             NodeStatus::Dropped => return None,
             NodeStatus::Planned | NodeStatus::Working => {}
         }
@@ -2130,8 +2399,10 @@ impl Default for ConductorSettings {
 }
 
 /// How strongly the Conductor has a mission's nodes checked: which nodes
-/// get a review or a run-it check, and how many review rounds. The Conductor
-/// follows it by `hide mission help`; the gate does not read it.
+/// get a review or a run-it check, which the Conductor follows by `hide
+/// mission help`, and how many review rounds a node gets
+/// (`Strength::review_rounds`), which Hide counts. A mission from before it
+/// counts as `Normal`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strength {
@@ -2139,6 +2410,31 @@ pub enum Strength {
     #[default]
     Normal,
     Thorough,
+}
+
+impl Strength {
+    /// Its stored spelling, which the Conductor's plan names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Normal => "normal",
+            Self::Thorough => "thorough",
+        }
+    }
+
+    /// The review rounds a node's review or verification gets at this
+    /// strength (`Criterion::rounds`): a review and its re-reviews. When the
+    /// round at the limit fails, its Conductor is told once to move the
+    /// ordinary and minor findings to follow-up issues and skip the line
+    /// (`mission_health::warn_acts`). The one place these numbers live;
+    /// `hide mission help` (Verification strength) says the same.
+    pub fn review_rounds(self) -> u32 {
+        match self {
+            Self::Fast => 1,
+            Self::Normal => 3,
+            Self::Thorough => 4,
+        }
+    }
 }
 
 fn default_clean_merged() -> bool {
@@ -3408,6 +3704,7 @@ pub(crate) fn apply_plan(
                 launched: None,
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
+                own_met_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
                 operator_merge: None,
@@ -4164,7 +4461,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A node's checker is another agent than its worker: start a new agent for the review or verification and bind that one"
         }
         "mission_checker_unknown" => {
-            "Bind a checker the node's plan names: its review or verify lists an unbound agent of the same kind as the registration (hide mission show)"
+            "The reason follows: for an agent Hide does not know, bind the id hide agent spawn answered; for a kind the line names no checker of, start an agent of a kind its review or verify lists (hide mission show) or replan the line to name it; for a place a live checker holds, end that checker with hide agent end <id>, then bind again"
         }
         "mission_criterion_unknown" => {
             "Run hide mission show to see the node's lines and their keys (c1, check, ci, review, verify, d1…)"
@@ -4332,6 +4629,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         }
     }
     convert_old_kinds(&mut value)?;
+    drop_no_push(&mut value);
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
     for line in stored
         .book
@@ -4388,6 +4686,44 @@ fn convert_old_kinds(value: &mut serde_json::Value) -> Result<(), String> {
         node.entry("preset").or_insert_with(|| preset.into());
     }
     Ok(())
+}
+
+/// A book written while a node could warn of no push, in any schema, read
+/// as this build writes it (PRD letters-missions-simplify D-32): that
+/// warning and the letter waiting to tell it are gone, so a node that stood
+/// warned reads as warned of nothing. The schema stays, as for
+/// `convert_old_kinds`: a build from before reads the book this one writes,
+/// a node with no `no_push` warning being one it knows.
+fn drop_no_push(value: &mut serde_json::Value) {
+    let retired = |item: &serde_json::Value, field: &str| {
+        item.get(field).and_then(serde_json::Value::as_str) == Some("no_push")
+    };
+    let missions = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten();
+    for mission in missions {
+        if let Some(wakes) = mission
+            .get_mut("wakes")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            wakes.retain(|wake| !retired(wake, "warning"));
+        }
+        let nodes = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten();
+        for node in nodes {
+            if let Some(warnings) = node
+                .get_mut("warnings")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                warnings.retain(|warning| !retired(warning, "kind"));
+            }
+        }
+    }
 }
 
 /// A schema 1 book as schema 2 reads it (D-19, B23): every mission was made
@@ -4670,6 +5006,7 @@ pub(crate) mod tests {
             answer_failed: None,
             delay: None,
             delay_until_unix_ms: None,
+            put_away_unix_ms: None,
             report: None,
             folder_line: None,
             created_at_unix_ms: 1,
@@ -4882,6 +5219,23 @@ pub(crate) mod tests {
         };
         assert!(planned.dependency_met(&key, &shown(&[])).is_some());
         assert_eq!(planned.dependency_met(&key, &shown(&["c1"])), None);
+        // Met at the line's record, and still then once its node is done.
+        planned.nodes[0].criteria[0].by = Some(crate::mission_criteria::Recorded {
+            role: crate::mission_criteria::Role::Worker,
+            name: "core".into(),
+            agent_id: None,
+            at_unix_ms: 40,
+        });
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), Some(Some(40)));
+        planned.nodes[0].status = NodeStatus::Done;
+        planned.nodes[0].finished_at_unix_ms = Some(90);
+        assert_eq!(planned.dependency_met(&key, &[]), Some(Some(40)));
+        assert_eq!(
+            planned.dependency_met(&Dependency::from("core"), &[]),
+            Some(Some(90))
+        );
+        planned.nodes[0].finished_at_unix_ms = None;
+        planned.nodes[0].status = NodeStatus::Working;
         assert_eq!(planned.dependency_met(&key, &[]), None, "a node not read");
         planned.nodes[0].status = NodeStatus::Dropped;
         assert_eq!(planned.dependency_met(&key, &shown(&[])), None);
@@ -5575,6 +5929,32 @@ pub(crate) mod tests {
         );
     }
 
+    /// PRD letters-missions-simplify D-32: a book a build kept while a node
+    /// could warn of no push reads with that warning and its waiting letter
+    /// gone and every other warning and letter as it was, in the schema it
+    /// was written in.
+    #[test]
+    fn a_book_that_kept_a_no_push_warning_reads_without_it() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([
+            {"key": "fix", "title": "Fix it", "kind": "change", "status": "working", "delivery": "pr",
+             "warnings": [
+                {"kind": "no_push", "from_unix_ms": 1, "since_unix_ms": 2, "told_unix_ms": 2},
+                {"kind": "stopped", "from_unix_ms": 3, "since_unix_ms": 4}]}]);
+        stored["wakes"] = serde_json::json!([
+            {"seq": 1, "node": "fix", "event": "warning", "warning": "no_push"},
+            {"seq": 2, "node": "fix", "event": "warning", "warning": "stopped"}]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": SCHEMA_VERSION, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let read = decode(&bytes).unwrap().book.missions.remove(0);
+        let kinds: Vec<_> = read.nodes[0].warnings.iter().map(|w| w.kind).collect();
+        assert_eq!(kinds, [WarningKind::Stopped]);
+        let wakes: Vec<_> = read.wakes.iter().map(|wake| wake.seq).collect();
+        assert_eq!(wakes, [2]);
+    }
+
     /// PRD node-presets D-05, B7: a book written before general nodes, of
     /// any schema, reads its research and verify nodes as general nodes
     /// with those presets, with the same state, line and verdict, and is
@@ -6091,6 +6471,42 @@ pub(crate) mod tests {
         let mut node = one("b");
         node.back_to_work(5);
         assert_eq!(node.round, 1);
+    }
+
+    /// mission-82 review O5: a node back at work from a finish splits its
+    /// time again from then, so the time it stood done is neither work nor
+    /// review: its own lines all met, its work is already done; a defect
+    /// left open, its work runs until that line is met.
+    #[test]
+    fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
+        use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
+        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
+            .unwrap()
+            .nodes[0]
+            .clone();
+        for line in node
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.worker_answers())
+        {
+            line.state = CriterionState::Pass;
+        }
+        node.own_met_at_unix_ms = Some(3);
+        node.back_to_work(50);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(50), Some(50))
+        );
+        node.criteria
+            .push(Criterion::new("d1", CriterionKind::Defect));
+        node.back_to_work(90);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(90), None)
+        );
+        node.criteria.last_mut().unwrap().state = CriterionState::Pass;
+        node.note_own_met(false, 120);
+        assert_eq!(node.own_met_at_unix_ms, Some(120));
     }
 
     /// A mission created before verification strength keeps the checkers

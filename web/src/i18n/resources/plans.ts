@@ -1,7 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // A session's own plan (PRD hide-plan): the pane head's chip and its small
-// map, the map in the lane's 보기 slot, a mission node's folded plan, the
+// map, the map as a card tab on a desk, a mission node's folded plan, the
 // record's section and the pane menu's entry.
 export const plansEnglish = {
   "detail.plan": "Task steps · {{title}}",

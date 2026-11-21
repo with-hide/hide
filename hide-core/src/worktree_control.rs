@@ -3299,6 +3299,7 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3512,6 +3513,7 @@ mod tests {
             session_workspace_ids: vec!["w-purpose".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),
@@ -3640,6 +3642,7 @@ mod tests {
             session_workspace_ids: vec!["w-outer".to_owned(), "w-authority".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "outer".to_owned(),
@@ -3707,6 +3710,7 @@ mod tests {
             session_workspace_ids: vec!["w-first".to_owned()],
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".to_owned(),
                 workspace_id: "project".to_owned(),

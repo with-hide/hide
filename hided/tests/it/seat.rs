@@ -82,6 +82,11 @@ async fn a_role_change_keeps_the_port_and_token_and_health_answers_throughout() 
     let (status, first) = health(seat.port).await.expect("the core answers");
     assert_eq!(status, 200);
     assert_eq!(first["instance"], 1);
+    assert_eq!(
+        first["listeners"],
+        serde_json::json!({"pane_bootstrap": "accepting", "node_attach": "accepting"}),
+        "{first}"
+    );
 
     let stop = Arc::new(AtomicBool::new(false));
     let missed = Arc::new(AtomicUsize::new(0));

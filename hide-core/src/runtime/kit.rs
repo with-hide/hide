@@ -91,6 +91,8 @@ fn folder_made(old: &KitAgentSnapshot, now: &KitAgentSnapshot) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DeviceKitWork {
     Job(KitJob),
+    /// Store work, once no kit job waits (`kit_store`).
+    Store(super::kit_store::StoreJob),
     /// The device is being removed from Hide: its kit comes off (D-16).
     Remove,
 }
@@ -118,6 +120,7 @@ pub(crate) enum ProfilesRead {
 /// What a device's kit call answered.
 pub(crate) enum DeviceKitAnswer {
     Report(Result<KitReport, String>),
+    Store(super::kit_store::StoreAnswered),
     Removed(Result<hide_node_link::protocol::KitRemoved, String>),
 }
 
@@ -454,6 +457,11 @@ impl Runtime {
             }));
         }
         let mut snapshot = KitSnapshot::from_report(report);
+        let store_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.store.clone());
+        self.store_from_kit_report(device_id, store_before.as_ref(), &mut snapshot);
         // The list is the node's to answer; a pass judges the profiles in it.
         snapshot.profiles = self
             .kit_states
@@ -606,8 +614,16 @@ impl Runtime {
                 kept
             }
         };
+        let moved = profiles.state == crate::model::ProfilesState::Listed
+            && state
+                .profiles
+                .as_ref()
+                .is_none_or(|before| before.version != profiles.version);
         state.profiles = Some(profiles);
         let listed = self.set_kit_state(device_id, state);
+        if moved {
+            self.store_profiles_moved(device_id);
+        }
         // A pane's reported account is matched against the list it has now.
         self.refresh_reported_accounts() || listed
     }
@@ -1200,7 +1216,8 @@ impl Runtime {
     /// connected and no worker runs for it yet.
     pub(super) fn start_device_kit(&mut self, device_id: &str) {
         let removal = self.device_kit_removals.contains_key(device_id);
-        let queued = self.device_kit_pending.contains_key(device_id)
+        let queued = (self.device_kit_pending.contains_key(device_id)
+            || self.stores.device_queued(device_id))
             && matches!(
                 self.device_hosts.get(device_id).map(|host| &host.phase),
                 Some(HostPhase::Ready { .. })
@@ -1255,6 +1272,7 @@ impl Runtime {
     ) -> Result<(), &'static str> {
         let device_id = registration.id.as_str();
         self.device_kit_pending.remove(device_id);
+        self.forget_store(device_id);
         self.forget_start_passes(device_id);
         self.kit_states.remove(device_id);
         self.refresh_ai_items();
@@ -1346,9 +1364,7 @@ impl Runtime {
             .iter()
             .find(|registration| registration.id == device_id)
             .cloned();
-        let (Some(registration), Some(job)) =
-            (registration, self.device_kit_pending.remove(device_id))
-        else {
+        let Some(registration) = registration else {
             self.device_kit_running.remove(device_id);
             return None;
         };
@@ -1358,6 +1374,21 @@ impl Runtime {
             .host_consent
             .and_then(|consent| consent.cli_dir)
             .unwrap_or_else(|| self.host_cli_dir.clone());
+        let Some(job) = self.device_kit_pending.remove(device_id) else {
+            // The store's work runs once no kit job waits.
+            let Some(store) = self.take_device_store_job(device_id) else {
+                self.device_kit_running.remove(device_id);
+                return None;
+            };
+            return Some(DeviceKitCall {
+                work: DeviceKitWork::Store(store),
+                channel,
+                cli_dir,
+                retirement_projects: Vec::new(),
+                daemon_off_run: None,
+                connect_attempt: None,
+            });
+        };
         if matches!(job, KitJob::Apply(_)) {
             self.start_pass_taken(device_id);
         }
@@ -1409,7 +1440,7 @@ impl Runtime {
             }
             answer => answer,
         };
-        if let DeviceKitAnswer::Report(_) = &answer
+        if let DeviceKitAnswer::Report(_) | DeviceKitAnswer::Store(_) = &answer
             && (!self.device_registration_exists(device_id) || self.device_kit_removing(device_id))
         {
             // The device went while the call ran: its kit state went with it,
@@ -1419,6 +1450,7 @@ impl Runtime {
         }
         match answer {
             DeviceKitAnswer::Removed(removed) => self.ingest_device_kit_removal(device_id, removed),
+            DeviceKitAnswer::Store(answered) => self.ingest_store_answer(device_id, answered),
             DeviceKitAnswer::Report(Ok(report)) => self.ingest_kit_report(device_id, &report),
             DeviceKitAnswer::Report(Err(reason)) => {
                 // The call never ran to a report, so the choice it carried
@@ -1534,6 +1566,7 @@ impl Runtime {
     pub(super) fn forget_device_kit_work(&mut self, device_id: &str) {
         self.forget_device_connect(device_id);
         self.device_kit_pending.remove(device_id);
+        self.forget_store(device_id);
         self.forget_start_passes(device_id);
         self.codex_daemon_off_running.remove(device_id);
         self.end_codex_daemon_off_unanswered(device_id);
@@ -1573,6 +1606,27 @@ impl Runtime {
     /// is one pass over the machine's panes each time the agent lineage pass
     /// or a device's session republishes, not a per-tick cost.
     fn agent_sessions(&self, device_id: &str) -> std::collections::BTreeMap<&'static str, u32> {
+        let mut sessions: std::collections::BTreeMap<&'static str, u32> =
+            hide_agent_adapter::ADAPTERS
+                .iter()
+                .filter(|adapter| {
+                    adapter
+                        .session
+                        .is_some_and(|format| format.has_session_file())
+                })
+                .map(|adapter| (adapter.id, 0))
+                .collect();
+        for (_, agent) in self.running_agent_panes(device_id) {
+            if let Some(count) = sessions.get_mut(agent) {
+                *count += 1;
+            }
+        }
+        sessions
+    }
+
+    /// The panes of `device_id` that run an agent Hide has an adapter for
+    /// and that is awake, each with the agent's id.
+    pub(super) fn running_agent_panes(&self, device_id: &str) -> Vec<(String, &'static str)> {
         let remote = self
             .snapshot
             .status
@@ -1588,23 +1642,14 @@ impl Runtime {
         } else if let Some(session) = remote {
             (&session.workspaces, &session.agents)
         } else {
-            return std::collections::BTreeMap::new();
+            return Vec::new();
         };
-        let mut sessions: std::collections::BTreeMap<&'static str, u32> =
-            hide_agent_adapter::ADAPTERS
-                .iter()
-                .filter(|adapter| {
-                    adapter
-                        .session
-                        .is_some_and(|format| format.has_session_file())
-                })
-                .map(|adapter| (adapter.id, 0))
-                .collect();
         let panes = workspaces
             .iter()
             .flat_map(|workspace| workspace.checkouts.iter())
             .flat_map(|checkout| checkout.tabs.iter())
             .flat_map(|tab| tab.panes.iter());
+        let mut running = Vec::new();
         for pane in panes {
             let local_pane = !crate::address::is_device_scoped(&pane.id);
             if (device_id == self.node.as_str()) != local_pane {
@@ -1616,14 +1661,11 @@ impl Runtime {
             else {
                 continue;
             };
-            let Some(count) = hide_agent_adapter::adapter(&agent.agent_kind)
-                .and_then(|adapter| sessions.get_mut(adapter.id))
-            else {
-                continue;
-            };
-            *count += 1;
+            if let Some(adapter) = hide_agent_adapter::adapter(&agent.agent_kind) {
+                running.push((pane.id.clone(), adapter.id));
+            }
         }
-        sessions
+        running
     }
 
     /// Puts [`Self::agent_sessions`] on a kit snapshot's agent rows; an agent
@@ -1648,6 +1690,7 @@ impl Runtime {
         let mut changed = false;
         for id in ids {
             let sessions = self.agent_sessions(&id);
+            let new_session = self.store_new_session(&id);
             let Some(device) = self
                 .snapshot
                 .navigator
@@ -1663,6 +1706,10 @@ impl Runtime {
                     agent.sessions = next;
                     changed = true;
                 }
+            }
+            if device.kit.store_new_session != new_session {
+                device.kit.store_new_session = new_session;
+                changed = true;
             }
         }
         changed

@@ -193,6 +193,12 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub access: Option<Arc<AccessSnapshot>>,
+    /// Automations and their runs (PRD automations D-02, D-20). Its own
+    /// section, absent until the core restored its book, so a run's change
+    /// never resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -323,21 +329,14 @@ pub struct WorkspaceViewSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) git: Option<crate::checkout_git::Header>,
     /// Whether the lane is open (PRD lane-two-columns B1, B15); closed, it
-    /// keeps `documents` and `tool` for the next open. An unpinned lane is
+    /// keeps the tray's `shown` and `tool` for the next open. An open lane is
     /// drawn over the agents only once a call opened it (right-lane D-02).
     pub open: bool,
-    /// Whether the viewing column shows the checkout's documents; the
-    /// front tab's 보기 slot, while shown, stands in front of them (D-04).
-    pub documents: bool,
     /// The tool column's tool, or null while there is none.
     pub tool: Option<crate::workspace_views::Tool>,
-    /// Whether the lane is pinned beside Agent Views (right-lane D-03).
-    pub pinned: bool,
-    /// The viewing column's width with the documents, in CSS pixels, or
-    /// null for the shell's default until it is resized (D-09).
+    /// The tray's width, in CSS pixels, or null for the shell's default
+    /// until it is resized (D-09).
     pub document_width: Option<u32>,
-    /// The viewing column's width with the 보기 slot, the same way.
-    pub detail_width: Option<u32>,
     /// The tool column's width with the Explorer, the same way.
     pub explorer_width: Option<u32>,
     /// The tool column's width with the Project or Changes, the same way.
@@ -351,9 +350,9 @@ pub struct WorkspaceViewSnapshot {
     /// a call the shell shows by drawing the lane (D-02, B16).
     pub lane_called: u64,
     /// Which column the last call brought forward, so a lane too narrow to
-    /// draw both knows which to draw (PRD lane-two-columns B19): the
-    /// viewing column for an open, the 보기 slot or ⌘E, the tool column for
-    /// a tool, a reveal or a folder link.
+    /// draw both knows which to draw (PRD lane-two-columns B19): the tray
+    /// for an open, a card or ⌘E, the tool column for a tool, a reveal or a
+    /// folder link.
     pub lane_called_side: LaneCallSide,
     /// How many lane calls the core has numbered, in any Workspace.
     pub lane_calls: u64,
@@ -361,7 +360,21 @@ pub struct WorkspaceViewSnapshot {
     /// restart, which the shell opens on; any other front starts on Main
     /// (D-11).
     pub resumed: bool,
+    /// The tray of the Agent tab in front (PRD lane-desk-pair-view D-06):
+    /// its tab, whether the lane shows it, how many Views are on it and its
+    /// pair view. `layout` is its View areas.
+    pub tray: TraySnapshot,
     pub layout: ViewLayoutSnapshot,
+    /// The window's pair view mode (D-45, D-47): whether it is on, and the
+    /// left pane's share of the body.
+    pub pair_mode: PairModeSnapshot,
+    /// The panes of this Workspace's Agent tabs with a View to show beside
+    /// the desk: one their agent opened, one the operator opened from their
+    /// terminal's links, or a record card of their session on a desk (B19,
+    /// D-49, D-54): the pane head's ◧ cell shows on these only.
+    /// Every pane enters pair view from ⌘. and the menus (D-53).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panes_with_views: Vec<String>,
     /// The Agent areas, for a Workspace whose tabs the core arranges (this
     /// machine's and a node's that dialed in); `None` on a device this core
     /// dials, whose engine shows one tab.
@@ -375,6 +388,63 @@ pub struct WorkspaceViewSnapshot {
     /// session-files D-14); absent while there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub session_drafts: Vec<SessionDraftsSnapshot>,
+}
+
+/// One Agent tab's tray as the screen draws it (PRD lane-desk-pair-view
+/// D-06, D-29).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TraySnapshot {
+    /// The engine's id of the Agent tab whose tray this is; empty while the
+    /// Workspace shows no tab.
+    pub tab_id: String,
+    /// Whether the lane shows the tray while it is open; the tray button
+    /// folds it and brings it back.
+    pub shown: bool,
+    /// The Views on it: the rail's number (D-29). An agent's View on no
+    /// tray is not counted.
+    pub count: usize,
+    /// Whether the desk floats with the tool beside it over the agents
+    /// (D-50): a View came onto it while a tool floated, and that tool is
+    /// still drawn. A shown desk that does not float takes its place on the
+    /// right and the agents narrow beside it.
+    pub floats: bool,
+    /// The pair view drawn now (D-08, D-45, D-53): while the mode is on, the
+    /// pane the operator is on in this tab, alone or beside the desk; the
+    /// strip, the tab row and the sidebar mark only it (D-17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair: Option<PairViewSnapshot>,
+}
+
+/// The window's pair view mode (PRD lane-desk-pair-view D-45, D-47).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PairModeSnapshot {
+    pub on: bool,
+    /// The left pane's share of the body in thousandths, the divider's
+    /// landing (D-47); half while absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<u16>,
+}
+
+/// An Agent tab in pair view: the pane drawn beside its tray, or alone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PairViewSnapshot {
+    pub tab_id: String,
+    pub pane_id: String,
+    /// The pane is drawn alone at the body's full width, with no desk: its
+    /// desk holds no tab the strip shows (D-53, D-64), or ⌘E or the rail's
+    /// desk button folded it (D-57, D-63).
+    pub alone: bool,
+    /// How many of the desk's tabs the strip beside the pane shows, folded
+    /// or not: the desk can stand only with one, so ⌘E and the rail's desk
+    /// button ask for nothing when it is 0 (D-60, D-63).
+    pub shown: usize,
+    /// The desk tabs in front of the drawn desk that another agent of the
+    /// paired tab owns, which the desk folds into its `Others N` menu
+    /// (D-41); bringing one in front takes its agent to the left (B24). A
+    /// tab whose owner is in another Agent tab, like one nobody owns, stays
+    /// on the strip. Only the desk on screen carries them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<String>,
 }
 
 /// The Views of unsaved documents one pane's session alone opened.
@@ -396,6 +466,15 @@ pub struct BrowserViewInventoryRow {
     pub path: String,
     pub area_id: String,
     pub view_id: String,
+    /// The Agent tab whose tray holds the page, or null for a page on no
+    /// tray, which the desktop host keeps loaded off screen (PRD
+    /// lane-desk-pair-view D-37).
+    pub tray: Option<String>,
+    /// A web page's address and the load the core last asked of it, so the
+    /// host can load a page that is on no desk on screen (D-37, B32); null
+    /// and 0 for an outside HTML file, whose path stays in the host.
+    pub url: Option<String>,
+    pub load: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -538,6 +617,18 @@ pub struct ViewDisplaySnapshot {
     /// grant draws the file; every other window draws only its name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external: Option<crate::view_layout::ExternalFile>,
+    /// A card tab's card (PRD lane-desk-pair-view D-13); absent for every
+    /// other kind. The screen draws the card from the snapshot's sections,
+    /// as it does wherever the card shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<DetailItem>,
+    /// The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view
+    /// B24, D-41): an agent's View its opener's pane now, a card its owner's
+    /// (the record's or plan's session, a mission's Conductor, the agent that
+    /// made a pull request); absent for what the operator opened. Pair view
+    /// takes this pane to the left and folds another agent's tabs by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_pane: Option<String>,
 }
 
 impl ViewDisplaySnapshot {
@@ -550,6 +641,7 @@ impl ViewDisplaySnapshot {
             self.committed,
             self.url.as_deref(),
             self.external.as_ref(),
+            self.card.as_ref(),
         )
     }
 }
@@ -1251,6 +1343,43 @@ pub struct KitSnapshot {
     /// The machine's agent profiles as its node lists them (PRD
     /// agent-profiles D-04); `None` until they were first read.
     pub profiles: Option<ProfilesSnapshot>,
+    /// The machine's store of skills and MCP items as its kit last reported
+    /// it (PRD skill-mcp-manager): each kind's columns with the agents each
+    /// one covers, which the screen joins with `agents` to show only the
+    /// agents installed and switched on there; each item with its source,
+    /// version, update and one cell per column; what only an agent has; the
+    /// undo list; and the previews and update diffs waiting for a choice.
+    /// Each change's outcome is in `status.store_answers`, not here. `None`
+    /// until the machine was read.
+    pub store: Option<hide_kit::store::StoreReport>,
+    /// The cells whose change waits for a new session (B17): an agent
+    /// session of the cell's column that was running when the change landed
+    /// still is.
+    pub store_new_session: Vec<StoreCellRef>,
+}
+
+/// One cell of the store's table: an item and a column of its kind.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct StoreCellRef {
+    pub item: String,
+    pub column: String,
+}
+
+/// What one store request came to (`status.store_answers`), as
+/// `status.agent_profile_answer` does for profiles: the request id it
+/// carried and the machine, then each of its changes' outcomes in order once
+/// the machine's store ran them. `refused` with no outcomes is a request that
+/// never reached the store; `refused` retains its cause and log sentence. A request from the screen
+/// and one from `hide skill` / `hide mcp` each find their own by id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreAnswer {
+    pub request_id: String,
+    pub device_id: String,
+    pub state: crate::agent_profiles::AnswerState,
+    pub outcomes: Vec<hide_kit::store::ChangeOutcome>,
+    /// A refusal before any per-change outcome, such as a copy export limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<hide_kit::store::StoreRefusal>,
 }
 
 /// A machine's agent profiles: what its node lists, never a variable's
@@ -1701,6 +1830,8 @@ impl KitSnapshot {
             check_failed: None,
             refused: report.refused.as_deref().map(Into::into),
             profiles: None,
+            store: report.store.clone(),
+            store_new_session: Vec::new(),
         }
     }
 
@@ -2601,6 +2732,12 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
+    /// The core keeps this project off every list (the sidebar, the phone,
+    /// the project picker): an automation's own folder, registered only so
+    /// its runs can start there (PRD automations D-08, B30). Absent while
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -3279,6 +3416,11 @@ pub struct TabSnapshot {
     /// strip leaves it out; the sidebar and the breadcrumb still reach it
     /// (PRD B1, B4, D-40).
     pub delegated: bool,
+    /// Every pane in this tab is an automation run's: the run is reached
+    /// from the automation screen and Needs You, so neither the tab strip nor
+    /// the project's tree lists it (`Runtime::mark_automation_run_tabs`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
     pub panes: Vec<PaneSnapshot>,
 }
 
@@ -4843,11 +4985,9 @@ pub fn practice_chapter_id_valid(id: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-/// The most items the 보기 slot's ← steps back through; past it the oldest
-/// goes first (PRD sidebar-task-lens B47).
-pub const DETAIL_HISTORY_LIMIT: usize = 20;
-
-/// One thing the lane's 보기 slot shows (PRD sidebar-task-lens D-50).
+/// One of Hide's cards, which opens as a tab on a tray (PRD sidebar-task-lens
+/// D-50, lane-desk-pair-view D-13): a card display carries it
+/// (`view_layout::Display::card`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DetailItem {
@@ -4888,104 +5028,20 @@ pub enum DetailItem {
     },
 }
 
-/// The lane's 보기 slot (PRD sidebar-task-lens D-50): what it opened, oldest
-/// first with the one it shows last, and whether the lane draws it rather
-/// than its Workspace's tool. The rail keeps a slot for it while anything is
-/// open; a stored value this build cannot read loads empty.
+/// The cards an older build's 보기 slot kept for one pane, waiting to move
+/// once onto the tray of that pane's Agent tab (PRD lane-desk-pair-view
+/// D-18, B34): the pane's tab is known only once the engine lists it. `pane`
+/// absent is the slot that was in front with no pane named, which the pane
+/// in front takes. Core only; kept in `core-state.json` until moved.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DetailSlot {
+pub struct MovingCards {
     #[serde(default)]
-    pub items: Vec<DetailItem>,
+    pub pane: Option<String>,
+    #[serde(default)]
+    pub cards: Vec<DetailItem>,
+    /// The slot was drawn: its tray is shown when the cards land.
     #[serde(default)]
     pub shown: bool,
-}
-
-impl DetailSlot {
-    pub fn top(&self) -> Option<&DetailItem> {
-        self.items.last()
-    }
-
-    /// Opens `item` in front: the same item again only shows it, another one
-    /// is stepped back to by ←, and past the cap the oldest goes.
-    pub fn open(&mut self, item: DetailItem) {
-        if self.top() != Some(&item) {
-            self.items.retain(|held| held != &item);
-            self.items.push(item);
-            if self.items.len() > DETAIL_HISTORY_LIMIT {
-                self.items.remove(0);
-            }
-        }
-        self.shown = true;
-    }
-
-    /// ←: the item before the one shown; with none left the slot closes.
-    pub fn back(&mut self) {
-        self.items.pop();
-        self.shown = !self.items.is_empty();
-    }
-
-    pub fn close(&mut self) {
-        self.items.clear();
-        self.shown = false;
-    }
-}
-
-/// The most 보기 slots kept for panes not in front: the panes an operator
-/// comes back to over a day of work, with room to spare; each holds at most
-/// [`DETAIL_HISTORY_LIMIT`] items, so the saved slots stay under 1,280 items
-/// however many panes the machine has opened. Past it the slot seen longest
-/// ago goes (operator decision 2026-11-09).
-pub const DETAIL_PANE_LIMIT: usize = 64;
-
-/// A pane's 보기 slot, kept while another pane is in front.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PaneDetailSlot {
-    pub pane: String,
-    pub slot: DetailSlot,
-}
-
-/// The 보기 slots of the panes not in front, the one seen longest ago first,
-/// at most [`DETAIL_PANE_LIMIT`].
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct PaneDetailSlots(pub Vec<PaneDetailSlot>);
-
-impl PaneDetailSlots {
-    /// Keeps `slot` as the one seen last; past the cap the one seen longest
-    /// ago goes, and is returned.
-    pub fn keep(&mut self, pane: String, slot: DetailSlot) -> Option<PaneDetailSlot> {
-        self.0.retain(|held| held.pane != pane);
-        self.0.push(PaneDetailSlot { pane, slot });
-        (self.0.len() > DETAIL_PANE_LIMIT).then(|| self.0.remove(0))
-    }
-
-    /// Takes `pane`'s slot out, to stand in front.
-    pub fn take(&mut self, pane: &str) -> Option<DetailSlot> {
-        let index = self.0.iter().position(|held| held.pane == pane)?;
-        Some(self.0.remove(index).slot)
-    }
-
-    /// Opens `item` in `pane`'s slot while another pane is in front; the slot
-    /// counts as seen now, and the one past the cap is returned.
-    pub fn open_in(&mut self, pane: String, item: DetailItem) -> Option<PaneDetailSlot> {
-        let mut slot = self.take(&pane).unwrap_or_default();
-        slot.open(item);
-        self.keep(pane, slot)
-    }
-
-    /// Keeps only the slots `keep` answers for, emptied ones dropped.
-    pub fn retain(&mut self, mut keep: impl FnMut(&PaneDetailSlot) -> bool) {
-        self.0
-            .retain(|held| !held.slot.items.is_empty() && keep(held));
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -5101,24 +5157,10 @@ pub struct UiStateSnapshot {
     /// opened a chapter loses it through `practice` instead.
     #[serde(default)]
     pub practice_invite_closed: bool,
-    /// The lane's 보기 slot (D-50) of the pane in front: a pull request's
-    /// card, a session's record or a mission's map, which belongs to the pane
-    /// it was opened for (`detail_pane`; operator decision 2026-11-09).
-    /// Another pane in front swaps its own slot in
-    /// (`Runtime::sync_detail_pane`), so the wire and the shell see only the
-    /// front pane's.
-    #[serde(default)]
-    pub detail: DetailSlot,
-    /// The pane `detail` belongs to; none until a pane is in front after a
-    /// launch, when the slot loaded then (one an older build kept for its
-    /// front tab or window-wide) attaches to the pane then in front. Core
+    /// Slot cards still moving onto their pane's tray (`MovingCards`). Core
     /// only.
     #[serde(default, skip_serializing)]
-    pub detail_pane: Option<String>,
-    /// The 보기 slots of the panes not in front; a slot ends with its pane.
-    /// Core only.
-    #[serde(default, skip_serializing)]
-    pub detail_panes: PaneDetailSlots,
+    pub moving_cards: Vec<MovingCards>,
     /// The Overview Work map's filter, hidden and folded projects, hand
     /// team folds and dragged places (PRD overview-graph-remembered D-05).
     #[serde(default)]
@@ -6118,9 +6160,7 @@ impl Default for UiStateSnapshot {
             sidebar_project: None,
             practice: BTreeMap::new(),
             practice_invite_closed: false,
-            detail: DetailSlot::default(),
-            detail_pane: None,
-            detail_panes: PaneDetailSlots::default(),
+            moving_cards: Vec::new(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
@@ -7759,6 +7799,15 @@ pub struct StatusSnapshot {
     /// agent-profiles B2-B13); absent until one was made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
+    /// What the latest store requests came to, oldest first, at most
+    /// `kit_store::ANSWER_LIMIT` (PRD skill-mcp-manager): a request finds its
+    /// own by id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_answers: Vec<StoreAnswer>,
+    /// The installs and updates agents asked for with `hide skill` /
+    /// `hide mcp` that wait on the operator's confirm (B32).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_asks: Vec<crate::runtime::StoreAskSnapshot>,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -8506,6 +8555,7 @@ impl Snapshot {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             },
             connection: ConnectionSnapshot {
@@ -8575,6 +8625,8 @@ impl Snapshot {
                 ssh_hosts: SshHostsSnapshot::default(),
                 machine_profiles: MachineProfilesSnapshot::default(),
                 agent_profile_answer: None,
+                store_answers: Vec::new(),
+                store_asks: Vec::new(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -8602,6 +8654,7 @@ impl Snapshot {
             desk_jobs: None,
             desk_mentions: None,
             access: None,
+            automations: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -8662,6 +8715,7 @@ pub struct SnapshotDeltaPayload {
     pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     pub access: Option<Arc<AccessSnapshot>>,
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -8724,6 +8778,8 @@ pub struct SnapshotDeltaWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<&'a AccessSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub automations: Option<&'a crate::automations::AutomationsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_panel: Option<&'a crate::links::LinkPanelSnapshot>,
@@ -8784,6 +8840,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             desk_jobs: payload.desk_jobs.as_deref(),
             desk_mentions: payload.desk_mentions.as_deref(),
             access: payload.access.as_deref(),
+            automations: payload.automations.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -9276,10 +9333,10 @@ mod wire_enum_tests {
         checked.insert("ask_subject_cause");
 
         use crate::coordination::human_turn::HumanKind;
-        let human_kinds = [HumanKind::Auth, HumanKind::Permission];
+        let human_kinds = [HumanKind::Auth, HumanKind::Permission, HumanKind::Install];
         for variant in human_kinds {
             match variant {
-                HumanKind::Auth | HumanKind::Permission => {}
+                HumanKind::Auth | HumanKind::Permission | HumanKind::Install => {}
             }
         }
         assert_wire(&contract, "human_kind", &human_kinds);
@@ -10742,14 +10799,10 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_fix_reason", &fixes);
             checked.insert("mission_fix_reason");
             use crate::missions::WarningKind;
-            let warnings = [
-                WarningKind::ReviewFails,
-                WarningKind::NoPush,
-                WarningKind::Stopped,
-            ];
+            let warnings = [WarningKind::ReviewFails, WarningKind::Stopped];
             for variant in warnings {
                 match variant {
-                    WarningKind::ReviewFails | WarningKind::NoPush | WarningKind::Stopped => {}
+                    WarningKind::ReviewFails | WarningKind::Stopped => {}
                 }
             }
             assert_wire(&contract, "mission_warning_kind", &warnings);
@@ -10807,18 +10860,10 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
             use crate::delivery::held::HeldFor;
-            let held = [
-                HeldFor::Unreachable,
-                HeldFor::Approval,
-                HeldFor::Draft,
-                HeldFor::Unanswered,
-            ];
+            let held = [HeldFor::Approval, HeldFor::Draft];
             for variant in held {
                 match variant {
-                    HeldFor::Unreachable
-                    | HeldFor::Approval
-                    | HeldFor::Draft
-                    | HeldFor::Unanswered => {}
+                    HeldFor::Approval | HeldFor::Draft => {}
                 }
             }
             assert_wire(&contract, "mission_letters_held_for", &held);
@@ -10829,6 +10874,7 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Asleep,
                 NodeWork::Stopped {
                     cause: None,
                     since_unix_ms: 0,
@@ -10841,6 +10887,7 @@ mod wire_enum_tests {
                 match variant {
                     NodeWork::Working
                     | NodeWork::Waiting { .. }
+                    | NodeWork::Asleep
                     | NodeWork::Stopped { .. }
                     | NodeWork::NoWorker { .. } => {}
                 }
@@ -11699,6 +11746,90 @@ mod wire_enum_tests {
         assert_wire(&contract, "session_thread_view_kind", &views);
         checked.insert("session_thread_view_kind");
 
+        use crate::automations::{MissedReason, PauseReason, RunState, Trigger, Weekday};
+        let triggers = [Trigger::Scheduled, Trigger::Manual, Trigger::Missed];
+        for variant in triggers {
+            match variant {
+                Trigger::Scheduled | Trigger::Manual | Trigger::Missed => {}
+            }
+        }
+        assert_wire(&contract, "automation_trigger", &triggers);
+        checked.insert("automation_trigger");
+
+        let states = [
+            RunState::Starting,
+            RunState::Running,
+            RunState::Succeeded,
+            RunState::Failed,
+            RunState::Stopped,
+        ];
+        for variant in states {
+            match variant {
+                RunState::Starting
+                | RunState::Running
+                | RunState::Succeeded
+                | RunState::Failed
+                | RunState::Stopped => {}
+            }
+        }
+        assert_wire(&contract, "automation_run_state", &states);
+        checked.insert("automation_run_state");
+
+        let pauses = [
+            PauseReason::Operator,
+            PauseReason::LoginExpired,
+            PauseReason::FolderMissing,
+            PauseReason::AgentMissing,
+            PauseReason::FolderDetached,
+            PauseReason::MachineChanged,
+            PauseReason::FolderInRepository,
+        ];
+        for variant in pauses {
+            match variant {
+                PauseReason::Operator
+                | PauseReason::LoginExpired
+                | PauseReason::FolderMissing
+                | PauseReason::AgentMissing
+                | PauseReason::FolderDetached
+                | PauseReason::MachineChanged
+                | PauseReason::FolderInRepository => {}
+            }
+        }
+        assert_wire(&contract, "automation_pause_reason", &pauses);
+        checked.insert("automation_pause_reason");
+
+        let missed = [MissedReason::CoreOff, MissedReason::Asleep];
+        for variant in missed {
+            match variant {
+                MissedReason::CoreOff | MissedReason::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "automation_missed_reason", &missed);
+        checked.insert("automation_missed_reason");
+
+        let days = [
+            Weekday::Sun,
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+        ];
+        for variant in days {
+            match variant {
+                Weekday::Sun
+                | Weekday::Mon
+                | Weekday::Tue
+                | Weekday::Wed
+                | Weekday::Thu
+                | Weekday::Fri
+                | Weekday::Sat => {}
+            }
+        }
+        assert_wire(&contract, "automation_weekday", &days);
+        checked.insert("automation_weekday");
+
         {
             use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};
             let opens = [
@@ -11757,6 +11888,103 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "peer_update", &updates);
             checked.insert("peer_update");
+        }
+
+        {
+            use hide_kit::store::{
+                CellFailure, CellState, ItemKind, StorePassRefusal, StoreRefusalCause,
+            };
+            let kinds = [ItemKind::Skill, ItemKind::Mcp];
+            for variant in kinds {
+                match variant {
+                    ItemKind::Skill | ItemKind::Mcp => {}
+                }
+            }
+            assert_wire(&contract, "store_item_kind", &kinds);
+            checked.insert("store_item_kind");
+
+            let cells = [
+                CellState::On,
+                CellState::Off,
+                CellState::Waiting,
+                CellState::HandWritten,
+                CellState::Failed,
+                CellState::Unsupported,
+                CellState::AgentOff,
+            ];
+            for variant in cells {
+                match variant {
+                    CellState::On
+                    | CellState::Off
+                    | CellState::Waiting
+                    | CellState::HandWritten
+                    | CellState::Failed
+                    | CellState::Unsupported
+                    | CellState::AgentOff => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_state", &cells);
+            checked.insert("store_cell_state");
+
+            let causes = [
+                StoreRefusalCause::NotFound,
+                StoreRefusalCause::NoSkills,
+                StoreRefusalCause::NoAccess,
+                StoreRefusalCause::Unreachable,
+                StoreRefusalCause::NoGit,
+                StoreRefusalCause::TooLarge,
+                StoreRefusalCause::NameTaken,
+                StoreRefusalCause::Differs,
+                StoreRefusalCause::TooMany,
+                StoreRefusalCause::Unsupported,
+                StoreRefusalCause::Failed,
+            ];
+            for variant in causes {
+                match variant {
+                    StoreRefusalCause::NotFound
+                    | StoreRefusalCause::NoSkills
+                    | StoreRefusalCause::NoAccess
+                    | StoreRefusalCause::Unreachable
+                    | StoreRefusalCause::NoGit
+                    | StoreRefusalCause::TooLarge
+                    | StoreRefusalCause::NameTaken
+                    | StoreRefusalCause::Differs
+                    | StoreRefusalCause::TooMany
+                    | StoreRefusalCause::Unsupported
+                    | StoreRefusalCause::Failed => {}
+                }
+            }
+            assert_wire(&contract, "store_refusal_cause", &causes);
+            checked.insert("store_refusal_cause");
+
+            let refusals = [
+                StorePassRefusal::KeysSecretGone,
+                StorePassRefusal::Unreadable,
+            ];
+            for variant in refusals {
+                match variant {
+                    StorePassRefusal::KeysSecretGone | StorePassRefusal::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "store_pass_refusal", &refusals);
+            checked.insert("store_pass_refusal");
+
+            let failures = [
+                CellFailure::Unreadable,
+                CellFailure::Unwritable,
+                CellFailure::Keys,
+                CellFailure::Pending,
+            ];
+            for variant in failures {
+                match variant {
+                    CellFailure::Unreadable
+                    | CellFailure::Unwritable
+                    | CellFailure::Keys
+                    | CellFailure::Pending => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_failure", &failures);
+            checked.insert("store_cell_failure");
         }
 
         let unchecked = contract
@@ -11931,56 +12159,5 @@ mod release_1_2_1_wire_tests {
         let wire = serde_json::to_value(&row).unwrap();
         assert_eq!(wire["given_name"], json!("reviewer"));
         assert!(wire.get("herdr_name").is_none());
-    }
-}
-
-#[cfg(test)]
-mod pane_detail_slot_tests {
-    use super::*;
-
-    fn pane(index: usize) -> String {
-        format!("w1:p{index}")
-    }
-
-    fn holding(index: usize) -> DetailSlot {
-        let mut slot = DetailSlot::default();
-        slot.open(DetailItem::Mission {
-            mission: format!("mission-{index}"),
-        });
-        slot
-    }
-
-    /// Thousands of panes never grow the kept slots past the cap: the slot
-    /// seen longest ago goes first, and one seen again counts as new.
-    #[test]
-    fn the_kept_slots_stop_at_the_cap_and_the_one_seen_longest_ago_goes() {
-        let mut slots = PaneDetailSlots::default();
-        for index in 0..DETAIL_PANE_LIMIT {
-            assert_eq!(slots.keep(pane(index), holding(index)), None);
-        }
-        // Pane 0 comes in front and leaves again: it is the newest now.
-        let front = slots.take(&pane(0)).unwrap();
-        assert_eq!(slots.keep(pane(0), front), None);
-
-        let evicted = slots.keep(pane(DETAIL_PANE_LIMIT), holding(DETAIL_PANE_LIMIT));
-        assert_eq!(evicted.map(|gone| gone.pane), Some(pane(1)));
-        assert_eq!(slots.len(), DETAIL_PANE_LIMIT);
-        assert!(slots.take(&pane(0)).is_some(), "the slot seen again stays");
-
-        let evicted = slots.open_in(
-            pane(DETAIL_PANE_LIMIT + 1),
-            DetailItem::Mission {
-                mission: "new".into(),
-            },
-        );
-        assert_eq!(evicted, None, "taking pane 0 out made room");
-        let evicted = slots.open_in(
-            pane(DETAIL_PANE_LIMIT + 2),
-            DetailItem::Mission {
-                mission: "newer".into(),
-            },
-        );
-        assert_eq!(evicted.map(|gone| gone.pane), Some(pane(2)));
-        assert_eq!(slots.len(), DETAIL_PANE_LIMIT);
     }
 }

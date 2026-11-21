@@ -84,14 +84,14 @@ import { requestLine } from "./editor/lineRequest";
 import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
 import type { AiItemRef } from "./hideAi";
-import { homeOpening } from "./hideAiOrigin";
+import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { focusedPaneOf, useShellStore } from "./store";
-import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
@@ -118,7 +118,8 @@ import {
   type ViewMenuId,
   type ViewWorkspace,
 } from "./viewLayout";
-import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { drawnPair, pairBesideDesk, pairModeOn } from "./pairView";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -129,10 +130,10 @@ function deviceField(device: string, node: string): { device_id?: string } {
 export type Actions = ReturnType<typeof createActions>;
 
 /**
- * Whether an event puts the front Workspace's unpinned lane up (PRD
- * right-lane B15, B16): a tool, a reveal or a linked folder. Read here,
- * where every operator event passes, so no path can forget it; it is page
- * state and never sent. Choosing an agent or a tab leaves the lane as it
+ * Whether an event calls the front Workspace's lane up (PRD right-lane B15,
+ * B16): a tool, a reveal, the desk, an open or a linked folder. Read here,
+ * where every operator event passes, so no path can forget to draw the
+ * column the call is for in a stacked lane. Choosing an agent or a tab leaves the lane as it
  * is: only the operator closes it. An open, a History selection or a Recent
  * Panels display calls the lane through the core's call number instead
  * (`laneCalls.ts`), the one way a call from the CLI or another page arrives too.
@@ -468,7 +469,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * did once. The core keeps the lane per Workspace, so another Workspace is
    * never touched.
    */
-  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; document_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string; pair_ratio?: number }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -484,12 +485,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** Whether the viewing column draws `view` now. */
   const viewUp = (view: LaneView) => laneUp() && ui().drawnLane.view === view;
 
-  /** Whether the core says the 보기 slot stands in front of the documents (PRD sidebar-task-lens D-50). */
-  const detailShown = () => {
-    const detail = rest()?.ui_state?.detail;
-    return Boolean(detail?.shown && detail.items.length > 0);
-  };
-
   /**
    * Shows one tool in the tool column (B3, B14): a stacked lane draws the
    * tool, and nothing is sent when the column already holds it. An open lane's viewing column is left as it is; a
@@ -503,7 +498,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
-   * Puts `item` in a 보기 slot (PRD sidebar-task-lens B14, B15;
+   * Puts `item` as a card tab on a desk (PRD sidebar-task-lens B14, B15;
    * lane-two-columns B9) where it was pressed (operator decision
    * 2026-11-09): `here` the slot in front, the Workspace, its Agent tab and
    * the keyboard staying; `{ pane }` or `owner` the slot of that agent, whose
@@ -512,10 +507,27 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** The `at` an open event carries; `here` is the core's default and goes unsaid. */
   const placeOf = (at: import("./snapshot").DetailPlace) => (at === "here" ? {} : { at });
 
-  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here") => {
+  /**
+   * Every card the operator opens (`detail_open`, `pr_open`) goes out here,
+   * so the keyboard follows each kind the same way: once the snapshot that
+   * includes the open shows the card in front of the drawn desk, on whichever
+   * tab or checkout the core brought forward for the card's owner, the card
+   * takes the keyboard, as an open from the Explorer or ⌘P does (B20), so
+   * the close chord closes the card rather than the agent pane the core
+   * focused with it (`ViewAreas.tsx`). `keyboard: false` is a press that
+   * keeps the keys where they are (an agent pane's head, whose title keeps
+   * them in its terminal, and a Hide AI branch's card) and drops a card's
+   * earlier pending claim.
+   */
+  const sendCardOpen = (item: import("./snapshot").DetailItem, event: Parameters<DispatchFn>[0], keyboard = true) => {
+    ui().setViewFocusRequest(keyboard ? { card: item } : null);
+    dispatch(event);
+  };
+
+  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here", keyboard = true) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().setStackFront("view");
-    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
+    sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } }, keyboard);
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
@@ -581,7 +593,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
-   * What a mission's detail opens in the 보기 slot (a node's plan, a worker's
+   * What a mission's detail opens as a card tab on a desk (a node's plan, a worker's
    * or checker's record) is drawn by the Workspace in front, not on the
    * mission screen, so the screen gives way to it first (PRD mission-screen
    * D-09); with no Workspace in front the screen stays.
@@ -590,7 +602,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (ui().screen?.kind === "missions" && frontCheckout(rest()) && workspaceViewOf(rest())) ui().setScreen({ kind: "workspace" });
   };
 
-  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape in the lane; both columns keep their shape for ⌘E's reopen. */
   const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
@@ -600,31 +612,64 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleTool = (tool: Tool) => (toolUp(tool) ? closeTool() : showTool(tool));
 
   /**
-   * Brings the documents in front of the viewing column (B6, B11): an
-   * unpinned lane comes up, a stacked lane draws them, and the keyboard goes
+   * Brings the desk in front of the viewing column (B6, B11): the lane comes
+   * up, a stacked lane draws them, and the keyboard goes
    * into the active area, so typing and ⌘W act on the document the operator
-   * brought back rather than on the terminal behind it.
+   * brought back rather than on the terminal behind it. From the rail's desk
+   * button it stops on the area's front tab instead: a click or Tab enters
+   * the editor, and Escape there closes the lane (PRD lane-desk-pair-view B30).
    */
-  const showDocuments = () => {
+  const showDocuments = (onTab = false) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().setStackFront("view");
-    if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
+    if (!view.open || !view.tray.shown) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
-      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
+      const workspace = { device_id: view.device_id, path: view.path };
+      if (onTab) ui().setViewFocusRequest({ workspace: workspaceKey(workspace), areaId: view.layout.active_area, tab: true });
+      else followFocus({ workspace, layout: view.layout }, { areaId: view.layout.active_area });
     }
   };
 
-  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. */
-  const closeDocuments = () => setWorkspaceView({ documents: false });
+  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
+  const closeDocuments = () => {
+    if (pairBesideDesk(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    setWorkspaceView({ documents: false });
+  };
 
   /** The rail's documents button or its command (B2, B11): the documents fold while they show, else they come in front; with no document nothing happens but a diagnostic. */
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
+    // In focus mode the desk button is ⌘E: it folds the desk beside the pane and stands it again (D-57, D-63).
+    if (drawnPair(view)) return showPairDesk(pairBesideDesk(view) === null);
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
-    showDocuments();
+    showDocuments(true);
+  };
+
+  /**
+   * One `pair_view` event; asking for a pane notes the keyboard's input count
+   * first, so the pane arriving with the core's answer takes the keys only if
+   * the operator has not moved them since (`pairEntryInput`).
+   */
+  const askPairView = (payload: { pane_id?: string; display_id?: string }) => {
+    if (payload.pane_id) useUiStore.setState({ pairEntryInput: keyboardInputRevision() });
+    dispatch({ schema_version: 2, kind: "pair_view", payload });
+  };
+
+  /**
+   * Focus mode's desk beside the pane, shown or folded (D-57): one event, the
+   * core's to decide, and a desk shown takes the keyboard into its active
+   * area. A desk with no tab the strip shows stands for nobody: the core's
+   * `shown` count says so, and only the log records the ask (D-60, D-63).
+   */
+  const showPairDesk = (shown: boolean) => {
+    const view = workspaceViewOf(rest());
+    if (!view) return diagnostic("workspace_view: no Workspace in front");
+    if (shown && (drawnPair(view)?.shown ?? 0) === 0) return diagnostic("pair_view_desk: no tab the strip shows to stand beside the pane");
+    dispatch({ schema_version: 2, kind: "pair_view_desk", payload: { shown } });
+    if (shown && view.layout) followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
   };
 
   /**
@@ -636,19 +681,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleLane = () => {
     // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
     if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
+    // In focus mode ⌘E folds the desk beside the pane and stands it again; folded, the pane is drawn alone,
+    // (D-57). Only ⌘., ◧ and the band's way back end the mode (D-46, D-65).
+    const pairView = workspaceViewOf(rest());
+    if (drawnPair(pairView)) return showPairDesk(pairBesideDesk(pairView) === null);
     if (laneUp()) return closeLane();
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     setWorkspaceView({ open: true });
-    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.documents || view.tool === null);
+    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.tray.shown || view.tool === null);
     if (documents && view.layout) {
       followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
-  };
-
-  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it with ⌘E or Escape. */
-  const setLanePinned = (pinned: boolean) => {
-    setWorkspaceView({ pinned });
   };
 
   /**
@@ -1257,6 +1301,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openSettings(tab);
     },
 
+    /** 확인하기 on an install an agent asked for: its confirm in Settings › 스킬·MCP. */
+    openStoreAsk(id: string) {
+      ui().openStoreAsk(id);
+    },
+
     setAccent(hex: string) {
       updateUiState({ accent_hex: hex });
     },
@@ -1616,6 +1665,29 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     changeAgentProfile(deviceId: string, requestId: string, change: import("./agentProfiles").ProfileChange) {
       dispatch({ schema_version: 2, kind: "agent_profile_change", payload: { device_id: deviceId, request_id: requestId, change } });
+    },
+
+    /**
+     * Changes to one machine's store of skills and MCP items, in order (PRD
+     * skill-mcp-manager): a switch, an install, a delete, an undo, a take-over,
+     * an update. The core answers in `status.store_answers` under `requestId`.
+     */
+    changeStore(deviceId: string, requestId: string, changes: import("./snapshot").StoreChange[]) {
+      dispatch({ schema_version: 2, kind: "kit_store", payload: { device_id: deviceId, request_id: requestId, changes } });
+    },
+
+    /** [이 Mac에서 복사] for a device (B28): this Mac's store goes to that device's; the answer lands under `requestId`. */
+    copyStore(deviceId: string, requestId: string) {
+      dispatch({ schema_version: 2, kind: "kit_store_copy", payload: { device_id: deviceId, request_id: requestId } });
+    },
+
+    /**
+     * The operator's answer to an install or update an agent asked for (B32):
+     * `confirm` false declines it; an MCP's key values typed on the confirm
+     * travel only in this event, to the machine's store.
+     */
+    answerStoreAsk(id: string, confirm: boolean, detail: { names?: string[]; keys?: Record<string, string> } = {}) {
+      dispatch({ schema_version: 2, kind: "store_ask_answer", payload: { id, confirm, ...detail } });
     },
 
     /** A tab showing the kit opened: this Mac's parts are read once. */
@@ -1998,7 +2070,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A Hide AI branch in the lane's 보기 slot (PRD hide-ai-branch-first-apply
+     * A Hide AI branch as a card tab on a desk (PRD hide-ai-branch-first-apply
      * B4): its card of files, or with `path` that file's diff against the
      * branch's base. One event; the checkout in front, its Agent tab and the
      * keyboard stay where they are.
@@ -2006,13 +2078,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openBranchCard(workspaceId: string, row: string, path?: string | null) {
       const state = ui();
       if (state.overviewOpen) state.setOverviewOpen(false);
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "branch", workspace_id: workspaceId, row, ...(path ? { path } : {}) } } });
+      const item = { kind: "branch", workspace_id: workspaceId, row, ...(path ? { path } : {}) } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item } }, false);
     },
 
     /**
      * A session link retains repository identity even when its maker moved
      * projects. `at` says where it was pressed: an agent's row passes its
-     * pane, a card in the 보기 slot `here`, and a place with no agent leaves
+     * pane, a card tab on the desk in front `here`, and a place with no agent leaves
      * it to the agent that made the pull request.
      */
     openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}, at: import("./snapshot").DetailPlace = "owner") {
@@ -2025,7 +2098,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A pull request's decision card (PRD sidebar-task-lens D-50, B14,
-     * B17): one event, and the core puts the card in the 보기 slot of the
+     * B17): one event, and the core puts the card on the desk of the
      * agent `at` names (operator decision 2026-11-09): by default the one
      * that made it, which comes forward with its pane. At Home the PR's
      * Workspace opens too, with the card in its lane. A project this core
@@ -2043,7 +2116,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
+      sendCardOpen({ kind: "pull_request", workspace_id: projectId, number }, { schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
     },
 
     /**
@@ -2060,7 +2133,61 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A mission's map as a card in the lane's 보기 slot, under the same rules
+     * The sidebar's `자동화` row (PRD automations B1, D-01): the automation
+     * screen on its table, whatever the center showed, as the `미션` row opens
+     * the mission screen.
+     */
+    openAutomations() {
+      ui().setAutomations(AUTOMATION_ENTRY);
+      ui().setScreen({ kind: "automations" });
+    },
+
+    /**
+     * One automation on the automation screen, with the run whose terminal
+     * the detail shows, if any (B11, B15-B17): the sidebar's row, a Needs You
+     * line or a run agent's row brings it, whatever the center showed.
+     */
+    openAutomation(id: string, run: number | null = null) {
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      state.setAutomations({ selected: id, run, form: null });
+      if (state.screen?.kind !== "automations") state.setScreen({ kind: "automations" });
+    },
+
+    /**
+     * A press on an automation whose result the snapshot shows (PRD
+     * automations B11, B16, B19, B23, B25, B27): `automation_run`,
+     * `automation_pause`, `automation_resume`, `automation_remove`,
+     * `automation_seen`, `automation_run_stop` and `automation_run_viewing`,
+     * each the core's `Call` of that name. A refusal is the core's to log;
+     * the screen draws what the section then says. Opening a finished run's
+     * conversation is a call the run view waits on (`callAutomations`), since
+     * its refusal is the operator's to read.
+     */
+    automation(kind: "run" | "pause" | "resume" | "remove" | "seen", id: string) {
+      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id } });
+    },
+    automationRunStop(id: string, run: number) {
+      dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
+    },
+    /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
+    automationRunViewing(id: string, run: number, on: boolean, restore: string | null = null) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on, ...(restore ? { restore } : {}) } });
+    },
+
+    /**
+     * A run's terminal shown in the automation screen (operator decision
+     * 2026-11-21): the core's focus moves to the run's tab, so the desk in
+     * front is the run's, with what its agent opened and the operator has
+     * not seen brought forward, and the screen draws it beside the
+     * terminal. No opening begins, so the screen stays where it is.
+     */
+    showAutomationRunPane(paneId: string) {
+      dispatch(openPaneEvent(paneId, { revealUnseen: true }).event);
+    },
+
+    /**
+     * A mission's map as a card tab on a desk, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
      * You row and the Overview open it in the Conductor's slot, which the
@@ -2091,7 +2218,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         state.setScreen({ kind: "workspace" });
       }
       ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, ...placeOf(at) } });
+      const item = { kind: "mission", mission: missionId } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
     },
 
     /**
@@ -2112,7 +2240,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
     },
 
-    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card in the 보기 slot the core reads itself. */
+    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card as a card tab on a desk the core reads itself. */
     missionShown(missionId: string | null) {
       dispatch({ schema_version: 2, kind: "mission_shown", payload: { mission: missionId } });
     },
@@ -2126,6 +2254,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** 미션 종료 (UI_BEHAVIOR, A mission's map): the core asks the Conductor to end it, or cancels a mission no Conductor holds. */
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
+    },
+    /** 치우기 on a mission's 내 차례 row (operator decision 2026-11-20): the core keeps the row out until something newer asks the operator. */
+    putAwayMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_put_away", payload: { mission: missionId } });
     },
     /** 다시 열기 on a closed mission's map (PRD mission-node-simple B18): the operator's reopen, as the Conductor's `hide mission reopen`. */
     reopenMission(missionId: string) {
@@ -2246,9 +2378,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       openDetail(item);
     },
 
+    /** A card's control pressed while its card is in front of the drawn desk folds the desk; otherwise it opens the card (PRD lane-desk-pair-view B6). */
     toggleDetailItem(item: import("./snapshot").DetailItem) {
-      if (detailShown() && viewUp("detail") && sameDetailItem(rest()?.ui_state?.detail?.items.at(-1), item)) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
+      if (viewUp("documents") && sameDetailItem(frontCard(workspaceViewOf(rest())), item)) {
+        return setWorkspaceView({ documents: false });
       }
       openDetail(item);
     },
@@ -2265,24 +2398,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openSettings("conductor");
     },
 
-    /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
-    detailBack() {
-      dispatch({ schema_version: 2, kind: "detail_back", payload: {} });
-    },
-
-    /** ✕ in the 보기 head (B47): the slot empties and the lane goes back to its tool, or closes. */
-    detailClose() {
-      dispatch({ schema_version: 2, kind: "detail_close", payload: {} });
-    },
-
-    /** The rail's 보기 button (lane-two-columns B11): the viewing column draws the slot again, or, pressed while it does, folds. */
-    toggleDetail() {
-      if (detailShown() && viewUp("detail")) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
-      }
-      ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
-    },
 
     /** The 프로젝트 | 태스크 switch (B1), or ⇧⌘B with `show` set while the sidebar is hidden (B2). */
     setSidebarLens(lens: import("./snapshot").SidebarLens, show = false) {
@@ -2320,7 +2435,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * A task's row asked for from outside the list (B40): a pane head's agent
      * tree button or a started backlog item. The sidebar shows the 태스크 list
      * with the row unfolded and selected, and the agent's record opens in the
-     * 보기 slot, or in the Overview's panel at Home.
+     * desk, or in the Overview's panel at Home.
      */
     revealTask(paneId: string) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
@@ -2720,6 +2835,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
+      // An automation run's row opens the run in the automation screen, where opening it puts the row away; a View it opened has its own chip (operator decision 2026-11-21).
+      const run = automationOpening(state.automations, agent);
+      if (run) return this.openAutomation(run.id, run.run);
       this.openAgent(paneId, agent?.look);
     },
 
@@ -2995,9 +3113,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
         displayId: viewUp("documents") ? area?.active ?? null : null,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
-        detailShown: ui().screen?.kind === "workspace" && !ui().overviewOpen && viewUp("detail"),
       });
-      if (target.kind === "detail") return this.detailClose();
       if (target.kind === "view") return closeView(target.id);
       if (target.kind === "pane") return this.closePane(target.id);
       diagnostic(`close_shortcut: ${target.reason}`);
@@ -3189,6 +3305,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /** Zooms or unzooms `target`, a pane the operator pointed at, else the focused pane. */
     toggleZoom(target?: string) {
+      // Focus mode leaves the tab's layout and zoom as they are, a device pane's too; the pane is alone already (D-16, D-65).
+      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       if (remoteContext(rest())) {
         const host = remoteHost("shell.command.zoomPane");
         if (!host) return;
@@ -3200,6 +3318,48 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("toggle_zoom: no focused pane");
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * ◧ on a pane's head or in its menus, and the band's way back (PRD
+     * lane-desk-pair-view B18, B20, B26, D-46, D-53): the pane beside its
+     * tab's desk, or alone while it has no View to show, or, pressed on the
+     * pane already there, pair view off everywhere (D-45). The core decides
+     * what the desk puts in front.
+     */
+    togglePairView(paneId: string) {
+      const pair = drawnPair(workspaceViewOf(rest()));
+      askPairView(pair?.pane_id === paneId ? {} : { pane_id: paneId });
+    },
+
+    /**
+     * ⌘. (B18, B26, D-45, D-53): the mode turns off wherever the keyboard
+     * is; otherwise, with the keyboard on a desk tab, that tab enters it in
+     * front beside the pane it belongs to, as its pin does; elsewhere the
+     * focused pane enters it, beside its desk or alone. One key, one event.
+     */
+    pairViewKey() {
+      const view = workspaceViewOf(rest());
+      if (pairModeOn(view)) return askPairView({});
+      const owner = keyboardCommandOwner();
+      const onDesk = owner.kind === "view" && view?.layout ? findArea(view.layout.root, owner.areaId)?.active ?? null : null;
+      if (onDesk) return this.pinPairView(onDesk);
+      const paneId = useShellStore.getState().focusedPaneId;
+      if (!paneId) return diagnostic("pair_view: no focused pane");
+      askPairView({ pane_id: paneId });
+    },
+
+    /**
+     * A desk tab's pin (B17, D-21, D-42): that tab beside the pane of the
+     * agent it belongs to, or the focused pane for a tab nobody's agent
+     * opened. The desk draws no pin in pair view.
+     */
+    pinPairView(displayId: string) {
+      const view = workspaceViewOf(rest());
+      const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
+      const paneId = owner ?? useShellStore.getState().focusedPaneId;
+      if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");
+      askPairView({ pane_id: paneId, display_id: displayId });
     },
 
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF
@@ -3357,14 +3517,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
-     * 보기 slot of the agent `at` names (operator decision 2026-11-09), by
+     * desk of the agent `at` names (operator decision 2026-11-09), by
      * default the session's own, which the core brings forward with its
      * pane, where it starts its read, or in the Overview's panel when no
      * Workspace is in front. A session with no pane on this machine opens in
      * the slot in front.
      */
-    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
-      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at);
+    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner", keyboard = true) {
+      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at, keyboard);
       // A tool's Overview page opens its own session's record in its own panel, so the press stays in the tool's cell (PRD hide-external-control B40).
       const screen = ui().screen;
       if (screen?.kind === "main" && screen.tool !== undefined && !ui().overviewOpen) {
@@ -3375,7 +3535,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
     /**
-     * A session's plan, large in the lane's 보기 slot (PRD hide-plan B11), in
+     * A session's plan, large as a card tab on a desk (PRD hide-plan B11), in
      * the session's own slot as its record opens (operator decision
      * 2026-11-09); a mission node's `크게 ›` passes `here`, so the plan stays
      * in the slot the map was pressed in, as a worker's record does.
@@ -3383,7 +3543,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openPlan(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
       leaveMissionsForSlot();
       if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...placeOf(at) } });
+      const item = { kind: "plan", session } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
     },
     /**
      * ⇧⌘U: pins the focused pane's plan chip open, or a Conductor pane's
@@ -3408,17 +3569,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         leaveMissionsForSlot();
         return this.openSessionRecord(session);
       }
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
+      const item = { kind: "record", session } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item } });
     },
     /**
-     * A pane head's title (B15): the pane's slot shows that session's
-     * record, or, when the lane already draws it, the lane goes back to its
-     * tool. The keyboard goes to the pane pressed.
+     * A pane head's title (B15): its session's record opens on the pane's
+     * tab desk, or, while the drawn desk shows it in front, the desk folds.
+     * The keyboard goes to the pane pressed.
      */
     togglePaneRecord(session: import("./snapshot").WorkSession, paneId: string) {
-      const top = rest()?.ui_state?.detail?.items.at(-1);
-      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("detail")) return this.toggleDetail();
-      this.openSessionRecord(session, { pane: paneId });
+      const top = frontCard(workspaceViewOf(rest()));
+      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("documents")) return setWorkspaceView({ documents: false });
+      this.openSessionRecord(session, { pane: paneId }, false);
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
       dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });
@@ -3476,22 +3638,23 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });
     },
-    /** The Overview panel's record closed: the 보기 slot's own record, when it holds one, is read again. */
+    /** The Overview panel's record closed: the record in front of the desk, when there is one, is read again. */
     leaveOverviewRecord() {
       // Another record taking the panel reads its own session; only a record that left the screen hands the read back.
       const state = ui();
       const shown = state.overviewOpen || state.screen?.kind === "main";
       if (shown && state.overview.panel?.kind === "record") return;
-      const top = rest()?.ui_state?.detail?.items.at(-1);
+      const top = frontCard(workspaceViewOf(rest()));
       const lane = top?.kind === "record" ? top.session : null;
       if (lane) dispatch({ schema_version: 2, kind: "session_record_open", payload: { session: lane } });
       else dispatch({ schema_version: 2, kind: "session_record_close", payload: {} });
     },
-    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and the 보기 slot shows the same record. */
+    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and a desk shows the same record. */
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
+      const item = { kind: "record", session } as const;
+      sendCardOpen(item, { schema_version: 2, kind: "detail_open", payload: { item } });
     },
     /**
      * A tile of the record's 결과물 gallery (PRD session-docs-and-assistant
@@ -3515,7 +3678,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && front?.device_id === deviceId && front.path === checkoutPath) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && state.screen?.kind !== "automations" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
         focusView(displayId, true);
         return;
@@ -3536,7 +3699,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     toggleDocuments,
     showDocuments,
     closeLane,
-    setLanePinned,
 
     toggleLane,
 
@@ -3855,6 +4017,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
             name: granted.name,
             kind: granted.kind,
             request_id,
+            // The pane whose link was pressed owns the View, a shell's too (D-54).
+            ...(openerPane ? { opener_pane: openerPane } : {}),
             ...(front ? { workspace: front } : { pane_id: openerPane, reveal: true }),
           },
         });
@@ -3929,10 +4093,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     keepViewOpen,
 
     focusView,
-    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward. */
+    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward; in focus mode the one focus event also stands a folded desk (D-63). */
     revealView(displayId: string) {
-      showDocuments();
-      focusView(displayId, true);
+      if (!drawnPair(workspaceViewOf(rest()))) {
+        showDocuments();
+        return focusView(displayId, true);
+      }
+      // A folded desk draws no View areas, so the focus names the Workspace in front.
+      const workspace = frontViewWorkspace();
+      if (!workspace) return diagnostic("view_layout focus: no Workspace in front");
+      ui().setViewFocusRequest({ workspace: workspaceKey(workspace), displayId, from: null });
+      dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(workspace, { action: "focus", display_id: displayId }) });
     },
     focusViewArea,
     moveView,
