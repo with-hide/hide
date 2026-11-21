@@ -16,7 +16,7 @@ import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, hoverSettledTaskRow, showTasks } from "./wire";
 
-test.describe.configure({ timeout: 150_000 });
+test.describe.configure({ timeout: 150_000 }); // wait-ok: two family fixtures start their agents and a mission runs its commands, beyond the default test budget
 
 /** The page on the family fixture's checkout. */
 async function openOn(page: Page, fixture: AgentFixture, label: string): Promise<Daemon> {
@@ -44,7 +44,7 @@ async function keysIn(page: Page, daemon: Daemon, pane: string): Promise<void> {
  */
 async function closeChordClosesCard(page: Page, kind: string, owner: string): Promise<void> {
   const card = page.locator(`[data-card="${kind}"]`);
-  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card).toBeVisible();
   await expect(page.locator('[data-view-area-id] [role="tab"][data-tab-kind="card"][aria-selected="true"]')).toBeFocused();
   await page.keyboard.press(chord("close_tab"));
   await expect(card).toHaveCount(0);
@@ -60,7 +60,7 @@ async function closeChordClosesCard(page: Page, kind: string, owner: string): Pr
  */
 async function deskStandsWith(page: Page, daemon: Daemon, kind: string, owner: string, open: () => Promise<void>): Promise<void> {
   await open();
-  await expect(page.locator(`[data-card="${kind}"]`)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(`[data-card="${kind}"]`)).toBeVisible();
   await keysIn(page, daemon, owner);
   await expect(page.locator(`[data-card="${kind}"]`)).toBeVisible();
 }
@@ -109,7 +109,7 @@ test("a mission opened from its Conductor's pane chip or the sidebar's chip whil
     const [conductor, worker] = fixture.panes;
     const hide = fixture.runAs(conductor);
     // The core reads this machine's projects just after it starts; until then it answers that it is still reading.
-    await expect.poll(async () => (await hide(["mission", "create", "--title", "키보드 확인"])).out, { timeout: 20_000 }).toContain('"ok":true');
+    await expect.poll(async () => (await hide(["mission", "create", "--title", "키보드 확인"])).out, { timeout: 20_000 }).toContain('"ok":true'); // wait-ok: the core has read this machine's projects
     await mission(hide, ["mission", "plan", "--json", JSON.stringify({ scope: "pr", check: "true", nodes: [{ key: "api", title: "API 추가", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"] }] })]);
     await mission(hide, ["mission", "start"]);
     await mission(hide, ["mission", "decide", "--line", "방식 선택"]);

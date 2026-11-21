@@ -420,10 +420,10 @@ test("an agent's mark on a pull request row takes the press while the row's butt
 test("a pull request row opens the card on its maker's standing desk with the keys, so the close chord closes the card and not the maker (UI_BEHAVIOR, Opening, preview, and Open to the side)", { tag: "@platform" }, async ({ page }) => {
   await openWork(page, async ({ work }) => {
     const maker = work.locator('[data-pr="31"] [data-pr-agent]').first();
-    await expect(maker).toBeVisible({ timeout: 30_000 });
+    await expect(maker).toBeVisible({ timeout: 30_000 }); // wait-ok: the PR list names its maker once the core's GitHub read after the agent's start lands
     // The core brings the maker's pane forward with the card, focusing it, in its worktree's Workspace.
     await work.locator('[data-pr-row="31"]').click();
-    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(cardOf(page, 31)).toBeVisible();
     const pane = page.locator('[data-pane-view][data-focused="true"]');
     await expect(pane).toHaveCount(1);
     const makerPane = await pane.getAttribute("data-pane-view");
