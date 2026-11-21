@@ -3473,6 +3473,8 @@ export type AccessConnection = {
   id: string;
   name: string;
   level: AccessLevel;
+  /** Every workspace or one; absent from a core that predates bot modes. */
+  mode?: import("./bots").BotMode;
   program: string | null;
   created_ms: number;
   /** Moved at most once a minute (B34). */

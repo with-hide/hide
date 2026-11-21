@@ -9,8 +9,11 @@ import { numberOf, numberedDevices } from "../numbering";
 import { openedMachines } from "../pairing";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
+import { botMode, botWorkspaceName } from "../bots";
+import { catalogWorkspaces } from "../snapshot";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
+import { BotFace, BotWorkspaceBadge } from "./bot-mark";
 import { EntryContextMenu } from "./entry-menu";
 import { Button } from "./ui/button";
 import { Keycap } from "./ui/keycap";
@@ -104,11 +107,11 @@ export function DeviceRail({ actions }: { actions: Actions }) {
               </button>
             </Hint>
           </li>
-          {/* The tools connected at Act, under a short line, after the devices and Add device (PRD hide-external-control D-50). */}
+          {/* The bots, under a short line, after the devices and Add device (PRD hide-external-control D-50). */}
           {tools.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
           {tools.map((cell) => (
             <li key={cell.connection} className="flex">
-              <ToolTileView name={cell.name} turn={cell.turn} connection={cell.connection} selected={cell.connection === toolFront} onSelect={() => actions.focusTool(cell.connection)} />
+              <BotTile name={cell.name} turn={cell.turn} connection={cell.connection} selected={cell.connection === toolFront} onSelect={() => actions.focusTool(cell.connection)} />
             </li>
           ))}
         </ul>
@@ -189,32 +192,37 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
   );
 }
 
+/** A bot's tile reading its mode from the access section, where the core publishes it beside the connection. */
+const BotTile = memo(function BotTile(props: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
+  const workspace = useShellStore((s) => botWorkspaceName(botMode(s.access?.connections.find((one) => one.id === props.connection)), catalogWorkspaces(s.rest)));
+  return <BotTileView {...props} workspace={workspace} />;
+});
+
 /**
- * A tool's tile (PRD hide-external-control D-50, B39, B41): the size of a
- * device's, a ring rather than a filled square so it never reads as a
- * machine, holding the name's letters. Its one mark is the grey number of
- * what waits on the tool's answer (`9+` from ten), which no Needs You, badge
- * or notice of the operator's counts; the hint names it an external tool.
+ * A bot's tile (PRD hide-external-control D-50, B39, B41): the size of a
+ * device's, its owl on the colour its name chooses (`botLook`), so it never
+ * reads as a machine. A bot held inside one workspace wears a folder at the
+ * bottom-right, a whole-Hide bot none. Its one mark is the grey number of what
+ * waits on the bot's answer (`9+` from ten), which no Needs You, badge or
+ * notice of the operator's counts; the hint names it a bot and its mode.
  */
-export function ToolTileView({ name, turn, connection, selected, onSelect }: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
+export function BotTileView({ name, turn, connection, workspace, selected, onSelect }: { name: string; turn: number; connection: string; workspace: string | null; selected: boolean; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
-  const facts = [name, t("devices.rail.tool"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
+  const facts = [name, t("devices.rail.tool"), workspace ?? t("devices.rail.botAll"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
   return (
     <Hint label={facts.join(" · ")} side="right">
       <Button
-        variant="outline"
+        variant="ghost"
         size="icon"
         aria-label={facts.join(", ")}
         aria-pressed={selected}
         data-rail-tool={connection}
-        className={cn(
-          TILE,
-          "rounded-full bg-transparent text-caption font-semibold hover:bg-transparent hover:text-foreground focus-visible:ring-0",
-          selected ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-sidebar" : "text-subtle-foreground",
-        )}
+        data-rail-bot-mode={workspace === null ? "all" : "workspace"}
+        className={cn(TILE, "p-0 hover:bg-transparent focus-visible:ring-0", selected && "ring-2 ring-foreground ring-offset-2 ring-offset-sidebar")}
         onClick={onSelect}
       >
-        <span aria-hidden="true" data-rail-glyph="true">{tileMonogram(name)}</span>
+        <BotFace name={name} size="tile" />
+        {workspace === null ? null : <BotWorkspaceBadge />}
         {turn > 0 ? (
           <span
             aria-hidden="true"
