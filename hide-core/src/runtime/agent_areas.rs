@@ -67,9 +67,9 @@ impl Runtime {
             .filter(|(_, (scope, _, _, _))| scope == key)
             .map(|(id, _)| id.clone())
             .collect();
-        // Tabs listed are a use of the checkout's entry, made for them if it
-        // has none; a checkout with no tabs gets no entry, and one it kept is
-        // reconciled without aging (`workspace_views::MAX_WORKSPACES`).
+        // Tabs listed are made an entry if the checkout has none; a checkout
+        // with no tabs gets none, and one it kept is reconciled as it is
+        // (`workspace_views::MAX_WORKSPACES`).
         if !topology.is_empty() {
             store.views.entry(&key.0, &key.1);
         }
@@ -156,6 +156,16 @@ impl Runtime {
             }
         }
         changed |= placement_changed;
+        // Tabs that arrived, moved or left are a use of the checkout's entry
+        // (`WorkspaceView::used_unix_ms`); a listing that changes nothing is not.
+        if changed
+            && let Some(view) = self
+                .workspace_views
+                .as_mut()
+                .and_then(|store| store.views.get_mut(&key.0, &key.1))
+        {
+            view.used_unix_ms = unix_milliseconds();
+        }
         for error in errors {
             self.push_diagnostic("agent_layout.placement_refused", error);
         }

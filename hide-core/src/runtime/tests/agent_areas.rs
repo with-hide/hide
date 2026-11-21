@@ -2414,6 +2414,37 @@ fn checkouts_with_no_tab_get_no_saved_workspace_however_many_are_listed() {
     assert_eq!(saved, ["/agent-groups", "/elsewhere"]);
 }
 
+/// A saved Workspace's use moves with its tabs, which the cap ranks: a
+/// session that lists the same tabs again is no use, and one where a tab
+/// arrived is (`used_unix_ms`).
+#[test]
+fn a_saved_workspace_is_used_when_its_tabs_change_not_when_listed_again() {
+    let (runtime, _) = live_tab_order_runtime("/agent-groups");
+    let mut runtime = with_new_views(runtime, "agent-groups-used");
+    fn publish(runtime: &mut Runtime, tabs: &[&str]) {
+        runtime.ingest_session(Ok(session_with_elsewhere(tabs)));
+        runtime.sync_workspace_view();
+    }
+    fn used(runtime: &mut Runtime) -> &mut u64 {
+        &mut runtime
+            .workspace_views
+            .as_mut()
+            .unwrap()
+            .views
+            .get_mut(crate::node::TEST_NODE, "/agent-groups")
+            .unwrap()
+            .used_unix_ms
+    }
+    publish(&mut runtime, &["w-order:t1"]);
+    *used(&mut runtime) = 1;
+
+    publish(&mut runtime, &["w-order:t1"]);
+    assert_eq!(*used(&mut runtime), 1);
+
+    publish(&mut runtime, &["w-order:t1", "w-order:t2"]);
+    assert!(*used(&mut runtime) > 1);
+}
+
 /// The core's own engine lists a new tab before it answers the creation, so
 /// the session that shows it can reach the core before the answer. The answer
 /// moves the keyboard to the new pane; the visible tab moves with it in the

@@ -50,8 +50,8 @@ pub const SCHEMA_VERSION: u32 = 6;
 ///
 /// At the cap, making an entry forgets the entry whose checkout has no tabs
 /// (`WorkspaceView::holds_tabs`) and was used longest ago
-/// (`WorkspaceView::used_unix_ms`), so the entry of a folder that is gone,
-/// never used again, goes first. An entry with tabs is never forgotten: when
+/// (`WorkspaceView::last_use`), so the entry of a folder that is gone, never
+/// used again, goes first. An entry with tabs is never forgotten: when
 /// every entry holds tabs the new one is made past the cap, which the panes a
 /// machine runs bound (`hide_kit::panes::HOLDER_CAP` a machine). Nothing is
 /// refused there, because the entry asked for is one of a checkout with live
@@ -137,10 +137,11 @@ pub struct WorkspaceView {
     /// When the operator last chose this checkout; `0` until they do. The
     /// checkout resumed after a restart is the latest of these.
     pub last_used_unix_ms: u64,
-    /// When this entry was last used: every `WorkspaceViews::entry` stamps
-    /// it, which is how the operator's choices and changes, an agent's View
-    /// and each listing of the checkout's tabs reach it. The cap forgets the
-    /// entry with no tabs whose stamp is oldest ([`MAX_WORKSPACES`]).
+    /// When this entry was last used: made, or its Agent tabs changed (one
+    /// arrived, moved or left, `Runtime::reconcile_agent_topology`). With
+    /// the operator's choice it is the entry's use (`last_use`), which the
+    /// cap ranks ([`MAX_WORKSPACES`]). A read, or a request that changes
+    /// nothing or is refused, leaves it as it is.
     pub used_unix_ms: u64,
     /// Each Agent tab's desk (PRD lane-desk-pair-view D-06): the Views the
     /// operator put in front of that tab, with their View areas. One per tab,
@@ -290,9 +291,8 @@ struct StoredTrays {
     last_used_unix_ms: u64,
     #[serde(default)]
     used_unix_ms: Option<u64>,
-    /// What a build before `used_unix_ms` stamped when it made the entry,
-    /// which it ranked with the choice stamp: the later of the two is the
-    /// entry's use.
+    /// What a build before `used_unix_ms` stamped when it made the entry:
+    /// the entry's last use it knew of.
     #[serde(default)]
     made_unix_ms: u64,
     #[serde(default)]
@@ -322,9 +322,7 @@ impl StoredTrays {
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
-            used_unix_ms: self
-                .used_unix_ms
-                .unwrap_or(self.made_unix_ms.max(self.last_used_unix_ms)),
+            used_unix_ms: self.used_unix_ms.unwrap_or(self.made_unix_ms),
             trays: self.trays,
             shelf: self.shelf.unwrap_or_else(|| shelf_layout(1)),
             agent_layout: self.agent_layout,
@@ -385,7 +383,7 @@ impl StoredLane {
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
-            used_unix_ms: self.made_unix_ms.max(self.last_used_unix_ms),
+            used_unix_ms: self.made_unix_ms,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
@@ -426,7 +424,6 @@ impl StoredOneToolLane {
     fn into_view(self) -> WorkspaceView {
         let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            used_unix_ms: self.last_used_unix_ms,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
@@ -460,7 +457,6 @@ impl StoredColumns {
     fn into_view(self) -> WorkspaceView {
         let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            used_unix_ms: self.last_used_unix_ms,
             agent_layout: self.agent_layout,
             ..WorkspaceView::new(&self.device_id, &self.path)
         };
@@ -495,6 +491,12 @@ impl WorkspaceView {
 
     pub fn is(&self, device_id: &str, path: &str) -> bool {
         self.device_id == device_id && self.path == path
+    }
+
+    /// When the entry was last used: its own stamp or the operator's
+    /// latest choice of its checkout, whichever is later.
+    fn last_use(&self) -> u64 {
+        self.used_unix_ms.max(self.last_used_unix_ms)
     }
 
     /// Whether the checkout has Agent tabs here: one in a strip, or a
@@ -844,35 +846,33 @@ impl WorkspaceViews {
             .find(|view| view.is(device_id, path))
     }
 
-    /// The Workspace's entry, made with the defaults on first use, stamped
-    /// as used now. Call it only for a use: a read that should not make an
-    /// entry, or age one, is `get` ([`MAX_WORKSPACES`]).
+    /// The Workspace's entry, made with the defaults on first use, which is
+    /// stamped as its use. A read that should make no entry is `get`
+    /// ([`MAX_WORKSPACES`]).
     pub fn entry(&mut self, device_id: &str, path: &str) -> &mut WorkspaceView {
         self.entry_at(device_id, path, crate::observed::now_unix_ms())
     }
 
-    /// `entry`, used at `now_unix_ms`.
+    /// `entry`, an entry it makes used at `now_unix_ms`.
     pub fn entry_at(
         &mut self,
         device_id: &str,
         path: &str,
         now_unix_ms: u64,
     ) -> &mut WorkspaceView {
-        let index = match self
+        if let Some(index) = self
             .workspaces
             .iter()
             .position(|view| view.is(device_id, path))
         {
-            Some(index) => index,
-            None => {
-                forget_past(&mut self.workspaces, MAX_WORKSPACES - 1);
-                self.workspaces.push(WorkspaceView::new(device_id, path));
-                self.workspaces.len() - 1
-            }
-        };
-        let view = &mut self.workspaces[index];
-        view.used_unix_ms = now_unix_ms;
-        view
+            return &mut self.workspaces[index];
+        }
+        forget_past(&mut self.workspaces, MAX_WORKSPACES - 1);
+        self.workspaces.push(WorkspaceView {
+            used_unix_ms: now_unix_ms,
+            ..WorkspaceView::new(device_id, path)
+        });
+        self.workspaces.last_mut().expect("just pushed")
     }
 }
 
@@ -885,7 +885,7 @@ fn forget_past(workspaces: &mut Vec<WorkspaceView>, room: usize) {
             .iter()
             .enumerate()
             .filter(|(_, view)| !view.holds_tabs())
-            .min_by_key(|(_, view)| view.used_unix_ms)
+            .min_by_key(|(_, view)| view.last_use())
             .map(|(index, _)| index)
         else {
             return;
@@ -893,7 +893,7 @@ fn forget_past(workspaces: &mut Vec<WorkspaceView>, room: usize) {
         let forgotten = workspaces.remove(oldest);
         crate::diagnostic!(serde_json::json!({
             "component": "workspace_views", "kind": "entry.forgotten",
-            "device": forgotten.device_id, "used_unix_ms": forgotten.used_unix_ms,
+            "device": forgotten.device_id, "last_use_unix_ms": forgotten.last_use(),
             "entries": workspaces.len(),
         }));
     }
@@ -1005,7 +1005,6 @@ impl V1View {
         }
         let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            used_unix_ms: self.last_used_unix_ms,
             ..WorkspaceView::new(&self.device_id, &self.path)
         };
         view.adopt_checkout_documents(layout, false);
@@ -1801,7 +1800,8 @@ mod tests {
     /// The cap's contract (#2737): past it, the entry with no tabs used
     /// longest ago goes and the new one is made. The checkout in use keeps
     /// its tabs however long ago it was last used, as does one whose only
-    /// tab is a delegated child's on a canvas, and an entry used again is new.
+    /// tab is a delegated child's on a canvas, and an entry the operator
+    /// chose since is new.
     #[test]
     fn past_the_cap_the_entry_without_tabs_used_longest_ago_goes_and_tabs_stay() {
         let mut views = WorkspaceViews::default();
@@ -1814,12 +1814,12 @@ mod tests {
         for index in 0..MAX_WORKSPACES - 2 {
             views.entry_at("local", &format!("/idle-{index}"), 10 + index as u64);
         }
-        views.entry_at("local", "/idle-0", 5_000);
+        views.get_mut("local", "/idle-0").unwrap().last_used_unix_ms = 5_000;
         views.entry_at("local", "/new", 6_000);
         assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
         assert!(has_tab(&views, "/in-use", "w1:t1"));
         assert!(views.get("local", "/child").is_some());
-        assert!(views.get("local", "/idle-0").is_some(), "used again");
+        assert!(views.get("local", "/idle-0").is_some(), "chosen since");
         assert!(views.get("local", "/idle-1").is_none(), "used longest ago");
         assert_eq!(
             views.get("local", "/new").map(|view| view.used_unix_ms),
@@ -1899,7 +1899,7 @@ mod tests {
         assert_eq!(outcome, current());
         assert_eq!(loaded.workspaces.len(), MAX_WORKSPACES);
         let used = |views: &WorkspaceViews, path: &str| {
-            views.get("local", path).map(|view| view.used_unix_ms)
+            views.get("local", path).map(WorkspaceView::last_use)
         };
         assert_eq!(used(&loaded, "/in-use"), Some(5));
         assert_eq!(used(&loaded, "/chosen"), Some(900));
