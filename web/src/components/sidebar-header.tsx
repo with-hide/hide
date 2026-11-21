@@ -24,8 +24,9 @@ export type DeviceMenu = {
   toolFront: string | null;
   onSelectTool: (connection: string) => void;
   onSelect: (deviceId: string) => void;
-  onAddDevice: () => void;
-  onShowRail: () => void;
+  /** Null in another machine's view, which pairs nothing and has no rail (PRD device-connect-iroh B20, B52). */
+  onAddDevice: (() => void) | null;
+  onShowRail: (() => void) | null;
 };
 
 /**
@@ -185,14 +186,18 @@ export function HiddenRailMenu({ title, menu }: { title: { name: string; note: s
             </DropdownMenuRadioGroup>
           </>
         ) : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem data-device-menu-add="true" onSelect={menu.onAddDevice}>
-          <PlusIcon aria-hidden="true" />
-          {t("sidebar.addDevice")}
-        </DropdownMenuItem>
-        <DropdownMenuItem data-device-menu-show-rail="true" onSelect={menu.onShowRail}>
-          {t("sidebar.showRail")}
-        </DropdownMenuItem>
+        {menu.onAddDevice || menu.onShowRail ? <DropdownMenuSeparator /> : null}
+        {menu.onAddDevice ? (
+          <DropdownMenuItem data-device-menu-add="true" onSelect={menu.onAddDevice}>
+            <PlusIcon aria-hidden="true" />
+            {t("sidebar.addDevice")}
+          </DropdownMenuItem>
+        ) : null}
+        {menu.onShowRail ? (
+          <DropdownMenuItem data-device-menu-show-rail="true" onSelect={menu.onShowRail}>
+            {t("sidebar.showRail")}
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

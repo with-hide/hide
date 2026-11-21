@@ -17,6 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { connectionLine, pendingLine, warnsOfWork } from "../externalTools";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
+import { ownWindow } from "../pairing";
 import { coreMachineName } from "../screenMachine";
 import type { AccessConnection, AccessLevel, AccessPending } from "../snapshot";
 import { useShellStore } from "../store";
@@ -30,10 +31,13 @@ export function ExternalToolsTab({ actions }: { actions: Actions }) {
   // Every tool runs on the core's machine (D-07), which a window on another machine names.
   const machine = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
   const now = useMinuteClock();
+  // Only this machine's own window lets a tool in or changes what it may do
+  // (PRD device-connect-iroh B52); another machine's view lists the tools.
+  const own = useShellStore((s) => ownWindow(s.pairing));
   if (!access) return <Note tone="pending">{t("externalTools.connecting")}</Note>;
   return (
     <div data-external-tools="true">
-      {access.pending.length > 0 ? (
+      {own && access.pending.length > 0 ? (
         <Group title={t("externalTools.pending.title")} caption={String(access.pending.length)} data-access-pending-count={String(access.pending.length)}>
           {access.pending.map((request) => <PendingRow key={request.id} request={request} machine={machine} now={now} actions={actions} />)}
         </Group>
@@ -45,7 +49,7 @@ export function ExternalToolsTab({ actions }: { actions: Actions }) {
         data-access-connections={String(access.connections.length)}
       >
         {access.connections.length > 0
-          ? access.connections.map((connection) => <ConnectionRow key={connection.id} connection={connection} machine={machine} now={now} actions={actions} />)
+          ? access.connections.map((connection) => <ConnectionRow key={connection.id} connection={connection} machine={machine} now={now} actions={own ? actions : null} />)
           : <Empty />}
       </Group>
     </div>
@@ -129,7 +133,7 @@ function PendingRow({ request, machine, now, actions }: { request: AccessPending
  * missions it started, the two-level control and Disconnect, which acts at
  * once, and the warning when its work would become the operator's.
  */
-function ConnectionRow({ connection, machine, now, actions }: { connection: AccessConnection; machine: string; now: number; actions: Actions }) {
+function ConnectionRow({ connection, machine, now, actions }: { connection: AccessConnection; machine: string; now: number; actions: Actions | null }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   return (
@@ -143,7 +147,7 @@ function ConnectionRow({ connection, machine, now, actions }: { connection: Acce
         </span>
         {warnsOfWork(connection) ? <span className="mt-xxs" data-access-warning={connection.id}><Note tone="warn">{t("externalTools.workWarning")}</Note></span> : null}
       </span>
-      <span className="ml-auto flex flex-wrap items-center justify-end gap-sm">
+      {actions ? <span className="ml-auto flex flex-wrap items-center justify-end gap-sm">
         <ToggleGroup type="single" value={connection.level} onValueChange={(next) => next && next !== connection.level && actions.setAccessLevel(connection.id, next as AccessLevel)} aria-label={t("externalTools.level.label")}>
           {LEVELS.map((level) => {
             const Icon = LEVEL_ICON[level];
@@ -158,7 +162,7 @@ function ConnectionRow({ connection, machine, now, actions }: { connection: Acce
         <Button variant="secondary" size="sm" className="text-destructive" onClick={() => actions.revokeAccess(connection.id)} data-access-revoke={connection.id}>
           {t("externalTools.disconnect")}
         </Button>
-      </span>
+      </span> : null}
     </div>
   );
 }

@@ -141,12 +141,12 @@
       }
     },
     "serverFrame": {
-      "description": "snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); clipboard {pane_id, text_base64} is what a pane's program wrote to the clipboard (OSC 52), at most 192 KiB of text, sent once to each desktop or web window connected when it was written and kept for none that connects, resumes or redraws later, so a window in front writes it to its clipboard once; error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). automation_result answers an `automation_call` to the window that sent it (see automationCall and automationResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_move is the core move as the process's supervisor holds it, which every role of the process sends its screens, a node holding its screen from the moment a move is under way, and the only frame a screen gets while a move holds it (`hided/src/core_move/control.rs` `MoveView`); once the move is under way it carries `alias`, the SSH alias the move reaches its other machine by, which a screen that has not drawn the core names that machine by; while the checks the operator asked for sign in to the other machine it carries `sign_in`, what ssh asks there in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to and answered by the screen whose request started the checks only, with a `core_move` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`} (another's is refused as `move_not_asker`); a `cancel` of what is shown, a `cancel` naming no question (the dialog closing), that screen's end, or five minutes on a browser check or a key touch ends the checks' sign-in, whether or not a question showed yet, and a connection check that stopped on ssh carries `ssh_problem`, that failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `hide_updated`, `cannot_connect`, `ssh_missing`, `openssh_old`, `unsupported`). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event, and a `core_move` event, even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only an operator's screen (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it or `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front.",
+      "description": "snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); clipboard {pane_id, text_base64} is what a pane's program wrote to the clipboard (OSC 52), at most 192 KiB of text, sent once to each desktop or web window connected when it was written and kept for none that connects, resumes or redraws later, so a window in front writes it to its clipboard once; error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). automation_result answers an `automation_call` to the window that sent it (see automationCall and automationResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_move is the core move as the process's supervisor holds it, which every role of the process sends its screens, a node holding its screen from the moment a move is under way, and the only frame a screen gets while a move holds it (`hided/src/core_move/control.rs` `MoveView`); once the move is under way it carries `alias`, the SSH alias the move reaches its other machine by, which a screen that has not drawn the core names that machine by; while the checks the operator asked for sign in to the other machine it carries `sign_in`, what ssh asks there in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to and answered by the screen whose request started the checks only, with a `core_move` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`} (another's is refused as `move_not_asker`); a `cancel` of what is shown, a `cancel` naming no question (the dialog closing), that screen's end, or five minutes on a browser check or a key touch ends the checks' sign-in, whether or not a question showed yet, and a connection check that stopped on ssh carries `ssh_problem`, that failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `hide_updated`, `cannot_connect`, `ssh_missing`, `openssh_old`, `unsupported`). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event, and a `core_move` event, even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only this machine's own window (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it, and only a window, this machine's or another machine's view of it, `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front. pairing is the pairings under way between this machine and another Hide (see pairingView), sent first and on every change to this machine's own windows only, never to a phone or to another machine's view of this one, so a screen without it offers no pairing; pairing_result answers one `pairing_*` event to the window that sent it (see pairingResult). refused answers, to that connection alone, an event it may not send or a kind no one classified (see refused): every client event kind declares which connections may send it (`hided/src/server/event_class.rs`), another machine's view of this one sends only the kinds that work a screen, the core never sees a refused event and no screen's `status.last_error` names it; the page ignores the frame and the daemon logs an `event.refused` diagnostic.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "payload"],
       "properties": {
-        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "home_folder_list", "importable_projects", "core_move", "core_link", "agent_notice", "browser_comment", "window_call", "clipboard", "automation_result"] },
+        "type": { "type": "string", "enum": ["daemon", "snapshot", "delta", "terminal", "error", "directory_list", "directory_unavailable", "path_refused", "project_target", "file_bytes_error", "directory_changed", "file_index_result", "attachment_refused", "open_external_result", "clone_target", "home_folder_list", "importable_projects", "core_move", "core_link", "agent_notice", "browser_comment", "window_call", "clipboard", "automation_result", "pairing", "pairing_result", "refused"] },
         "payload": {
           "type": "object",
           "properties": {
@@ -1344,14 +1344,90 @@
       }
     },
     "fileBytesError": {
-      "description": "Payload of a file_bytes_error frame: the read that failed and why.",
+      "description": "Payload of a file_bytes_error frame: the read that failed and why. `relay_busy` and `busy` refuse a read while the phone's relay, or another machine's view, already has as many reads under way as it may; `bulk_missing` is another machine's view whose file stream is not open.",
       "type": "object",
       "additionalProperties": false,
       "required": ["request_id", "path", "reason"],
       "properties": {
         "request_id": { "type": "string" },
         "path": { "type": "string" },
-        "reason": { "type": "string", "enum": ["too_large", "read_failed"] }
+        "reason": { "type": "string", "enum": ["too_large", "read_failed", "relay_busy", "busy", "bulk_missing"] }
+      }
+    },
+    "refused": {
+      "description": "Payload of a refused frame (PRD device-connect-iroh D-67): the event kind this connection sent and why it was refused. `not_here`: the kind's class does not admit this connection (another machine's view asking to pair, a phone approving a tool). `unclassified`: no class names the kind, so no connection may send it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason"],
+      "properties": {
+        "kind": { "type": "string" },
+        "reason": { "type": "string", "enum": ["not_here", "unclassified"] }
+      }
+    },
+    "pairingView": {
+      "description": "Payload of a pairing frame (hide-peer `pairing::View`): the link this machine shares, the machines waiting for its operator, the pairing it is joining and what came of asking a machine to be let in the other way.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offer", "asks", "join", "requests"],
+      "properties": {
+        "offer": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false, "required": ["link", "expires_unix_ms"], "properties": { "link": { "type": "string" }, "expires_unix_ms": { "type": "integer" } } }
+          ]
+        },
+        "asks": { "type": "array", "items": { "$ref": "#/$defs/pairingAsk" } },
+        "join": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/pairingJoin" }] },
+        "requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "state"],
+            "properties": { "key": { "type": "string" }, "state": { "type": "string", "enum": ["waiting", "declined", "unanswered", "unreachable"] } }
+          }
+        }
+      }
+    },
+    "pairingAsk": {
+      "description": "A machine waiting for this machine's operator: `link` pasted this machine's link and shows `words` to compare; `request` is a machine already connected asking to open this one too, with no words.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "device", "name", "kind", "words", "expires_unix_ms"],
+      "properties": {
+        "id": { "type": "integer" },
+        "key": { "type": "string" },
+        "device": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["link", "request"] },
+        "words": { "oneOf": [{ "type": "null" }, { "type": "array", "items": { "type": "string" } }] },
+        "expires_unix_ms": { "type": "integer" }
+      }
+    },
+    "pairingJoin": {
+      "description": "The pairing this machine is joining, or how the last one ended.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "host", "phase", "failure", "name", "words", "expires_unix_ms"],
+      "properties": {
+        "id": { "type": "integer" },
+        "host": { "type": "string" },
+        "phase": { "type": "string", "enum": ["connecting", "comparing", "settling", "paired", "waiting", "failed"] },
+        "failure": { "oneOf": [{ "type": "null" }, { "type": "string", "enum": ["no_offer", "declined", "host_full", "full", "unanswered", "unreachable", "update_needed"] }] },
+        "name": { "type": ["string", "null"] },
+        "words": { "oneOf": [{ "type": "null" }, { "type": "array", "items": { "type": "string" } }] },
+        "expires_unix_ms": { "type": ["integer", "null"] }
+      }
+    },
+    "pairingResult": {
+      "description": "Payload of a pairing_result frame (`hided/src/pairing.rs`): the verb of the `pairing_*` event it answers, whether it was done and, when not, the reason the window words; a share carries its link, an SSH look what the other machine said, a switch how the press ended.",
+      "type": "object",
+      "required": ["verb", "ok"],
+      "properties": {
+        "verb": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "request_id": { "type": ["string", "null"] }
       }
     },
     "health": {
@@ -1361,7 +1437,7 @@
         "pid": { "type": "integer" },
         "version": { "type": "string" },
         "schema_version": { "type": "integer", "const": 2 },
-        "clients": { "type": "integer", "minimum": 0, "maximum": 8 }
+        "clients": { "description": "This machine's windows, at most 8, and the views other machines show of it, at most 4 and one per machine.", "type": "integer", "minimum": 0, "maximum": 12 }
       }
     },
   "consumptionCell": {

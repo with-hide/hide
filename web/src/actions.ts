@@ -93,6 +93,7 @@ import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane }
 import { focusedPaneOf, useShellStore } from "./store";
 import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
+import { remoteBridge, remoteClipboard } from "./remoteView";
 import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -168,7 +169,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const rest = () => useShellStore.getState().rest;
   const catalogObserver = createCatalogObserver((observing) => dispatch({ schema_version: 2, kind: "ai_settings", payload: { start_observing: observing } }));
   const diagnostic = (message: string) => useShellStore.getState().noteDiagnostic(message);
-  const board = clipboard ?? browserClipboard(diagnostic);
+  const remote = remoteBridge();
+  const board = clipboard ?? (remote ? remoteClipboard(remote, diagnostic) : browserClipboard(diagnostic));
   const ui = () => useUiStore.getState();
 
 
@@ -1516,6 +1518,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
     /** Whether this window holds the keyboard on the Workspace screen, so the View in front of it is seen (PRD unseen-agent-views D-07). */
     noteWindowFocus(focused: boolean) {
+      // Another machine's view is no one in front of this machine (D-60, D-67).
+      if (remote) return;
       dispatch({ schema_version: 2, kind: "window_focus", payload: { focused } });
     },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */

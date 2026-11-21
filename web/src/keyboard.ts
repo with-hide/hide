@@ -22,6 +22,7 @@ import type { Actions } from "./actions";
 import { focusBrowserDisplay } from "./browserViews";
 import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFIERS, revealedFamily, type HintState } from "./hints";
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
+import { remoteCommands } from "./remoteView";
 import { useSetupWalk } from "./FirstRunWizard";
 import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
 import { areaFrame } from "./areaFrames";
@@ -591,6 +592,9 @@ export function installKeyboard(actions: Actions): () => void {
   // A menu item names a command id; one this registry does not know is a
   // host/shell version mismatch, recorded rather than guessed at.
   const bridge = hostBridge();
+  // Another machine's view takes the app menu's commands from its own
+  // bridge and builds no menu (PRD device-connect-iroh D-67).
+  const menu = bridge ?? remoteCommands();
   const unsubscribeBrowser = browserBridge()?.onEvent((input) => {
     if (input.kind === "cycle-cancel") {
       if (nativeCycle?.cycleId === input.cycleId) onBlur();
@@ -616,7 +620,7 @@ export function installKeyboard(actions: Actions): () => void {
       endNativeCycle();
     }
   });
-  const unsubscribeMenu = bridge?.onCommand((id) => {
+  const unsubscribeMenu = menu?.onCommand((id) => {
     // Help > Set up Hide, the host's own item outside the registry (PRD first-run-onboarding B45).
     if (id === SETUP_COMMAND) {
       useSetupWalk.getState().open();
