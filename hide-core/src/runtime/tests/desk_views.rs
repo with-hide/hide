@@ -2341,13 +2341,11 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     );
 }
 
-/// B25, D-45 on a device: the operator choosing another pane of a device tab
-/// goes through the device's focus request, and the mode follows it as it
-/// does on this machine; a pane with nothing to show keeps the mode on and
-/// is drawn alone (D-53).
-#[test]
-fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
-    let (mut runtime, _checkout_id, _directory) = setup("pair-device");
+/// The device `studio` in front, with one Agent tab of two panes and no
+/// agent, each pane on its own terminal: the runtime, the Workspace's key,
+/// the tab and the two panes.
+fn device_tab(name: &str) -> (Runtime, (String, String), String, [String; 2]) {
+    let (mut runtime, _checkout_id, _directory) = setup(name);
     let device = "studio";
     let tab = crate::address::scoped_id(device, crate::address::Kind::Tab, "t1");
     let [left, other] =
@@ -2361,15 +2359,13 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
             "remote-workspace",
             "remote-checkout",
             "/srv/remote",
-            Some(pane(&left, "/srv/remote")),
+            Some(device_pane(&left)),
         )],
     );
     project.device_id = device.to_owned();
     project.remote_target_id = Some(device.to_owned());
     project.checkouts[0].tabs[0].id = Some(tab.clone());
-    project.checkouts[0].tabs[0]
-        .panes
-        .push(pane(&other, "/srv/remote"));
+    project.checkouts[0].tabs[0].panes.push(device_pane(&other));
     project.checkouts[0].active_tab_id = Some(tab.clone());
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: device.to_owned(),
@@ -2407,6 +2403,24 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
     runtime
         .reconcile_agent_topology(&key, &[(tab.clone(), false)])
         .unwrap();
+    (runtime, key, tab, [left, other])
+}
+
+/// A pane of the device's tab, on a terminal of its own.
+fn device_pane(id: &str) -> PaneSnapshot {
+    let mut row = pane(id, "/srv/remote");
+    row.terminal_id = Some(format!("terminal-{id}"));
+    row
+}
+
+/// B25, D-45 on a device: the operator choosing another pane of a device tab
+/// goes through the device's focus request, and the mode follows it as it
+/// does on this machine; a pane with nothing to show keeps the mode on and
+/// is drawn alone (D-53).
+#[test]
+fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
+    let (mut runtime, key, tab, [left, other]) = device_tab("pair-device");
+    let device = "studio";
     let left_of = |runtime: &Runtime| runtime.pair_left_of(&key, &tab);
     let store = runtime.workspace_views.as_mut().unwrap();
     store.views.pair.on = true;
@@ -2692,6 +2706,141 @@ fn an_explorer_open_belongs_to_no_pane() {
     assert!(pane_rows(&runtime).is_empty());
     assert_eq!(front_owner(&runtime), ("mine.md".into(), None));
     assert!(!panes_with_views(&runtime).contains(&"w-order:t1:q".to_owned()));
+}
+
+/// An open lane under a pane drawn alone is no desk on screen: the desk is
+/// neither drawn nor in view, so another agent's View landing on it is To
+/// look at, and the shell stays alone.
+#[test]
+fn an_open_lane_under_a_shell_drawn_alone_is_no_desk_on_screen() {
+    let (mut runtime, _checkout, directory) = setup("pair-alone-lane");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    runtime.dispatch_json(&explorer_event(
+        "workspace_view",
+        serde_json::json!({"open": true}),
+    ));
+    let key = key(&directory);
+    assert!(
+        runtime.drawn_tray_layout(&key).is_some(),
+        "the lane draws it"
+    );
+
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert!(runtime.drawn_tray_layout(&key).is_none());
+    assert!(!runtime.tray_in_view(&key, TABS[0]));
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    assert!(unseen(&runtime, &directory, "b.md"), "nobody saw it land");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// While a shell is drawn alone, a file the operator opens from the
+/// Explorer, or the shell's own `hide file open`, stands its tab's desk
+/// beside it with that file in front, and the shell stays on the left
+/// (D-21); the desk emptied again leaves the shell alone, the mode on.
+#[test]
+fn an_open_while_a_shell_is_drawn_alone_stands_the_desk_beside_it() {
+    let (mut runtime, checkout, directory) = setup("pair-alone-open");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+
+    open(&mut runtime, &checkout, &directory, "c.md");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_owner(&runtime), ("c.md".into(), None));
+
+    let c = display_id(&runtime, &directory, "c.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": c}),
+    );
+    assert!(mode_on(&runtime), "an emptied desk does not end it");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+
+    control_file(&mut runtime, "w-order:t1:q", &directory, "d.md", "d");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_owner(&runtime).0, "d.md");
+}
+
+/// D-54: the last open names the owner. A file an agent opened that a
+/// shell's link opens again is the shell's, in its `N views` and beside it
+/// in focus mode, and the agent's session still counts it among its own.
+#[test]
+fn a_file_an_agent_opened_that_a_shells_link_opens_again_is_the_shells() {
+    let (mut runtime, checkout, directory) = setup("link-reopen");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    open_link(&mut runtime, &checkout, &directory, "a.md", "w-order:t1:q");
+
+    let rows = pane_rows(&runtime);
+    assert_eq!(
+        rows,
+        [("w-order:t1:q".to_owned(), "a.md".to_owned(), false)]
+    );
+    let a = display_id(&runtime, &directory, "a.md");
+    let stored = runtime.view_display(&key(&directory), &a).unwrap();
+    assert!(stored.opener.is_none(), "no agent's mark on it now");
+    assert!(!stored.openers.is_empty(), "its session still counts it");
+    assert_eq!(
+        front_owner(&runtime),
+        ("a.md".into(), Some("w-order:t1:q".into()))
+    );
+}
+
+/// D-53 on a device: ⌘. on a device pane with nothing to show draws it
+/// alone, as on this machine.
+#[test]
+fn a_device_pane_with_nothing_to_show_enters_focus_mode_alone() {
+    let (mut runtime, key, tab, [left, _]) = device_tab("pair-device-alone");
+    pair_event(&mut runtime, Some(&left));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+    assert!(mode_on(&runtime));
+    assert_eq!(alone_pair(&runtime), Some(paired(&tab, &left)));
+    assert!(runtime.drawn_tray_layout(&key).is_none());
+}
+
+/// D-54 on a device: a page link pressed in a device's shell is that
+/// pane's, in its `N views` and not To look at; the pane is named by the
+/// device's own terminal, which finds it again on that device and on no
+/// other machine.
+#[test]
+fn a_device_shells_link_is_owned_by_its_pane_on_that_device() {
+    let (mut runtime, _key, _tab, [left, _]) = device_tab("link-device");
+    runtime.dispatch_json(&explorer_event(
+        "browser_open",
+        serde_json::json!({
+            "url": "https://example.test/device-link",
+            "workspace": {"device_id": "studio", "path": "/srv/remote"},
+            "opener_pane": left,
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+    let view = runtime.snapshot.workspace_view.as_ref().expect("published");
+    let rows = view.feedback.as_ref().map_or_else(Vec::new, |feedback| {
+        feedback
+            .opened
+            .iter()
+            .map(|row| (row.pane_id.clone(), row.unseen))
+            .collect()
+    });
+    assert_eq!(rows, [(left.clone(), false)]);
+
+    let crate::view_feedback::OpenedBy::Terminal(terminal) = runtime.link_owner(&left) else {
+        panic!("a device shell's link is its terminal's");
+    };
+    assert_eq!(terminal.device_id, "studio");
+    assert_eq!(runtime.link_terminal_pane(&terminal), Some(left));
+    let elsewhere = crate::view_feedback::LinkTerminal {
+        device_id: crate::node::TEST_NODE.to_owned(),
+        ..terminal
+    };
+    assert_eq!(runtime.link_terminal_pane(&elsewhere), None);
 }
 
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one

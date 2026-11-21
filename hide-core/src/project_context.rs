@@ -615,6 +615,7 @@ mod tests {
                 label: None,
                 empty: pane_ids.is_empty(),
                 delegated: false,
+                automation: false,
                 panes: pane_ids
                     .iter()
                     .map(|pane_id| PaneSnapshot {

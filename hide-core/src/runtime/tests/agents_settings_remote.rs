@@ -142,6 +142,7 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         label: Some("Inactive".to_owned()),
         empty: false,
         delegated: false,
+        automation: false,
         panes: vec![pane(inactive_pane_id, "/tmp/remote-terminal")],
     });
     let mut remote_workspace = workspace(
@@ -2110,6 +2111,7 @@ fn read_record_is_scoped_by_pane_id_namespace_across_servers() {
             label: Some("Session".to_owned()),
             empty: false,
             delegated: false,
+            automation: false,
             panes,
         }];
         RemoteSessionSnapshot {

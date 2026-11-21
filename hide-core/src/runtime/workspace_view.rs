@@ -155,6 +155,11 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
+    /// The pane drawn alone for having no View of its own whose desk stands
+    /// beside it all the same, since a View the operator opened came onto
+    /// it (D-53, conductor decision on #2775 review 1). Runtime only, and
+    /// gone when the mode moves to another pane or ends.
+    pub(super) pair_stood: Option<super::pair_view::PairLeft>,
     /// The desks pair view drew since the mode last moved or ended, each
     /// with how it was before the mode first drew it, which it gets back
     /// when the mode leaves it (D-51); a desk the mode passed drawing its
@@ -399,6 +404,7 @@ impl WorkspaceViewStore {
                 card_read_again: false,
                 pair_left: None,
                 pair_before: None,
+                pair_stood: None,
                 pair_drawn: Vec::new(),
                 tray_floats: None,
             },
@@ -510,16 +516,20 @@ impl Runtime {
         let Place::Tray(tab) = place else {
             return;
         };
-        // Whether the operator saw this desk drawn: the view the core last
-        // published, since the View that calls this is already on the desk.
-        let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
-            view.device_id == key.0
-                && view.path == key.1
-                && view.open
-                && view.tray.tab_id == *tab
-                && view.tray.shown
-                && view.tray.count > 0
+        // Whether the operator saw this desk drawn: beside the pane focus
+        // mode draws, else the view the core last published, since the View
+        // that calls this is already on the desk.
+        let drawn = self.pair_desk_drawn(key, tab).unwrap_or_else(|| {
+            self.snapshot.workspace_view.as_ref().is_some_and(|view| {
+                view.device_id == key.0
+                    && view.path == key.1
+                    && view.open
+                    && view.tray.tab_id == *tab
+                    && view.tray.shown
+                    && view.tray.count > 0
+            })
         });
+        self.stand_pair_desk(key, tab);
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -1446,12 +1456,13 @@ impl Runtime {
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
             let every = self.every_view_snapshot(key);
-            let panes_with_views = self.panes_with_views(key);
-            let desk = self.pair_desk(key, tab);
+            // The pair's reads are taken once for the publish.
+            let reads = self.pair_reads(key);
+            let panes_with_views = self.panes_with_views(key, &reads);
             let pair = self.pair_left_of(key, tab).map(|pane| {
                 let mut pair = crate::model::PairViewSnapshot {
                     tab_id: tab.clone(),
-                    alone: desk.as_ref() != Some(&pane),
+                    alone: !self.pair_desk_beside(key, tab, &pane, &reads),
                     pane_id: pane,
                     folded: Vec::new(),
                 };

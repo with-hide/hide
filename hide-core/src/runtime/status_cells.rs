@@ -98,6 +98,11 @@ pub struct Cell {
     /// A receiver that saw or was rung for an earlier episode is rung again.
     #[serde(skip)]
     pub episode: u64,
+    /// Rings its receiver while it works, as a `--now` letter does: a
+    /// mission's cell for a node's worker or checker
+    /// (`PendingWake::mid_turn`).
+    #[serde(skip)]
+    pub mid_turn: bool,
 }
 
 /// A new cell refused because every cell held in memory is live
@@ -128,6 +133,8 @@ pub(crate) struct StatusRing {
     /// The newest new cell, which the bell line names.
     pub(crate) line: String,
     pub(crate) others: usize,
+    /// A cell of the ring rings while its receiver works (`Cell::mid_turn`).
+    pub(crate) mid_turn: bool,
 }
 
 #[derive(Default)]
@@ -257,6 +264,7 @@ impl Runtime {
                     news,
                     revision,
                     episode: episode.unwrap_or(revision),
+                    mid_turn: false,
                 },
             },
         );
@@ -337,6 +345,7 @@ impl Runtime {
                         news: !wake.standing(),
                         revision: wake.seq,
                         episode: wake.opened_seq.unwrap_or(wake.seq),
+                        mid_turn: wake.mid_turn(),
                     },
                 });
             }
@@ -360,13 +369,28 @@ impl Runtime {
     /// since it last looked, marked seen now: for a turn's prompt as many as
     /// `room` bytes of text hold, at most `SHOWN_BYTES`; for `hide inbox`
     /// (`room` none) at most `INBOX_CELLS`. A news cell seen is gone. None
-    /// for a caller in no pane Hide observes.
+    /// for a caller in no pane Hide observes. At a tool event (`tool`) only
+    /// the cells that reach a working agent (`Cell::mid_turn`), for a kind
+    /// that takes letters there, as a `--now` letter goes (PRD
+    /// mission-speed-2 D-03); a tool event while no mission holds such a
+    /// cell reads nothing more.
     pub(crate) fn take_status(
         &mut self,
         device: &str,
         caller: &str,
         room: Option<usize>,
+        tool: bool,
     ) -> Option<Vec<Cell>> {
+        if tool
+            && !self
+                .missions
+                .book
+                .missions
+                .iter()
+                .any(|mission| mission.wakes.iter().any(PendingWake::mid_turn))
+        {
+            return None;
+        }
         let crate::workspace_control::Caller::Pane(pane) =
             crate::workspace_control::Caller::parse(caller)
         else {
@@ -376,24 +400,53 @@ impl Runtime {
         let actor = self.delivery_observations.get(&pane)?.actor.clone();
         // A prompt hook that cannot hand the agent context (Grok) takes
         // nothing: the agent reads its cells with `hide inbox` (B11, B12).
-        if room.is_some() && !crate::delivery::mailbox::prompt_hook(&actor.kind) {
+        let hands_over = if tool {
+            hide_agent_adapter::adapter(&actor.kind).is_some_and(|row| row.tool_letters.is_some())
+        } else {
+            room.is_none() || crate::delivery::mailbox::prompt_hook(&actor.kind)
+        };
+        if !hands_over {
             return None;
         }
         let ledger = self.delivery_ledger.clone().ok();
         let recipient = recipient_key(ledger.as_deref(), &actor);
-        Some(self.take_status_of(&recipient, ledger.as_deref(), room))
+        // A tool event builds cells only for a caller a mission cell waits
+        // for.
+        if tool
+            && !self.missions.book.missions.iter().any(|mission| {
+                mission
+                    .wakes
+                    .iter()
+                    .any(|wake| wake.to.as_deref() == Some(recipient.as_str()))
+            })
+        {
+            return Some(Vec::new());
+        }
+        Some(self.take_cells(&recipient, ledger.as_deref(), room, tool))
     }
 
+    #[cfg(test)]
     pub(crate) fn take_status_of(
         &mut self,
         recipient: &str,
         ledger: Option<&Ledger>,
         room: Option<usize>,
     ) -> Vec<Cell> {
+        self.take_cells(recipient, ledger, room, false)
+    }
+
+    fn take_cells(
+        &mut self,
+        recipient: &str,
+        ledger: Option<&Ledger>,
+        room: Option<usize>,
+        mid_turn: bool,
+    ) -> Vec<Cell> {
         let mut mine: Vec<Cell> = self
             .status_cells(ledger)
             .into_iter()
             .filter(|addressed| addressed.recipient == recipient)
+            .filter(|addressed| !mid_turn || addressed.cell.mid_turn)
             .map(|addressed| addressed.cell)
             .collect();
         // Newest first: what moved last is read first.
@@ -570,6 +623,7 @@ impl Runtime {
                 StatusRing {
                     recipient,
                     actor,
+                    mid_turn: cells.iter().any(|cell| cell.mid_turn),
                     line: cells[0].line.clone(),
                     others: cells.len() - 1,
                     episodes: cells.iter().map(|cell| cell.episode).collect(),
@@ -830,6 +884,7 @@ fn watch_cells(ledger: &Ledger) -> Vec<Addressed> {
                     news: false,
                     revision,
                     episode: first,
+                    mid_turn: false,
                 },
             })
         })

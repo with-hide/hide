@@ -118,13 +118,17 @@ pub(crate) enum Act {
     },
     /// What waited on the node no longer holds (B2).
     Clear { node: usize },
-    /// The sleeping worker is woken about its pull request (B10).
+    /// The sleeping worker is woken about its pull request (B10), or the
+    /// worker at work told of its conflict (`asleep` false).
     Wake {
         node: usize,
         pr: u32,
         why: FixReason,
         head: Option<String>,
+        asleep: bool,
     },
+    /// The conflict the node's worker was told of is gone.
+    Unconflicted { node: usize, pr: u32 },
     /// Every node finished: the mission closes (B18).
     Close,
 }
@@ -272,24 +276,50 @@ fn node_acts(
         );
         return;
     }
-    // A sleeping worker is woken about what its pull request needs (B10).
-    if fact.worker == Some(WorkerLife::Asleep) {
+    // A sleeping worker is woken about what its pull request needs (B10),
+    // once per pull request, reason and head; a worker at work is told of a
+    // conflict, which keeps its CI from running (PRD mission-speed-2 B11),
+    // once while the conflict lasts.
+    let asleep = fact.worker == Some(WorkerLife::Asleep);
+    if asleep || fact.worker == Some(WorkerLife::Running) {
         for pull in live.iter().filter(|pull| !pull.badge.is_settled()) {
             for why in needs(pull) {
+                if !asleep && why != FixReason::Conflict {
+                    continue;
+                }
                 let head = pull.head_oid.clone();
-                let woken = node
-                    .woken
-                    .iter()
-                    .any(|woken| woken.pr == pull.number && woken.why == why && woken.head == head);
+                let woken = node.woken.iter().any(|woken| {
+                    woken.pr == pull.number
+                        && woken.why == why
+                        && (why == FixReason::Conflict || woken.head == head)
+                });
                 if !woken {
                     acts.push(Act::Wake {
                         node: at,
                         pr: pull.number,
                         why,
                         head,
+                        asleep,
                     });
                 }
             }
+        }
+    }
+    // A conflict GitHub no longer reads is gone; one it cannot read now
+    // (`Unknown`) is not known to be (B11).
+    for pull in &live {
+        if !matches!(
+            pull.work.merge_state,
+            MergeState::Dirty | MergeState::Unknown
+        ) && node
+            .woken
+            .iter()
+            .any(|woken| woken.pr == pull.number && woken.why == FixReason::Conflict)
+        {
+            acts.push(Act::Unconflicted {
+                node: at,
+                pr: pull.number,
+            });
         }
     }
     let merged = live
@@ -1402,17 +1432,26 @@ mod tests {
         failing.checks = PullRequestChecks::Failed;
         failing.work.merge_state = MergeState::Dirty;
         let pulls = listed(vec![failing]);
-        let wake = |why| Act::Wake {
+        let wake = |why, asleep| Act::Wake {
             node: 0,
             pr: 7,
             why,
             head: Some("head-7".into()),
+            asleep,
         };
         assert_eq!(
             evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)])),
-            [wake(FixReason::CiFailed), wake(FixReason::Conflict)]
+            [
+                wake(FixReason::CiFailed, true),
+                wake(FixReason::Conflict, true)
+            ]
         );
-        assert!(evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])).is_empty());
+        // A worker at work hears of the conflict alone (PRD mission-speed-2
+        // B11): its CI failure is its Conductor's news.
+        assert_eq!(
+            evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)])),
+            [wake(FixReason::Conflict, false)]
+        );
         m.nodes[0].woken = vec![
             Woken {
                 pr: 7,
@@ -1426,6 +1465,35 @@ mod tests {
             },
         ];
         assert!(evaluate(&m, &facts(Some(&pulls), vec![worker(WorkerLife::Asleep)])).is_empty());
+    }
+
+    /// PRD mission-speed-2 B11: a worker at work is told of its conflict
+    /// once while it lasts, a new head included; once GitHub reads it gone
+    /// the mark goes, so a later conflict is told again; a state GitHub
+    /// could not read moves nothing.
+    #[test]
+    fn a_conflict_is_told_once_while_it_lasts_and_taken_back_once_gone() {
+        let mut m = running(&["a"]);
+        m.nodes[0].prs = vec![7];
+        m.nodes[0].woken = vec![Woken {
+            pr: 7,
+            why: FixReason::Conflict,
+            head: Some("head-6".into()),
+        }];
+        let mut read = pull(7, "feat/a", PullRequestBadge::Open);
+        read.work.merge_state = MergeState::Dirty;
+        let acts = |m: &Mission, read: &PullRequestSnapshot| {
+            let pulls = listed(vec![read.clone()]);
+            evaluate(m, &facts(Some(&pulls), vec![worker(WorkerLife::Running)]))
+        };
+        assert!(
+            acts(&m, &read).is_empty(),
+            "told on head-6, still the same conflict"
+        );
+        read.work.merge_state = MergeState::Unknown;
+        assert!(acts(&m, &read).is_empty(), "not known to be gone");
+        read.work.merge_state = MergeState::Clean;
+        assert_eq!(acts(&m, &read), [Act::Unconflicted { node: 0, pr: 7 }]);
     }
 
     /// B11: a worker that ended with its node at work is raised by name.

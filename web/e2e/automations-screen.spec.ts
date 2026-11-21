@@ -6,6 +6,8 @@
 // does, so a finished run's conversation can be opened again.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { untilLogged, withControl } from "./daemon-actions";
 import { startCaller, type CallerFixture } from "./engine-fixture";
 import { afterCleanup } from "./worker-owned";
@@ -193,6 +195,8 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     const raised = page.locator(`[data-project-list] [data-raised-group="needs_you"] [data-pane="${pane}"]`);
     await expect(raised).toHaveCount(1, { timeout: 30_000 }); // wait-ok: the core read the blocked state and raised the run in Needs You
     await expect(raised.locator("[data-agent-task]")).toContainText("야간 점검");
+    // It wears the automation's repeat arrow in its turn badge (operator decision 2026-11-21).
+    await expect(raised.locator('[data-agent-status-mark][data-mark-automation="true"]')).toHaveCount(1);
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await raised.locator("[data-agent-open]").click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");
@@ -230,6 +234,48 @@ test("a finished run whose terminal the core closed opens its conversation again
     await run.click();
     await expect(page.locator('[data-automation-run-head="1"] [data-automation-run-tag="opened"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the core opened the finished run's conversation again
     await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 }); // wait-ok: the resumed claude stand-in printed its ready line
+  } finally {
+    stop(stack);
+  }
+});
+
+test("a run's screen draws its terminal beside the run's summary, then beside what its agent opened", async ({ page }) => {
+  const stack = await start(page, "automations-pair");
+  try {
+    const project = fs.realpathSync.native(path.join(stack.fixture.root, "fixture"));
+    const report = path.join(project, "report.md");
+    fs.writeFileSync(report, "# 오늘의 보고서\n");
+    const id = await add(page, stack.daemon, { name: "보고서", task: "보고서를 열어 줘", agent: { kind: "claude" }, folder: project, run_now: true });
+    await page.locator("[data-sidebar-automations]").click();
+    await page.locator(`[data-automation-row="${id}"] [data-automation-open]`).click();
+    await page.locator('[data-automation-record="run"][data-automation-record-number="1"]').click();
+    const terminal = page.locator('[data-automation-run-terminal="pane"]');
+    await expect(terminal).toBeVisible({ timeout: 60_000 }); // wait-ok: the run's agent started by the core and its pane attached to the screen
+    const pane = await terminal.getAttribute("data-automation-run-pane");
+    if (!pane) throw new Error("the run's terminal names no pane");
+
+    // Its agent opened nothing yet: the right side is the run's summary, its task first.
+    await expect(page.locator('[data-automation-run-side="summary"]')).toContainText("보고서를 열어 줘");
+
+    // The agent opens its report: the run's desk takes the right side with it in front, the terminal still on the left.
+    const opened = await stack.fixture.runAs(pane)(["file", "open", report]);
+    expect(opened.status, opened.out).toBe(0);
+    const desk = page.locator('[data-automation-run-side="desk"]');
+    await expect(desk).toBeVisible({ timeout: 30_000 }); // wait-ok: the core placed the agent's View on the run's desk, in front
+    await expect(desk).toContainText("오늘의 보고서", { timeout: 30_000 }); // wait-ok: the document read from the run's checkout
+    await expect(terminal).toBeVisible();
+
+    // Its tab stays out of the project's tab row and the sidebar's tree (B12), and leaving the run gives the focus back to the pane the operator was on.
+    type Rest = { focused?: { pane_id?: string }; workspace_view?: { agent_layout?: { groups?: { tabs: string[] }[] } }; navigator?: { workspaces?: { checkouts: { tabs: { id?: string; panes: { id: string }[] }[] }[] }[] } };
+    const runTab = (rest: Rest) => rest.navigator?.workspaces?.flatMap((workspace) => workspace.checkouts).flatMap((checkout) => checkout.tabs).find((tab) => tab.panes.some((row) => row.id === pane))?.id;
+    const hidden = await withControl(stack.daemon, (control) => control.until((rest) => {
+      const tab = runTab(rest as Rest);
+      const rows = (rest as Rest).workspace_view?.agent_layout?.groups?.flatMap((group) => group.tabs) ?? [];
+      return tab && rows.length > 0 && !rows.includes(tab) ? tab : undefined;
+    }, "the run's tab left out of the tab row", 30_000));
+    await expect(page.locator(`[data-sidebar-tab-group="${hidden}"]`)).toHaveCount(0);
+    await page.locator("[data-automation-run-head] [data-automation-back]").click();
+    await withControl(stack.daemon, (control) => control.until((rest) => ((rest as Rest).focused?.pane_id === stack.fixture.pane ? true : undefined), "the focus back on the operator's pane", 30_000));
   } finally {
     stop(stack);
   }

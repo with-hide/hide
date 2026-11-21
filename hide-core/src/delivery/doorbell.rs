@@ -982,8 +982,11 @@ impl Doorbell {
     /// Rings each resting receiver of a status cell about a subject it has
     /// never seen, once (PRD letters-missions-simplify D-17, B12): the bell's
     /// turn starts with its prompt pull, which gives the changed cells. A
-    /// receiver at work is not rung, and reads them at its next turn; an
-    /// update of a subject it was rung for or saw rings nothing.
+    /// receiver at work is not rung, and reads them at its next turn, unless
+    /// a cell of the ring reaches it mid-turn (`Cell::mid_turn`, PRD
+    /// mission-speed-2 B7): that bell goes as a `--now` letter's does, at its
+    /// next safe gap; an update of a subject it was rung for or saw rings
+    /// nothing.
     fn status_rings(
         &mut self,
         owner: &Mutex<Runtime>,
@@ -997,13 +1000,15 @@ impl Doorbell {
             .unwrap_or_default();
         self.status_tried
             .retain(|recipient, _| due.iter().any(|ring| &ring.recipient == recipient));
-        // Never mid-turn: the wait a letter has to sit out restarts each pass.
-        let rest = Patience {
-            arrived_at_unix_ms: now,
-            now: false,
-            forced: false,
-        };
         for ring in due {
+            // Mid-turn only for a cell that reaches its receiver there; any
+            // other waits for rest, the wait a letter has to sit out
+            // restarting each pass.
+            let rest = Patience {
+                arrived_at_unix_ms: now,
+                now: ring.mid_turn,
+                forced: false,
+            };
             if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
                 break;
             }

@@ -79,6 +79,7 @@ pub(super) fn engine_workspace(
             label: Some((*tab).to_owned()),
             empty: false,
             delegated: false,
+            automation: false,
             panes: vec![pane(&format!("remote:{target}:pane:{tab}"), cwd)],
         })
         .collect();

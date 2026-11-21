@@ -526,6 +526,7 @@ impl ProjectionState {
                             )),
                             empty: panes.is_empty(),
                             delegated: false,
+                            automation: false,
                             panes,
                         }
                     })

@@ -3410,6 +3410,11 @@ pub struct TabSnapshot {
     /// strip leaves it out; the sidebar and the breadcrumb still reach it
     /// (PRD B1, B4, D-40).
     pub delegated: bool,
+    /// Every pane in this tab is an automation run's: the run is reached
+    /// from the automation screen and Needs You, so neither the tab strip nor
+    /// the project's tree lists it (`Runtime::mark_automation_run_tabs`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
     pub panes: Vec<PaneSnapshot>,
 }
 
@@ -8542,6 +8547,7 @@ impl Snapshot {
                 label: None,
                 empty: true,
                 delegated: false,
+                automation: false,
                 panes: Vec::new(),
             },
             connection: ConnectionSnapshot {

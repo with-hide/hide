@@ -55,6 +55,14 @@ describe("Projects sidebar tab groups", () => {
     expect(groups.map((group) => [group.tab?.id, group.rows.length, group.count, group.glyph])).toEqual([["t1", 1, 1, true], ["t2", 0, 0, true]]);
   });
 
+  it("leaves an automation run's tab and its agent out of the tree, also when a collection lists it", () => {
+    const tabs = [tab("t1", ["a"]), { ...tab("t2", ["run"]), automation: true }];
+    const segments = sidebarTabGroups(checkout(tabs), "local", [row("a"), row("run")], [agent("a"), agent("run")]);
+    expect(segments.map((group) => group.tab?.id)).toEqual(["t1"]);
+    const listed = { ...checkout(tabs), agent_groups: { selected: null, drafts: [], groups: [{ id: null, name: null, tabs: ["t1", "t2"] }] } } as Checkout;
+    expect(sidebarNamedGroups(listed, segments)[0]!.segments.map((group) => group.tab?.id)).toEqual(["t1"]);
+  });
+
   it("leaves partial legacy snapshots readable without fabricating a tab name", () => {
     const legacy = { ...tab("t1", ["a", "b"]), sidebar: undefined };
     expect(sidebarTabGroups(checkout([legacy]), "local", [row("a"), row("b")], [agent("a"), agent("b")])[0]).toMatchObject({ glyph: false });
