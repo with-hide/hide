@@ -67,12 +67,20 @@ function selectedTabNeed(list: HTMLElement): number | undefined {
   return Math.ceil(tab.getBoundingClientRect().width - title.getBoundingClientRect().width + titleTextWidth(title));
 }
 
-/** A title's whole text width: what overflows a cut title, else the text's own box inside a title stretched wider. */
+/**
+ * A title's whole text width, from a hidden copy laid out at its natural
+ * width: neither the title's box (which a wide tab stretches) nor its
+ * scroll width (whole pixels, equal to the box while the text overflows it
+ * by less than one, already cut) says it exactly.
+ */
 function titleTextWidth(title: HTMLElement): number {
-  if (title.scrollWidth > title.clientWidth) return title.scrollWidth;
-  const text = document.createRange();
-  text.selectNodeContents(title);
-  return text.getBoundingClientRect().width;
+  const copy = title.cloneNode(true) as HTMLElement;
+  copy.removeAttribute("data-tab-title");
+  copy.style.cssText = "position:absolute;visibility:hidden;width:max-content;max-width:none;flex:none;overflow:visible";
+  title.parentElement!.appendChild(copy);
+  const width = copy.getBoundingClientRect().width;
+  copy.remove();
+  return width;
 }
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };

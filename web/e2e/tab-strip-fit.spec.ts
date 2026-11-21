@@ -72,11 +72,13 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
     const title = selectedTab?.querySelector<HTMLElement>("[data-tab-title]");
     return {
       need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.getBoundingClientRect().width - title.getBoundingClientRect().width + (() => {
-        // The whole text's width: what overflows a cut title, else the text's own box, which a stretched title hides.
-        if (title.scrollWidth > title.clientWidth) return title.scrollWidth;
-        const text = document.createRange();
-        text.selectNodeContents(title);
-        return text.getBoundingClientRect().width;
+        // The whole text's width, from a hidden copy at its natural width, as the strip reads it.
+        const copy = title.cloneNode(true) as HTMLElement;
+        copy.style.cssText = "position:absolute;visibility:hidden;width:max-content;max-width:none;flex:none;overflow:visible";
+        title.parentElement!.appendChild(copy);
+        const width = copy.getBoundingClientRect().width;
+        copy.remove();
+        return width;
       })()) : null,
       room: Math.floor(zone.getBoundingClientRect().width - newTab.getBoundingClientRect().width - (zone.querySelector<HTMLElement>("[data-new-tab-menu]")?.getBoundingClientRect().width ?? 0)),
       scrolls: list.scrollWidth > list.clientWidth,
