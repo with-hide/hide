@@ -3358,6 +3358,7 @@ A file that names another machine, as a copied or restored home folder would car
 **Events.**
 An event another core hands this one is appended and synced to `peers/inbox/<host>/events.jsonl` before it is acknowledged, in the sender's own sequence: a repeat answers its old number, a gap is refused with what the inbox holds, and a full inbox refuses instead of dropping.
 Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
+The file keeps at most 8 MiB of events recorded and not applied, what a sender's box holds, and a full inbox by bytes refuses like one full by count; the applied lines ahead of them are dropped when nothing waits and, while an event still waits, once they pass the same 8 MiB, so the file and the read of it at the next start stay under twice that (`hide_peer::limits::MAX_UNAPPLIED_BYTES`).
 An append that fails partway is cut back to the last whole line, so the next event never joins a torn one.
 An event whose target the core does not know yet (`Applied::Later`) stays recorded and holds the ones behind it, so order is kept; it is tried again until its caller says the wait is over.
 
