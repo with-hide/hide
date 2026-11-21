@@ -11,6 +11,7 @@ import { installKeyboard } from "../keyboard";
 import { ConfirmClose, CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
+import { SettingsGate } from "../SettingsSheet";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
 import { useShellStore, type DirectoryList, type Documents } from "../store";
@@ -98,6 +99,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
+      access: frames?.access ?? null,
     });
   }, [chapter, model, operator]);
 
@@ -146,6 +148,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         </div>
         <OverviewModal actions={actions} />
         <Palette actions={actions} />
+        {/* Settings opens over the practice as over Hide; what it sends goes to the world, which answers only what its chapter needs. */}
+        <SettingsGate actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} onLeave={onLeave} />

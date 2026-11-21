@@ -21,7 +21,7 @@ export const VERSION_LIMIT = 100;
  * (`PracticePreviewKind`). `components/whats-new.tsx` holds this list equal to
  * the two at compile time; the desktop host reads this file without JSX.
  */
-export const RELEASE_DRAWINGS = ["automation", "pair", "skills", "mission", "zones", "split", "switch", "rows", "children", "search", "lane"] as const;
+export const RELEASE_DRAWINGS = ["automation", "pair", "skills", "bots", "mission", "zones", "split", "switch", "rows", "children", "search", "lane"] as const;
 export type ReleaseDrawing = (typeof RELEASE_DRAWINGS)[number];
 
 export type Words<T> = { en: T } & Partial<Record<Exclude<InterfaceLanguage, "en">, T>>;

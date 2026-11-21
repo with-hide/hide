@@ -2736,6 +2736,12 @@ The agent step ends on whichever agent the switcher stopped on and the project s
 The `project` chapter, the project at a glance (`chapters/project.ts`, kept until the Overview flow takes it over), starts on the sidebar's pin: its world lists a second project, the pin waits for the pointer at the start of a project row's buttons, and pressing it (`workspace_pin_set`) moves that project to the top of the list with a line under the pinned ones, as the core lists them; it then opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its count line and its 최근 7일, whose invented cost wears the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) Hide AI on its Memory tab with the project's Memory cards (its rail icon would open the 제안 tab), and ⌘E puts the lane away.
 A tool step ends when the lane shows that tool, whether by its chord or its rail icon, and the closing step when the lane is no longer drawn, by ⌘E or by the tool's ×; the world answers the pin too, and nothing opens from a tile, a row or a file, which the bubbles say.
 
+The `bots` chapter (`chapters/bots.ts`, since 1.3.0) shows a program outside Hide becoming a bot.
+A practice screen cannot run an outside program, so its world stages the request: `nightly` waits in Settings › 봇 from the start, as it would once it ran `hide access request`, beside `hermes`, already connected as 전체.
+The learner opens Settings (`settings`), its 봇 page, reads the request's owl and the two modes, and approves it; the world answers `access_approve` and `access_mode` as the core does, so the request leaves, the bot is listed in the mode picked and its owl lands on the device rail.
+Settings closed, the rail is read, and a few seconds after the approval (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing or disconnecting is not answered, so the chapter keeps both bots.
+Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
+
 ### Adding a chapter
 
 A chapter is three new files and no change to a shared one, so chapters written side by side do not meet in a file.
