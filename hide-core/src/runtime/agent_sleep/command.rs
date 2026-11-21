@@ -37,8 +37,9 @@ impl Runtime {
             Caller::Access { connection, .. } => {
                 let (actor, _) =
                     self.access_authority(device, connection, crate::access::Need::Work)?;
+                // The id is the registration's exact id, which is what runs.
                 if let Some(own) = self.own_work(caller) {
-                    super::super::access::hold(self.is_own(&own, device, id))?;
+                    super::super::access::hold(own.agents.contains(id))?;
                 }
                 Some((expected.clone(), actor))
             }

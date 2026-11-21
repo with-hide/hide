@@ -682,7 +682,7 @@ async fn only_an_operator_window_approves_a_tool() {
         .await;
     assert_eq!(
         screen.error().await,
-        "External tools are approved in an operator window"
+        "Bots are approved in an operator window"
     );
     let status = tool.run(&["access", "status", "--json"]);
     assert_eq!(status.json()["value"]["state"], "pending", "{}", status.out);
@@ -966,5 +966,35 @@ async fn an_earlier_builds_act_tool_runs_as_the_whole_hide_and_its_view_only_too
         .refused("access_reapprove");
     assert!(!viewing.key_file("viewing", "key").exists());
     viewing.put_up("viewing");
+    running.stop();
+}
+
+/// mission-87, review F4: with connections between two Hides on, `hide
+/// device` asks the daemon's pairing first; a bot's ask carries its key
+/// there, so stopping or removing a machine is the operator's alone in
+/// either mode, whether the bot is the one key its home keeps or is named
+/// by `HIDE_ACCESS`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
+    let root = tempfile::tempdir().unwrap();
+    let mut env = daemon_env(root.path());
+    env.device_connect = true;
+    env.peer_direct = Some("127.0.0.1:0".parse().unwrap());
+    let running = hided::start_daemon(env).await.unwrap();
+    let mut window = Window::open(&running).await;
+    for (name, mode) in [
+        ("keeper", json!({"kind": "own"})),
+        ("runner", json!({"kind": "all"})),
+    ] {
+        let (bot, _) = approved(root.path(), &mut window, name, mode).await;
+        // The CLI offers pairing only where the daemon does.
+        let on = (hided::env::HIDE_DEVICE_CONNECT, "1");
+        for verb in ["pause", "remove"] {
+            bot.run_with(&["device", verb, "mini"], &[on])
+                .refused("access_operator_only");
+            bot.run_with(&["device", verb, "mini"], &[on, ("HIDE_ACCESS", name)])
+                .refused("access_operator_only");
+        }
+    }
     running.stop();
 }

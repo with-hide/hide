@@ -7,6 +7,7 @@
 //! Every step is one diagnostic record with the connection id, this
 //! machine and the reason, never a key or a key file's path (B33).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -144,6 +145,19 @@ impl Runtime {
                 .map(|connection| connection.id.clone())
                 .collect(),
         )
+    }
+
+    /// The connections the core holds in own mode, whose watches on work
+    /// not their own the delivery store's upkeep ends
+    /// (`coordination::end_unowned_watches`, mission-87).
+    pub(crate) fn delivery_own_connections(&self) -> Vec<String> {
+        self.access
+            .state
+            .connections()
+            .iter()
+            .filter(|connection| connection.mode == Mode::Own)
+            .map(|connection| connection.id.clone())
+            .collect()
     }
 
     fn note_access(&self, kind: &str, id: Option<&str>, mode: Option<Mode>, reason: Option<&str>) {
@@ -542,49 +556,117 @@ impl Runtime {
         }
     }
 
-    /// Connection `id`'s own work now.
+    /// Connection `id`'s own work now, read from the ledger the core holds:
+    /// the registrations `hide_started.tool_work` gives it, the spawns it or
+    /// they admitted, and the panes those run in now.
     pub(super) fn own_work_of(&self, id: &str) -> OwnWork {
-        let work: Vec<_> = self
+        let agents: HashSet<String> = self
             .hide_started
             .tool_work
             .iter()
             .filter(|work| work.connection == id)
+            .map(|work| work.agent_id.clone())
             .collect();
-        OwnWork {
+        let mut own = OwnWork {
             connection: id.to_owned(),
-            agents: work.iter().map(|work| work.agent_id.clone()).collect(),
-            panes: work
-                .iter()
-                .filter(|work| !work.ended)
-                .map(|work| work.pane_id.clone())
-                .collect(),
+            agents,
+            origins: HashSet::new(),
+            spawns: HashSet::new(),
+            panes: Vec::new(),
+        };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return own;
+        };
+        own.origins = ledger
+            .agents
+            .iter()
+            .filter(|record| record.actor.access_connection() == Some(id))
+            .map(|record| record.id.clone())
+            .collect();
+        for record in &ledger.agents {
+            if !record.ended && own.agents.contains(&record.id) {
+                own.panes.push(record.actor.pane_id.clone());
+            }
+        }
+        for spawn in &ledger.spawns {
+            if !own.origins.contains(&spawn.parent) && !own.agents.contains(&spawn.parent) {
+                continue;
+            }
+            own.spawns.insert(spawn.id.clone());
+            // A spawn still starting has no registration yet: its pane is
+            // the bot's while the pane runs the terminal the spawn recorded,
+            // never a pane that took the id over later.
+            if spawn.child.is_none()
+                && let (Some(pane), Some(terminal)) = (self.spawn_pane_id(spawn), &spawn.terminal)
+                && self.pane_runs(&pane, terminal)
+            {
+                own.panes.push(pane);
+            }
+        }
+        own
+    }
+
+    /// Whether the pane the core names `pane` runs terminal `terminal` now.
+    fn pane_runs(&self, pane: &str, terminal: &str) -> bool {
+        let node = self.node.as_str();
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .any(|row| {
+                crate::address::same_pane(node, node, &row.id, pane)
+                    && row.terminal_id.as_deref() == Some(terminal)
+            })
+    }
+
+    /// The agent an own-mode bot's command names, read once as `hide agent
+    /// show` reads a key (a registration id, then a spawn the bot admitted,
+    /// by its id or the intent of the bot's own start, then the one
+    /// registration of that name or in that pane), held to `own`, and
+    /// answered as the exact id the command then runs on: a registration's,
+    /// or a spawn's that has none yet. Every command reads an exact id as
+    /// that one identity or refuses it, so what was authorized is what runs
+    /// (mission-87). A key that names nothing is refused as one that is not
+    /// its own, so a bot cannot tell the two apart.
+    pub(super) fn own_target(
+        &self,
+        own: &OwnWork,
+        device: &str,
+        key: &str,
+    ) -> Result<String, String> {
+        let ledger = self.delivery_ledger.as_ref().map_err(Clone::clone)?;
+        let found = if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+            Some((record.id.clone(), own.agents.contains(&record.id)))
+        } else if let Some(spawn) = ledger.spawns.iter().find(|spawn| {
+            spawn.id == key || (own.origins.contains(&spawn.parent) && spawn.intent == key)
+        }) {
+            Some(match &spawn.child {
+                Some(child) => (child.clone(), own.agents.contains(child)),
+                None => (spawn.id.clone(), own.spawns.contains(&spawn.id)),
+            })
+        } else {
+            let pane = crate::address::named_pane_id(self.node.as_str(), device, key);
+            crate::coordination::shown_record(ledger, key, &pane)?
+                .map(|record| (record.id.clone(), own.agents.contains(&record.id)))
+        };
+        match found {
+            Some((id, true)) => Ok(id),
+            _ => Err(crate::access::NOT_OWN_WORK.to_owned()),
         }
     }
 
-    /// Whether the agent or pane `key` a command names on `device` is
-    /// `own`'s: a registration by its id, name or pane, else a live pane of
-    /// its work.
-    pub(super) fn is_own(&self, own: &OwnWork, device: &str, key: &str) -> bool {
+    /// Whether the pane `key` names, as a pane command reads it on `device`,
+    /// is one `own` runs in now: a live registration's of its own, or its
+    /// own spawn's that is still starting there.
+    pub(super) fn own_pane(&self, own: &OwnWork, device: &str, key: &str) -> bool {
         let node = self.node.as_str();
-        let registered = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
-            ledger
-                .agents
-                .iter()
-                .rev()
-                .filter(|record| !record.ended)
-                .chain(ledger.agents.iter().rev().filter(|record| record.ended))
-                .find(|record| {
-                    record.id == key
-                        || record.name.as_deref() == Some(key)
-                        || crate::address::same_pane(node, device, &record.actor.pane_id, key)
-                })
-                .map(|record| own.agents.contains(&record.id))
-        });
-        registered.unwrap_or_else(|| {
-            own.panes
-                .iter()
-                .any(|pane| crate::address::same_pane(node, device, pane, key))
-        })
+        let pane = crate::address::named_pane_id(node, device, key);
+        own.panes
+            .iter()
+            .any(|own| crate::address::same_pane(node, node, own, &pane))
     }
 
     /// Whether `conductor` conducts as `own`'s work.
@@ -598,11 +680,18 @@ impl Runtime {
     }
 }
 
-/// An own-mode bot's work: its started agents by registration id, and the
-/// panes of those still running, by the id the core names them with.
+/// An own-mode bot's work, by the exact identities its commands are held
+/// to.
 pub(super) struct OwnWork {
     pub connection: String,
-    pub agents: std::collections::HashSet<String>,
+    /// The registrations it started and those started under them, ended or
+    /// not, by id.
+    pub agents: HashSet<String>,
+    /// Its own origin registrations, which its spawns name as their parent.
+    pub origins: HashSet<String>,
+    /// The spawns it or its agents admitted, by id.
+    pub spawns: HashSet<String>,
+    /// The panes its work runs in now, by the id the core names them with.
     pub panes: Vec<String>,
 }
 

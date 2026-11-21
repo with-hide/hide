@@ -27,6 +27,14 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
+        Self::start_with(&PANES, &PANES)
+    }
+
+    /// An engine whose agents run in `panes`, each shown in the tab with its
+    /// own terminal `terminal-<pane>`, of which `roots` are registered as
+    /// the operator's own agents.
+    fn start_with(panes: &[&'static str], roots: &[&'static str]) -> Self {
+        let panes = panes.to_vec();
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let native = |pane: &str| {
@@ -36,10 +44,11 @@ impl Fixture {
                 "agent_session":{"source":"hook:codex","agent":"codex","kind":"id",
                     "value":format!("{pane}-session")}})
         };
+        let listed = panes.clone();
         let fake = FakeEngine::start(move |method, _| {
             assert_eq!(method, "session");
             reply(fake::session(
-                json!({"agents": PANES.iter().map(|pane| native(pane)).collect::<Vec<_>>()}),
+                json!({"agents": listed.iter().map(|pane| native(pane)).collect::<Vec<_>>()}),
             ))
         });
         let (worker, client) =
@@ -51,7 +60,7 @@ impl Fixture {
             let (store, stored) = crate::runtime::access::restore(root.path().join("access.json"));
             guard.install_access_store(store, stored);
             set_live(&mut guard, Some(&fake));
-            let agents: Vec<Value> = PANES
+            let agents: Vec<Value> = panes
                 .iter()
                 .map(|pane| {
                     json!({"id":pane,"pane_id":pane,"agent":"codex","agent_status":"working",
@@ -64,11 +73,12 @@ impl Fixture {
             guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
             let tab = &mut guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];
             let template = tab.panes[0].clone();
-            tab.panes = PANES
+            tab.panes = panes
                 .iter()
                 .map(|pane| {
                     let mut entry = template.clone();
                     entry.id = (*pane).into();
+                    entry.terminal_id = Some(format!("terminal-{pane}"));
                     entry
                 })
                 .collect();
@@ -80,7 +90,7 @@ impl Fixture {
             _root: root,
         };
         let scope = fake.scope().to_str().unwrap().to_owned();
-        for pane in PANES {
+        for pane in roots.iter().copied() {
             let registered = started
                 .agent(
                     pane,
@@ -129,12 +139,18 @@ impl Fixture {
     /// The tool `nightly` asks, and the operator approves it in `mode`;
     /// its connection's id.
     fn connect(&self, mode: Mode) -> String {
+        self.connect_as("nightly", KEY, "00000000000000a1", mode)
+    }
+
+    /// Bot `name` with `key` asks under request id `id`, and the operator
+    /// approves it in `mode`; its connection's id.
+    fn connect_as(&self, name: &str, key: &str, id: &str, mode: Mode) -> String {
         let mut guard = self.runtime.lock().unwrap();
         let (answer, _) = guard.access_call(Call::Request {
-            name: "nightly".into(),
-            key_sha256: key_hash(KEY),
+            name: name.into(),
+            key_sha256: key_hash(key),
             program: None,
-            id: "00000000000000a1".into(),
+            id: id.into(),
         });
         let id = answer.unwrap()["id"].as_str().unwrap().to_owned();
         assert!(guard.access_event(AccessEvent::Approve {
@@ -729,111 +745,452 @@ fn the_agent_list_names_no_tools_own_identity() {
     );
 }
 
-/// mission-87 c2: an own-mode bot reaches the agents and panes of its own
-/// work (shows, writes to, reads, types into), a connected device's pane
-/// among them, and is refused the same on the operator's with
-/// `access_not_own_work`; its agent list names its own work only, and the
-/// whole Hide reaches the operator's again with no new approval.
+/// A ledger mutation `actor` asks under `authority`, as the store runs it.
+fn submit(
+    fixture: &Fixture,
+    authority: crate::delivery::worker::Authority,
+    actor: &Actor,
+    mutation: crate::coordination::Mutation,
+) -> Value {
+    let client = fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .delivery_client
+        .clone()
+        .unwrap();
+    client
+        .submit(
+            crate::delivery::worker::Effect::Agents {
+                authority,
+                actor: actor.clone(),
+                mutation: Box::new(mutation),
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap()
+}
+
+/// Who asks a spawn: a bot by its connection, or the agent in a pane.
+enum Starter<'a> {
+    Bot {
+        connection: &'a str,
+        origin: &'a str,
+    },
+    Agent {
+        pane: &'a str,
+        id: &'a str,
+    },
+}
+
+impl Starter<'_> {
+    fn asks(&self, fixture: &Fixture) -> (crate::delivery::worker::Authority, Actor, String) {
+        match self {
+            Starter::Bot { connection, origin } => {
+                let actor = fixture
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .access_actor(connection)
+                    .unwrap()
+                    .1;
+                let authority = crate::delivery::worker::Authority {
+                    caller: access_caller_id(connection, None),
+                    context: crate::access::access_context(crate::node::TEST_NODE, connection),
+                    also_reads: Vec::new(),
+                    proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
+                    written: None,
+                };
+                (authority, actor, (*origin).to_owned())
+            }
+            Starter::Agent { pane, id } => {
+                let actor = pane_actor(pane);
+                (authority(&actor), actor, (*id).to_owned())
+            }
+        }
+    }
+}
+
+fn pane_actor(pane: &str) -> Actor {
+    Actor {
+        pane_id: pane.into(),
+        name: pane.into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest(&format!("{pane}-session")),
+    }
+}
+
+/// A spawn `starter` admits, named `name`, whose pane `pane` (on `machine`,
+/// else the starter's) the engine opened with `terminal`; when `binds`, the
+/// agent in that pane registers as its child. The spawn's id, and the
+/// child's.
+#[allow(clippy::too_many_arguments)]
+fn start(
+    fixture: &Fixture,
+    starter: Starter<'_>,
+    name: &str,
+    machine: Option<&str>,
+    pane: &str,
+    terminal: &str,
+    binds: bool,
+) -> (String, Option<String>) {
+    use crate::coordination::Mutation;
+    let (authority, actor, parent) = starter.asks(fixture);
+    let delegated = matches!(starter, Starter::Agent { .. });
+    let Command::Agents { command: mut spawn } = spawn(delegated.then_some("here"), false) else {
+        unreachable!()
+    };
+    if let crate::coordination::Command::Spawn {
+        name: spawn_name,
+        intent,
+        machine: spawn_machine,
+        ..
+    } = &mut spawn
+    {
+        *spawn_name = name.into();
+        *intent = format!("start-{pane}");
+        *spawn_machine = machine.map(str::to_owned);
+    }
+    let reserved = submit(
+        fixture,
+        starter.asks(fixture).0,
+        &actor,
+        Mutation::Reserve {
+            parent: parent.clone(),
+            command: spawn,
+        },
+    );
+    let id = reserved["id"].as_str().unwrap().to_owned();
+    submit(
+        fixture,
+        starter.asks(fixture).0,
+        &actor,
+        Mutation::Advance {
+            seed_tab: None,
+            id: id.clone(),
+            path: Some("/checkouts/fixture".into()),
+            made: false,
+            pane: Some(pane.into()),
+            terminal: Some(terminal.into()),
+            shell: None,
+            child: None,
+        },
+    );
+    if !binds {
+        return (id, None);
+    }
+    let child = crate::coordination::AgentRecord {
+        id: String::new(),
+        name: Some(name.into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "fixture".into(),
+        native_machine: "fixture-machine".into(),
+        session: format!("{pane}-session"),
+        instance: format!("terminal-{pane}"),
+        pane: pane.into(),
+        parent: delegated.then(|| parent.clone()),
+        origin: (!delegated).then(|| parent.clone()),
+        project: Some("/checkouts/fixture".into()),
+        actor: pane_actor(pane),
+        ended: false,
+        terminal_id: Some(terminal.into()),
+        forked: false,
+        successor: None,
+    };
+    let bound = submit(
+        fixture,
+        starter.asks(fixture).0,
+        &actor,
+        Mutation::BindChild {
+            id: id.clone(),
+            record: child,
+        },
+    );
+    submit(
+        fixture,
+        authority,
+        &actor,
+        Mutation::Complete { id: id.clone() },
+    );
+    (id, bound["child"].as_str().map(str::to_owned))
+}
+
+/// mission-87 c2, review F1, F2, F5: an own-mode bot reaches the agents it
+/// started and those started under them, its spawn still starting and that
+/// spawn's pane, on this machine or a device, and nothing of the operator's
+/// or another bot's. A key is read once and what runs is the identity that
+/// was held: a name of its own work that is another agent's id names that
+/// agent. A pane another spawn took over is no longer its own.
 #[test]
-fn an_own_mode_bot_reaches_its_own_agents_and_panes_and_not_the_operators() {
-    let fixture = Fixture::start();
-    let connection = fixture.connect(Mode::Own);
-    let (worker, other) = (fixture.ids["worker"].clone(), fixture.ids["other"].clone());
-    // `worker` and a pane on the device `mini` are the bot's work, as the
-    // started records name them; `other` is the operator's.
-    let mine = |runtime: &mut Runtime| {
-        runtime.hide_started.tool_work = [
-            (worker.as_str(), "worker"),
-            ("agent-m", "remote:mini:pane:p1"),
-        ]
-        .into_iter()
-        .map(|(agent, pane)| crate::coordination::started::ToolWork {
-            connection: connection.clone(),
-            name: "nightly".into(),
-            agent_id: agent.into(),
-            pane_id: pane.into(),
-            session: None,
-            ended: false,
-        })
-        .collect();
+fn an_own_mode_bot_reaches_its_own_work_by_exact_identity_and_nothing_else() {
+    let fixture = Fixture::start_with(
+        &["worker", "other", "a1", "a2", "b1", "a-start", "reused"],
+        &["worker", "other"],
+    );
+    let other = fixture.ids["other"].clone();
+    let a = fixture.connect(Mode::Own);
+    let b = fixture.connect_as("other-bot", &"6".repeat(64), "00000000000000b1", Mode::Own);
+    let origin_a = register_origin(&fixture, &a);
+    let origin_b = register_origin(&fixture, &b);
+    let bot_a = || Starter::Bot {
+        connection: &a,
+        origin: &origin_a,
     };
-    let tool = |command: Command| {
-        mine(&mut fixture.runtime.lock().unwrap());
-        fixture.tool(&connection, command)
-    };
-    let not_own = |result: Result<Value, String>| {
-        assert_eq!(result.err().as_deref(), Some(crate::access::NOT_OWN_WORK))
+    // Its root is named as the operator's agent's id is.
+    let (_, a1) = start(&fixture, bot_a(), &other, None, "a1", "terminal-a1", true);
+    let a1 = a1.unwrap();
+    let (_, a2) = start(
+        &fixture,
+        Starter::Agent {
+            pane: "a1",
+            id: &a1,
+        },
+        "a2",
+        None,
+        "a2",
+        "terminal-a2",
+        true,
+    );
+    let a2 = a2.unwrap();
+    let (_, b1) = start(
+        &fixture,
+        Starter::Bot {
+            connection: &b,
+            origin: &origin_b,
+        },
+        "b1",
+        None,
+        "b1",
+        "terminal-b1",
+        true,
+    );
+    let b1 = b1.unwrap();
+    // Two of its spawns still starting: one in the pane it opened, one whose
+    // pane now runs another terminal; and one starting on the device `mini`.
+    let (starting, _) = start(
+        &fixture,
+        bot_a(),
+        "starting",
+        None,
+        "a-start",
+        "terminal-a-start",
+        false,
+    );
+    start(
+        &fixture,
+        bot_a(),
+        "gone",
+        None,
+        "reused",
+        "terminal-before",
+        false,
+    );
+    start(
+        &fixture,
+        bot_a(),
+        "far",
+        Some("mini"),
+        "p1",
+        "terminal-mini",
+        false,
+    );
+    let device_pane = |pane: &str| crate::address::pane_id_on(crate::node::TEST_NODE, "mini", pane);
+    {
+        let mut guard = fixture.runtime.lock().unwrap();
+        let tab = &mut guard.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];
+        let template = tab.panes[0].clone();
+        for pane in ["p1", "p2"] {
+            let mut entry = template.clone();
+            entry.id = device_pane(pane);
+            entry.terminal_id = Some("terminal-mini".into());
+            tab.panes.push(entry);
+        }
+    }
+
+    let not_own = |result: Result<Value, String>, what: &str| {
+        assert_eq!(
+            result.as_ref().err().map(String::as_str),
+            Some(crate::access::NOT_OWN_WORK),
+            "{what}: {result:?}"
+        )
     };
     let show = |id: &str| Command::Agents {
         command: crate::coordination::Command::Show { id: id.into() },
     };
-    let list = || Command::Agents {
-        command: crate::coordination::Command::List { live: false },
-    };
-    let listed = |result: Value| {
-        let mut panes = result["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|item| item["pane"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>();
-        panes.sort();
-        panes
-    };
-
-    assert!(tool(show(&worker)).is_ok());
-    not_own(tool(show(&other)));
-    assert!(tool(send(&worker, "look")).is_ok());
-    not_own(tool(send(&other, "look")));
-    assert_eq!(listed(tool(list()).unwrap()), ["worker"]);
-    not_own(tool(Command::Agents {
+    let end = |id: &str| Command::Agents {
         command: crate::coordination::Command::End {
-            id: other.clone(),
+            id: id.into(),
             actor: None,
             keep_pane: true,
         },
-    }));
+    };
+    let watch = |target: &str, observer: Option<&str>| Command::WatchStart {
+        target: target.into(),
+        observer: observer.map(str::to_owned),
+        actor: None,
+    };
 
-    let caller = access_caller_id(&connection, None);
-    let context = crate::access::access_context(crate::node::TEST_NODE, &connection);
+    // Its own agents, a descendant among them, and its spawn still starting.
+    assert_eq!(fixture.tool(&a, show(&a1)).unwrap()["id"], a1);
+    assert_eq!(fixture.tool(&a, show(&a2)).unwrap()["id"], a2);
+    assert!(fixture.tool(&a, send(&a2, "look")).is_ok());
+    assert_eq!(
+        fixture.tool(&a, show(&starting)).unwrap()["spawn"]["id"],
+        starting
+    );
+    assert_eq!(
+        fixture.tool(&a, show("start-a-start")).unwrap()["spawn"]["id"],
+        starting,
+        "its own start, by intent"
+    );
+    let mut listed: Vec<String> = fixture
+        .tool(
+            &a,
+            Command::Agents {
+                command: crate::coordination::Command::List { live: false },
+            },
+        )
+        .unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_owned())
+        .collect();
+    listed.sort();
+    let mut own = vec![a1.clone(), a2.clone()];
+    own.sort();
+    assert_eq!(listed, own);
+
+    // The operator's agent, named by the id its own root's name repeats,
+    // another bot's, and what is not there: one refusal for all.
+    for target in [other.as_str(), b1.as_str(), "agent-nowhere"] {
+        not_own(fixture.tool(&a, show(target)), target);
+        not_own(fixture.tool(&a, send(target, "look")), target);
+        not_own(fixture.tool(&a, end(target)), target);
+        not_own(fixture.tool(&a, watch(target, None)), target);
+    }
+    // A watch on its own agent goes to no one else's agent (F2).
+    not_own(fixture.tool(&a, watch(&a1, Some(&other))), "observer");
+    let watched = fixture.tool(&a, watch(&a1, None)).unwrap();
+    not_own(
+        fixture.tool(
+            &a,
+            Command::WatchAssign {
+                id: watched["id"].as_str().unwrap().into(),
+                observer: other.clone(),
+                actor: None,
+                expected_generation: None,
+                approval: None,
+            },
+        ),
+        "assign",
+    );
+    // The other bot reaches its own agent and not this one's.
+    assert_eq!(fixture.tool(&b, show(&b1)).unwrap()["id"], b1);
+    not_own(fixture.tool(&b, show(&a1)), "bot b");
+
+    // Panes: its agents' and its starting spawn's, here and on the device,
+    // and not a pane another terminal took over, the operator's, the other
+    // bot's or another device pane.
+    let caller = access_caller_id(&a, None);
+    let context = crate::access::access_context(crate::node::TEST_NODE, &a);
     let read = |pane: &str| crate::pane_command::PaneCommand::Read {
         pane: pane.into(),
         lines: 10,
     };
-    let typing = |pane: &str| crate::pane_command::PaneCommand::Send {
-        pane: pane.into(),
-        text: Some("hi".into()),
-        keys: Vec::new(),
-        enter: false,
-        paste: false,
+    let agent_read = |agent: &str| crate::pane_command::PaneCommand::AgentRead {
+        agent: agent.into(),
+        lines: 10,
     };
     {
-        let mut runtime = fixture.runtime.lock().unwrap();
-        mine(&mut runtime);
+        let runtime = fixture.runtime.lock().unwrap();
         let node = crate::node::TEST_NODE;
         let prepare = |command| runtime.prepare_pane_command(node, &caller, &context, command);
-        assert!(prepare(read("worker")).is_ok());
-        assert!(prepare(typing("worker")).is_ok());
-        for pane in ["other", "remote:mini:pane:p2"] {
-            for command in [read(pane), typing(pane)] {
-                assert_eq!(
-                    prepare(command).err().as_deref(),
-                    Some(crate::access::NOT_OWN_WORK),
-                    "{pane}"
-                );
-            }
+        for pane in ["a1", "a2", "a-start"] {
+            assert!(prepare(read(pane)).is_ok(), "{pane}");
         }
-        // The device's pane of its own work goes past the hold, to the
-        // device's engine, which this fixture does not connect.
-        let device = prepare(read("remote:mini:pane:p1")).err();
-        assert_ne!(device.as_deref(), Some(crate::access::NOT_OWN_WORK));
+        assert_ne!(
+            prepare(read(&device_pane("p1"))).err().as_deref(),
+            Some(crate::access::NOT_OWN_WORK),
+            "its spawn's pane on the device goes past the hold"
+        );
+        for pane in ["reused", "other", "worker", "b1", &device_pane("p2")] {
+            assert_eq!(
+                prepare(read(pane)).err().as_deref(),
+                Some(crate::access::NOT_OWN_WORK),
+                "{pane}"
+            );
+        }
+        assert!(prepare(agent_read(&a1)).is_ok());
+        assert_eq!(
+            prepare(agent_read(&other)).err().as_deref(),
+            Some(crate::access::NOT_OWN_WORK),
+            "the operator's agent, whose id its own root is named"
+        );
     }
+}
 
-    // The whole Hide reaches the operator's work again.
+/// mission-87, review F3: a bot moved from the whole Hide to its own work
+/// keeps no watch on the operator's agent and replies to no letter of it,
+/// though it could while it had the whole Hide; moved back, it can again.
+#[test]
+fn a_bot_moved_to_its_own_work_keeps_no_watch_or_reply_on_the_operators() {
+    let fixture = Fixture::start();
+    let worker = fixture.ids["worker"].clone();
+    let bot = fixture.connect(Mode::All);
+    let watched = fixture
+        .tool(
+            &bot,
+            Command::WatchStart {
+                target: worker.clone(),
+                observer: None,
+                actor: None,
+            },
+        )
+        .unwrap();
+    assert!(watched["id"].is_string(), "{watched}");
+    let letter = fixture.tool(&bot, send(&worker, "look")).unwrap();
+    let answer = fixture
+        .agent(
+            "worker",
+            Command::Reply {
+                id: letter["id"].as_str().unwrap().into(),
+                intent: "answer".into(),
+                body: "done".into(),
+                now: false,
+            },
+        )
+        .unwrap();
+    let reply = |bot: &str| {
+        fixture.tool(
+            bot,
+            Command::Reply {
+                id: answer["id"].as_str().unwrap().into(),
+                intent: "thanks".into(),
+                body: "thanks".into(),
+                now: false,
+            },
+        )
+    };
+
     fixture.operator(AccessEvent::Mode {
-        id: connection.clone(),
+        id: bot.clone(),
+        mode: Mode::Own,
+    });
+    // The store's upkeep runs before the next command and ends the watch.
+    let watches = fixture.tool(&bot, Command::WatchList).unwrap();
+    assert_eq!(watches, json!([]), "{watches}");
+    assert_eq!(tool_watches(&fixture), 0);
+    assert_eq!(
+        reply(&bot).err().as_deref(),
+        Some(crate::access::NOT_OWN_WORK)
+    );
+
+    fixture.operator(AccessEvent::Mode {
+        id: bot.clone(),
         mode: Mode::All,
     });
-    assert!(tool(show(&other)).is_ok());
-    assert_eq!(listed(tool(list()).unwrap()), ["other", "worker"]);
+    assert!(reply(&bot).is_ok());
 }
