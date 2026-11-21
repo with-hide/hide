@@ -1852,8 +1852,7 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
     }
     // A worker's or checker's cells are one per node and receiver, so a
     // node holds at most one for its worker and one for each checker its
-    // lines can bind (engineering #15); past that is a receiver no node
-    // has, refused and logged.
+    // lines can bind (engineering #15).
     if wake.to.is_some() {
         // A cell for an agent the node no longer holds as its worker or a
         // checker is finished: it goes first.

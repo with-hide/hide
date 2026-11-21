@@ -526,7 +526,7 @@ A worker or checker of a mission records its own lines from its own pane; the Co
 - Recording the same result on the same commit again changes nothing, and wakes no checker again.
 - A round of review goes like this, and Hide's cells say each step's line at its moment:
   - Before you record your `check` (on a node without a check command, your own lines), run the local checks your change touches: the record is what starts the node's review and verification, and a push alone starts nothing.
-    A record that changes nothing (the same commit, or the same evidence) starts nothing either: name what changed in its evidence, and a checker answering again does the same.
+    A `check` on the commit it already passed starts nothing, whatever its evidence says: commit the change first. A checker's answer that repeats its last one starts nothing either, so a checker answering again names what it read this time.
   - A checker's first round gives every finding at once, each graded serious, ordinary or minor (`docs/CODE_REVIEW.md`); a later round reads only its earlier findings and what changed since, and raises a new finding only when it is serious.
   - A failed result reaches the worker as it comes, while it works too: start fixing the first one at once, and record your next check once both the review and the verification answered, or after 30 minutes without the second.
   - Confirm your plan for each serious finding with the checker that raised it, in a letter; the checker answers only OK or what to change; go on with your plan when no answer comes in 10 minutes, and with the changes it named without asking again. Fix ordinary and minor findings at once.
