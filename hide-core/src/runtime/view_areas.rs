@@ -684,10 +684,10 @@ impl Runtime {
         }
         store.generation += 1;
         self.persist_workspace_views();
-        // A pair view the move left with nothing to draw ends, as one does
-        // when its View closes (B26, D-46).
+        // A pair view the move left with nothing to show stays on, its desk
+        // settled as after a close (D-64).
         if matches!(from, Place::Tray(_)) {
-            self.end_pair_view_if_undrawn();
+            self.settle_pair_desk();
         }
         true
     }

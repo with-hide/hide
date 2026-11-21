@@ -224,6 +224,20 @@ test("focus mode's desk shows the left pane's tabs and what the operator opens m
     await expect(deskTabs(page)).toHaveCount(2);
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await screenshot(page, "pair-own-tabs");
+
+    // D-64: closing what the strip shows, the operator's later.md and the left agent's last tab, leaves the mode on and
+    // the pane alone over the whole body; the folded tabs stay folded and never come in front.
+    for (let shown = 2; shown > 0; shown -= 1) {
+      await front(page).click();
+      await page.keyboard.press(chord("close_tab"));
+      if (shown > 1) await expect(deskTabs(page)).toHaveCount(shown - 1);
+    }
+    await expect(page.locator(`[data-pair-layer="${left}"]`)).toHaveAttribute("data-pair-alone", "true");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await expect(page.locator("[data-pair-others]")).toBeHidden();
+    const body = (await page.locator("[data-lane-row]").boundingBox())!;
+    const alone = (await paneView(page, left!).boundingBox())!;
+    expect(Math.abs(alone.width - body.width)).toBeLessThanOrEqual(1);
   } finally {
     daemon?.stop();
     engine.stop();

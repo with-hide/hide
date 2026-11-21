@@ -879,10 +879,10 @@ impl Runtime {
                     .map_err(layout_refusal)?;
                 }
                 // An agent's close leaves the desk shown as it was (PRD
-                // right-lane B12, lane-desk-pair-view B33); a pair view left
-                // with nothing to draw ends (D-46).
+                // right-lane B12, lane-desk-pair-view B33); a pair view stays
+                // on and its desk settles (D-64).
                 if matches!(at, Some(Place::Tray(_))) {
-                    self.end_pair_view_if_undrawn();
+                    self.settle_pair_desk();
                 }
                 (view_id.clone(), true, area)
             }
